@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS runs (
  processes TEXT NOT NULL DEFAULT '[]', listeners TEXT NOT NULL DEFAULT '[]', cpu_percent REAL NOT NULL DEFAULT 0,
  memory_bytes INTEGER NOT NULL DEFAULT 0, stdout_path TEXT NOT NULL DEFAULT '', stderr_path TEXT NOT NULL DEFAULT '',
  combined_path TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '{}', command_definition_id TEXT NOT NULL DEFAULT '',
- stack_run_id TEXT NOT NULL DEFAULT '', restart_of_run_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT ''
+ stack_run_id TEXT NOT NULL DEFAULT '', restart_of_run_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT '',
+ lifecycle_action TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_status_idx ON runs(status);
 CREATE INDEX IF NOT EXISTS runs_command_idx ON runs(command_definition_id);
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS commands (
 	 expected_ports TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]', favorite INTEGER NOT NULL DEFAULT 0,
 	 collection_id TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '',
 	 created_from_run_id TEXT NOT NULL DEFAULT '', discovery_source TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', stable_key TEXT NOT NULL DEFAULT '',
+	 lifecycle_mode TEXT NOT NULL DEFAULT 'managed', stop_command TEXT NOT NULL DEFAULT '', restart_command TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS stacks (
@@ -83,8 +85,8 @@ CREATE TABLE IF NOT EXISTS collections (
 		return err
 	}
 	columns := map[string][]string{
-		"runs":     {"project_id TEXT NOT NULL DEFAULT ''"},
-		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''"},
+		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''"},
+		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''"},
 		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''"},
 	}
 	for table, defs := range columns {
@@ -156,18 +158,18 @@ func parseTimePtr(v sql.NullString) *time.Time {
 }
 
 func (s *Store) SaveRun(ctx context.Context, r *domain.Run) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO runs (`+runCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs (`+runCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET label=excluded.label,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,
 kind=excluded.kind,source=excluded.source,status=excluded.status,readiness=excluded.readiness,root_pid=excluded.root_pid,
 pgid=excluded.pgid,process_start_token=excluded.process_start_token,exit_code=excluded.exit_code,stop_reason=excluded.stop_reason,
 started_at=excluded.started_at,ended_at=excluded.ended_at,expected_ports=excluded.expected_ports,processes=excluded.processes,
 listeners=excluded.listeners,cpu_percent=excluded.cpu_percent,memory_bytes=excluded.memory_bytes,stdout_path=excluded.stdout_path,
 stderr_path=excluded.stderr_path,combined_path=excluded.combined_path,env=excluded.env,command_definition_id=excluded.command_definition_id,
-stack_run_id=excluded.stack_run_id,restart_of_run_id=excluded.restart_of_run_id,project_id=excluded.project_id`,
+stack_run_id=excluded.stack_run_id,restart_of_run_id=excluded.restart_of_run_id,project_id=excluded.project_id,lifecycle_action=excluded.lifecycle_action`,
 		r.ID, r.Label, r.Command, r.Cwd, r.Shell, r.Kind, r.Source, r.Status, r.Readiness, r.RootPID, r.ProcessGroupID,
 		r.ProcessStartToken, nullableInt(r.ExitCode), r.StopReason, ts(r.CreatedAt), tsp(r.StartedAt), tsp(r.EndedAt), js(r.ExpectedPorts),
 		js(r.Processes), js(r.Listeners), r.CPUPercent, r.MemoryBytes, r.StdoutPath, r.StderrPath, r.CombinedPath, js(r.Env),
-		r.CommandDefinitionID, r.StackRunID, r.RestartOfRunID, r.ProjectID)
+		r.CommandDefinitionID, r.StackRunID, r.RestartOfRunID, r.ProjectID, r.LifecycleAction)
 	return err
 }
 
@@ -180,7 +182,7 @@ func nullableInt(v *int) any {
 
 const runCols = `id,label,command,cwd,shell,kind,source,status,readiness,root_pid,pgid,process_start_token,
 exit_code,stop_reason,created_at,started_at,ended_at,expected_ports,processes,listeners,cpu_percent,memory_bytes,
-stdout_path,stderr_path,combined_path,env,command_definition_id,stack_run_id,restart_of_run_id,project_id`
+stdout_path,stderr_path,combined_path,env,command_definition_id,stack_run_id,restart_of_run_id,project_id,lifecycle_action`
 
 type scanner interface{ Scan(...any) error }
 
@@ -191,7 +193,7 @@ func scanRun(row scanner) (*domain.Run, error) {
 	var exit sql.NullInt64
 	err := row.Scan(&r.ID, &r.Label, &r.Command, &r.Cwd, &r.Shell, &r.Kind, &r.Source, &status, &ready, &r.RootPID,
 		&r.ProcessGroupID, &r.ProcessStartToken, &exit, &r.StopReason, &created, &started, &ended, &ports, &procs, &listeners,
-		&r.CPUPercent, &r.MemoryBytes, &r.StdoutPath, &r.StderrPath, &r.CombinedPath, &env, &r.CommandDefinitionID, &r.StackRunID, &r.RestartOfRunID, &r.ProjectID)
+		&r.CPUPercent, &r.MemoryBytes, &r.StdoutPath, &r.StderrPath, &r.CombinedPath, &env, &r.CommandDefinitionID, &r.StackRunID, &r.RestartOfRunID, &r.ProjectID, &r.LifecycleAction)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -250,6 +252,34 @@ func (s *Store) ActiveRunsForCommand(ctx context.Context, id string) ([]domain.R
 		out = append(out, *r)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) RunsForCommand(ctx context.Context, id string, limit int) ([]domain.Run, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runCols+` FROM runs WHERE command_definition_id=? ORDER BY created_at DESC LIMIT ?`, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.Run, 0)
+	for rows.Next() {
+		r, e := scanRun(rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// UpdateRunObservation updates telemetry only, so a stale poll cannot overwrite
+// a concurrent lifecycle transition such as running -> stopping.
+func (s *Store) UpdateRunObservation(ctx context.Context, r *domain.Run) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET readiness=?,processes=?,listeners=?,cpu_percent=?,memory_bytes=? WHERE id=?`,
+		r.Readiness, js(r.Processes), js(r.Listeners), r.CPUPercent, r.MemoryBytes, r.ID)
+	return err
 }
 
 func (s *Store) SaveProject(ctx context.Context, p *domain.Project) error {
@@ -354,7 +384,7 @@ func (s *Store) SaveCommand(ctx context.Context, c *domain.CommandDefinition) er
 	if c.Fingerprint == "" {
 		c.Fingerprint = domain.CommandFingerprint(*c)
 	}
-	_, e := s.db.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, ts(c.CreatedAt), ts(c.UpdatedAt))
+	_, e := s.db.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, ts(c.CreatedAt), ts(c.UpdatedAt))
 	if e != nil && strings.Contains(strings.ToLower(e.Error()), "unique constraint") {
 		return fmt.Errorf("%w: equivalent command or stable key already exists", ErrConflict)
 	}
@@ -364,7 +394,7 @@ func scanCommand(row scanner) (domain.CommandDefinition, error) {
 	var c domain.CommandDefinition
 	var env, ports, tags, created, updated string
 	var fav int
-	err := row.Scan(&c.ID, &c.ProjectID, &c.CollectionID, &c.Name, &c.Description, &c.Command, &c.Cwd, &c.Shell, &c.Kind, &c.ConcurrencyPolicy, &env, &ports, &tags, &fav, &c.CreatedBy, &c.CreatedFromRunID, &c.DiscoverySource, &c.Fingerprint, &c.StableKey, &created, &updated)
+	err := row.Scan(&c.ID, &c.ProjectID, &c.CollectionID, &c.Name, &c.Description, &c.Command, &c.Cwd, &c.Shell, &c.Kind, &c.ConcurrencyPolicy, &env, &ports, &tags, &fav, &c.CreatedBy, &c.CreatedFromRunID, &c.DiscoverySource, &c.Fingerprint, &c.StableKey, &c.LifecycleMode, &c.StopCommand, &c.RestartCommand, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -380,7 +410,7 @@ func scanCommand(row scanner) (domain.CommandDefinition, error) {
 	return c, nil
 }
 
-const commandCols = `id,project_id,collection_id,name,description,command,cwd,shell,kind,concurrency_policy,env,expected_ports,tags,favorite,created_by,created_from_run_id,discovery_source,fingerprint,stable_key,created_at,updated_at`
+const commandCols = `id,project_id,collection_id,name,description,command,cwd,shell,kind,concurrency_policy,env,expected_ports,tags,favorite,created_by,created_from_run_id,discovery_source,fingerprint,stable_key,lifecycle_mode,stop_command,restart_command,created_at,updated_at`
 
 func (s *Store) Command(ctx context.Context, id string) (domain.CommandDefinition, error) {
 	return scanCommand(s.db.QueryRowContext(ctx, `SELECT `+commandCols+` FROM commands WHERE id=?`, id))

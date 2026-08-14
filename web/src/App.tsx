@@ -12,13 +12,14 @@ import type { Collection, CollectionInput, Listener, Project, ProjectInput, Prom
 
 type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details'
+type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script'
 
 const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [] }
-const running = (status?: string) => status === 'running' || status === 'starting'
+const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
 const humanBytes = (bytes = 0) => bytes ? bytes > 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB` : '—'
-const duration = (date?: string) => {
+const duration = (date?: string, ended?: string | null) => {
   if (!date) return '—'
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(date).getTime()) / 1000))
+  const seconds = Math.max(0, Math.round(((ended ? new Date(ended).getTime() : Date.now()) - new Date(date).getTime()) / 1000))
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
@@ -99,7 +100,7 @@ function RunCard({ run, select, act, busy, accepting = true }: { run: Run; selec
 function HistoryTable({ runs, onSelect, onRunAgain, onPromote, full = false, accepting = true }: { runs: Run[]; onSelect: (r: Run, tab?: DetailTab) => void; onRunAgain?: (r: Run) => void; onPromote?: (r: Run) => void; full?: boolean; accepting?: boolean }) {
   const shown = full ? runs : runs.slice(0, 5)
   const showActions = full || !!onPromote
-  return <div className="table-wrap history-table"><table><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
+  return <div className="table-wrap history-table"><table><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at, run.ended_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
 }
 
 function PortsTable({ ports, full = false }: { ports: Listener[]; full?: boolean }) {
@@ -151,7 +152,7 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
       key: `${run.id}:${port.port}:${port.address ?? index}`,
       port, run, scopeID, collectionID: collectionID || 'unfiled',
       projectName: project?.name || (projectID ? `Project ${projectID}` : command ? 'Global catalog' : 'Unassigned'),
-      collectionName: collection?.name || (collectionID ? `Collection ${collectionID}` : 'Unfiled'),
+      collectionName: collection?.name || (collectionID ? `Collection ${collectionID}` : 'Project root'),
     }]
   })
 
@@ -216,9 +217,11 @@ function provenance(command: SavedCommand) {
   return parts.join(' · ')
 }
 
-function CommandCard({ command, action, favorite, busy, accepting }: { command: SavedCommand; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; busy: boolean; accepting: boolean }) {
+function CommandCard({ command, action, favorite, open, busy, accepting }: { command: SavedCommand; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; open: () => void; busy: boolean; accepting: boolean }) {
   const isRunning = running(command.status)
-  return <article className="catalog-card" data-testid={`command-card-${command.id}`}><div className="catalog-top"><span className="catalog-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span><div><h3>{command.name}</h3><Status value={command.status} /></div><IconButton label={`${command.favorite ? 'Remove' : 'Add'} ${command.name} ${command.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={command.favorite ? 'favorite' : ''} fill={command.favorite ? 'currentColor' : 'none'} /></IconButton></div>{command.description && <p className="catalog-description">{command.description}</p>}<code>{command.command}</code><p>{command.cwd}</p><div className="chips">{command.expected_ports?.map(p => <span key={p.port}>:{p.port} {p.name}</span>)}{command.tags?.map(t => <span key={t}>{t}</span>)}</div>{provenance(command) && <small className="provenance">{provenance(command)}</small>}<footer>{isRunning ? <><button data-testid={`stop-command-${command.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button data-testid={`restart-command-${command.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button data-testid={`start-command-${command.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></article>
+  const canStop = command.can_stop ?? isRunning
+  const activate = (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open() } }
+  return <article className="catalog-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`command-card-${command.id}`}><div className="catalog-top"><span className="catalog-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span><div><h3>{command.name}</h3><Status value={command.status} /></div><span onClick={event => event.stopPropagation()}><IconButton label={`${command.favorite ? 'Remove' : 'Add'} ${command.name} ${command.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={command.favorite ? 'favorite' : ''} fill={command.favorite ? 'currentColor' : 'none'} /></IconButton></span></div>{command.description && <p className="catalog-description">{command.description}</p>}<code>{command.command}</code><p>{command.cwd}</p><div className="chips">{command.lifecycle_mode === 'external' && <span>external lifecycle</span>}{command.expected_ports?.map(p => <span key={p.port}>:{p.port} {p.name}</span>)}{command.tags?.map(t => <span key={t}>{t}</span>)}</div>{command.state_detail && <small className="state-detail">{command.state_detail}</small>}{provenance(command) && <small className="provenance">{provenance(command)}</small>}<footer onClick={event => event.stopPropagation()}>{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button data-testid={`stop-command-${command.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button data-testid={`restart-command-${command.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button data-testid={`start-command-${command.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></article>
 }
 
 function StackCard({ stack, action, favorite, busy, accepting }: { stack: Stack; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; busy: boolean; accepting: boolean }) {
@@ -232,6 +235,7 @@ interface CatalogHandlers {
   stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart') => void
   favoriteCommand: (command: SavedCommand) => void
   favoriteStack: (stack: Stack) => void
+	openCommand: (command: SavedCommand) => void
 }
 
 function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accepting, handlers, selectRun, runAgain, promote, addCollection }: { data: Snapshot; selectedProject: string; setSelectedProject: (id: string) => void; busy: string; accepting: boolean; handlers: CatalogHandlers; selectRun: (run: Run, tab?: DetailTab) => void; runAgain: (run: Run) => void; promote: (run: Run) => void; addCollection: () => void }) {
@@ -248,7 +252,7 @@ function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accep
   const favorites = [...scopedCommands.filter(item => item.favorite), ...scopedStacks.filter(item => item.favorite)]
   const scopeName = selectedProject === 'global' ? 'Global catalog' : project?.name ?? 'Project'
 
-  const commandCard = (command: SavedCommand) => <CommandCard key={command.id} command={command} busy={busy === command.id} accepting={accepting} action={action => handlers.commandAction(command, action)} favorite={() => handlers.favoriteCommand(command)} />
+  const commandCard = (command: SavedCommand) => <CommandCard key={command.id} command={command} busy={busy === command.id} accepting={accepting} action={action => handlers.commandAction(command, action)} favorite={() => handlers.favoriteCommand(command)} open={() => handlers.openCommand(command)} />
   const stackCard = (stack: Stack) => <StackCard key={stack.id} stack={stack} busy={busy === stack.id} accepting={accepting} action={action => handlers.stackAction(stack, action)} favorite={() => handlers.favoriteStack(stack)} />
 
   return <div className="projects-layout" data-testid="projects-page">
@@ -270,7 +274,7 @@ function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accep
         return <Panel key={collection.id} title={collection.name} className="project-section"><div className="catalog-grid compact">{collectionCommands.map(commandCard)}{collectionStacks.map(stackCard)}</div></Panel>
       })}
 
-      {(() => { const looseCommands = visibleCommands.filter(item => !item.collection_id); const looseStacks = visibleStacks.filter(item => !item.collection_id); return (looseCommands.length || looseStacks.length) ? <Panel title={selectedProject === 'global' ? 'Global launchers' : 'Unfiled'} className="project-section"><div className="catalog-grid compact">{looseCommands.map(commandCard)}{looseStacks.map(stackCard)}</div></Panel> : null })()}
+      {(() => { const looseCommands = visibleCommands.filter(item => !item.collection_id); const looseStacks = visibleStacks.filter(item => !item.collection_id); return (looseCommands.length || looseStacks.length) ? <Panel title={selectedProject === 'global' ? 'Global launchers' : 'Project launchers'} className="project-section"><div className="catalog-grid compact">{looseCommands.map(commandCard)}{looseStacks.map(stackCard)}</div></Panel> : null })()}
 
       {!visibleCommands.length && !visibleStacks.length && !scopedCollections.length && <Empty title="No launchers in this scope" detail="Save one from History or let an AI add it through MCP." />}
       <Panel title="Project history" action={<span className="collection-description">{scopedHistory.length} runs</span>} className="project-section"><HistoryTable runs={scopedHistory.slice(0, 8)} onSelect={selectRun} onRunAgain={runAgain} onPromote={promote} accepting={accepting} full /></Panel>
@@ -327,7 +331,7 @@ function PromoteDialog({ run, projects, collections, close, submit, createProjec
   return <><button className="modal-scrim" aria-label="Cancel save launcher" onClick={close} /><form className="modal promote-modal" role="dialog" aria-modal="true" aria-labelledby="promote-title" onSubmit={save} data-testid="promote-modal"><span className="modal-icon"><BookmarkPlus /></span><h2 id="promote-title">Save run as launcher</h2><p className="modal-command"><code>{run.command}</code><span>{run.cwd}</span></p><label>Name<input autoFocus value={name} onChange={event => setName(event.target.value)} required /></label>
     <div className="form-row"><div className="field-block"><div className="field-heading"><span>Project</span><button type="button" className="inline-add" onClick={() => { setProjectCreator(value => !value); setCollectionCreator(false); setCreateError('') }}><Plus /> New project</button></div><select aria-label="Project" value={projectID} onChange={event => { setProjectID(event.target.value); setCollectionID(''); setCollectionCreator(false) }}><option value="">Global catalog</option>{allProjects.filter(project => project?.id).map(project => <option value={project.id} key={project.id}>{project.name || 'Unnamed project'}</option>)}</select><small>Workspace and root directory this launcher belongs to.</small></div><label>Kind<select aria-label="Kind" value={kind} onChange={event => setKind(event.target.value as 'service' | 'task')}><option value="service">Service</option><option value="task">Task</option></select></label></div>
     {projectCreator && <div className="inline-create" data-testid="inline-project-create"><strong>New project</strong><label>Project name<input aria-label="New project name" value={projectName} onChange={event => setProjectName(event.target.value)} /></label><label>Root directory<input aria-label="New project root" value={projectRoot} onChange={event => setProjectRoot(event.target.value)} /></label><small>The command directory is filled in automatically.</small><div><button type="button" className="button small" onClick={() => setProjectCreator(false)}>Cancel</button><button type="button" className="button small primary" data-testid="create-project-inline" onClick={addProject} disabled={creating === 'project' || !projectName.trim() || !projectRoot.trim()}>{creating === 'project' ? 'Creating…' : 'Create & select'}</button></div></div>}
-    <div className="field-block"><div className="field-heading"><span>Collection</span><button type="button" className="inline-add" onClick={() => { setCollectionCreator(value => !value); setProjectCreator(false); setCreateError('') }}><Plus /> New collection</button></div><select aria-label="Collection" value={collectionID} onChange={event => setCollectionID(event.target.value)}><option value="">No collection (Unfiled)</option>{eligibleCollections.map(collection => <option value={collection.id} key={collection.id}>{collection.name || 'Unnamed collection'}</option>)}</select><small>Optional folder inside {projectID ? 'the selected project' : 'the global catalog'}, such as Services, Tests, or Build.</small></div>
+    <div className="field-block"><div className="field-heading"><span>Collection</span><button type="button" className="inline-add" onClick={() => { setCollectionCreator(value => !value); setProjectCreator(false); setCreateError('') }}><Plus /> New collection</button></div><select aria-label="Collection" value={collectionID} onChange={event => setCollectionID(event.target.value)}><option value="">Project root (no collection)</option>{eligibleCollections.map(collection => <option value={collection.id} key={collection.id}>{collection.name || 'Unnamed collection'}</option>)}</select><small>Optional folder inside {projectID ? 'the selected project' : 'the global catalog'}, such as Services, Tests, or Build.</small></div>
     {collectionCreator && <div className="inline-create compact" data-testid="inline-collection-create"><strong>New collection in {allProjects.find(project => project.id === projectID)?.name || 'Global catalog'}</strong><label>Collection name<input aria-label="New collection name" placeholder="Development, Tests, Internal services…" value={collectionName} onChange={event => setCollectionName(event.target.value)} /></label><div><button type="button" className="button small" onClick={() => setCollectionCreator(false)}>Cancel</button><button type="button" className="button small primary" data-testid="create-collection-inline" onClick={addCollection} disabled={creating === 'collection' || !collectionName.trim()}>{creating === 'collection' ? 'Creating…' : 'Create & select'}</button></div></div>}
     {createError && <p className="inline-error" role="alert">{createError}</p>}
     <label>Tags<input aria-label="Tags" placeholder="internal, backend" value={tags} onChange={event => setTags(event.target.value)} /></label>
@@ -342,6 +346,44 @@ function CollectionDialog({ project, close, submit, busy }: { project?: Project;
 
 function PromotionReceipt({ result, project, onView, close }: { result: PromoteRunResult; project?: Project; onView: () => void; close: () => void }) {
   return <div className="receipt" role="status" data-testid="promotion-receipt"><span className="receipt-icon"><Check /></span><div><strong>{result.action === 'reused' ? 'Existing launcher reused' : 'Launcher saved'}</strong><p>{result.command.name}{project ? ` · ${project.name}` : ' · Global catalog'}</p></div><button className="button small" onClick={onView}>View {project ? 'project' : 'global'} <ArrowRight /></button><IconButton label="Dismiss receipt" onClick={close}><X /></IconButton></div>
+}
+
+function CommandDrawer({ command, project, collection, api, close, action, busy, accepting }: { command: SavedCommand; project?: Project; collection?: Collection; api: AgentShellApi; close: () => void; action: (a: 'start' | 'stop' | 'restart') => void; busy: boolean; accepting: boolean }) {
+  const [tab, setTab] = useState<CommandDetailTab>('Overview')
+  const [runs, setRuns] = useState<Run[]>(command.last_run ? [command.last_run] : [])
+  const [source, setSource] = useState<{ available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }>({ available: false })
+  const [runID, setRunID] = useState(command.active_run_id ?? command.last_run?.id ?? '')
+  const [logs, setLogs] = useState('Select a Run to inspect its combined output.')
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    Promise.all([api.getCommandRuns(command.id), api.getCommandSource(command.id)]).then(([history, script]) => {
+      if (cancelled) return
+      setRuns(history)
+      setSource(script)
+      setRunID(current => current || history[0]?.id || '')
+    }).catch(error => { if (!cancelled) setLogs(`Unable to load launcher details: ${error.message}`) }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [api, command.id])
+  useEffect(() => {
+    if (tab !== 'Logs' || !runID) return
+    let cancelled = false
+    setLogs('Loading logs…')
+    api.getLogs(runID).then(result => { if (!cancelled) setLogs(result.content || 'This Run produced no output.') }).catch(error => { if (!cancelled) setLogs(`Unable to load logs: ${error.message}`) })
+    return () => { cancelled = true }
+  }, [api, runID, tab])
+  const canStop = command.can_stop ?? running(command.status)
+  const tabs: CommandDetailTab[] = source.available ? ['Overview', 'Runs', 'Logs', 'Script'] : ['Overview', 'Runs', 'Logs']
+  const overviewRows: [string, string][] = [[command.lifecycle_mode === 'external' ? 'Start command' : 'Command', command.command]]
+  if (command.lifecycle_mode === 'external') overviewRows.push(['Stop command', command.stop_command ?? '—'], ['Restart command', command.restart_command || 'Stop, then start'])
+  overviewRows.push(['Directory', command.cwd], ['Project', project?.name ?? 'Global catalog'], ['Collection', collection?.name ?? 'Project root'], ['Kind', command.kind], ['Lifecycle', command.lifecycle_mode ?? 'managed'], ['Shell', command.shell || '/bin/sh'], ['Concurrency', command.concurrency_policy ?? 'forbid'], ['Previous Runs', String(command.run_count ?? runs.length)])
+  return <><button className="drawer-scrim" aria-label="Close launcher details" onClick={close} /><aside className="drawer command-drawer" data-testid="command-detail-drawer" aria-label={`${command.name} launcher details`}><header className="drawer-head"><div><h2>{command.name}</h2><Status value={command.status} /></div><IconButton label="Close launcher details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`command-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
+    {tab === 'Overview' && <><Definition rows={overviewRows} />{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <span key={port.port}>:{port.port} {port.name}</span>)}</div></>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
+    {tab === 'Runs' && (loading ? <Empty title="Loading Runs" detail="Reading launcher history." /> : runs.length ? <div className="command-runs">{runs.map(run => <button key={run.id} onClick={() => { setRunID(run.id); setTab('Logs') }}><div><strong>{run.lifecycle_action ? `${run.lifecycle_action} · ` : ''}{run.command}</strong><small>{run.started_at ? new Date(run.started_at).toLocaleString() : 'Not started'} · {duration(run.started_at, run.ended_at)}</small></div><Status value={run.status} /><ScrollText /></button>)}</div> : <Empty title="No previous Runs" detail="This launcher has not been started through AgentShell yet." />)}
+    {tab === 'Logs' && <><label className="run-log-select">Run<select value={runID} onChange={event => setRunID(event.target.value)}><option value="">Select a Run</option>{runs.map(run => <option key={run.id} value={run.id}>{new Date(run.created_at ?? run.started_at ?? Date.now()).toLocaleString()} · {run.lifecycle_action ?? 'run'} · {run.status}</option>)}</select></label><pre className="log-view" data-testid="command-log-panel">{logs}</pre></>}
+    {tab === 'Script' && <><div className="script-heading"><div><strong>{source.path}</strong><small>Read-only · loaded from the launcher working directory</small></div>{source.truncated && <span>First 512 KiB</span>}</div><pre className="script-view" data-testid="command-script-panel">{source.content || '# Empty script'}</pre></>}
+  </div><footer className="drawer-actions">{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></aside></>
 }
 
 function DetailDrawer({ run, tab, setTab, close, api, action, busy, accepting }: { run: Run; tab: DetailTab; setTab: (t: DetailTab) => void; close: () => void; api: AgentShellApi; action: (a: 'stop' | 'restart') => void; busy: boolean; accepting: boolean }) {
@@ -391,6 +433,7 @@ export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
   const [sidebar, setSidebar] = useState(false)
   const [selected, setSelected] = useState<Run | null>(null)
+	const [selectedCommandID, setSelectedCommandID] = useState('')
   const [tab, setTab] = useState<DetailTab>('Overview')
   const [busy, setBusy] = useState('')
   const [query, setQuery] = useState('')
@@ -420,7 +463,7 @@ export default function App() {
   const favoriteStack = (stack: Stack) => api && perform(stack.id, () => api.updateStack(stack.id, { favorite: !stack.favorite }).then(() => undefined))
   const commandAction = (command: SavedCommand, action: 'start' | 'stop' | 'restart') => api && (action === 'stop' || accepting) && perform(command.id, () => api.commandAction(command.id, action))
   const stackAction = (stack: Stack, action: 'start' | 'stop' | 'restart') => api && (action === 'stop' || accepting) && perform(stack.id, () => api.stackAction(stack.id, action))
-  const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack }
+  const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => setSelectedCommandID(command.id) }
   const savePromotion = async (input: PromoteRunInput) => {
     if (!api || !promoteRun) return
     setBusy(`promote-${promoteRun.id}`)
@@ -457,6 +500,7 @@ export default function App() {
   const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
   const filter = <T extends { name?: string; label?: string; command?: string }>(items: T[]) => items.filter(i => `${i.name} ${i.label} ${i.command}`.toLowerCase().includes(query.toLowerCase()))
   const commands = filter(data.commands)
+	const selectedCommand = data.commands.find(command => command.id === selectedCommandID)
 
   if (runtime?.status === 'stopped') return <StoppedScreen mode={api?.mode ?? 'live'} />
 
@@ -474,13 +518,14 @@ export default function App() {
         {page === 'logs' && api && <LogsPage data={data} api={api} />}
         {page === 'history' && <Panel title={`${data.history.length} commands`}><HistoryTable runs={filter(data.history)} onSelect={select} onRunAgain={runAgain} onPromote={setPromoteRun} accepting={accepting} full /></Panel>}
         {page === 'projects' && <ProjectCatalog data={data} selectedProject={selectedProject} setSelectedProject={setSelectedProject} busy={busy} accepting={accepting} handlers={catalogHandlers} selectRun={select} runAgain={runAgain} promote={setPromoteRun} addCollection={() => setCollectionOpen(true)} />}
-        {page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} />)}</div>}
-        {page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} />)}</div>}
+        {page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => setSelectedCommandID(c.id)} />)}</div>}
+        {page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => setSelectedCommandID(c.id)} />)}</div>}
         {page === 'stacks' && <div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} />)}</div>}
         {page === 'settings' && api && <SettingsPage runtime={runtime} mode={api.mode} onShutdown={() => setShutdownOpen(true)} />}
       </div>
     </main>
     {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} api={api} action={a => runAction(selected, a)} busy={busy === selected.id} accepting={accepting} />}
+	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} api={api} close={() => setSelectedCommandID('')} action={action => commandAction(selectedCommand, action)} busy={busy === selectedCommand.id} accepting={accepting} />}
     {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}
     {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === selectedProject)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
     {promotionReceipt && <PromotionReceipt result={promotionReceipt} project={data.projects.find(item => item.id === promotionReceipt.command.project_id)} onView={() => { setPage('projects'); setSelectedProject(promotionReceipt.command.project_id ?? 'global'); setPromotionReceipt(null) }} close={() => setPromotionReceipt(null)} />}

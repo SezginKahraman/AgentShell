@@ -86,6 +86,7 @@ type Run struct {
 	StackRunID          string            `json:"stack_run_id,omitempty"`
 	RestartOfRunID      string            `json:"restart_of_run_id,omitempty"`
 	ProjectID           string            `json:"project_id,omitempty"`
+	LifecycleAction     string            `json:"lifecycle_action,omitempty"`
 }
 
 func (r Run) Active() bool {
@@ -130,6 +131,9 @@ type CommandDefinition struct {
 	DiscoverySource   string            `json:"discovery_source,omitempty"`
 	Fingerprint       string            `json:"fingerprint,omitempty"`
 	StableKey         string            `json:"stable_key,omitempty"`
+	LifecycleMode     string            `json:"lifecycle_mode,omitempty"`
+	StopCommand       string            `json:"stop_command,omitempty"`
+	RestartCommand    string            `json:"restart_command,omitempty"`
 	CreatedAt         time.Time         `json:"created_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
 }
@@ -169,6 +173,7 @@ type StartSpec struct {
 	WaitTimeoutMS       *int              `json:"wait_timeout_ms,omitempty"`
 	RunTimeoutMS        *int              `json:"run_timeout_ms,omitempty"`
 	ProjectID           string            `json:"project_id,omitempty"`
+	LifecycleAction     string            `json:"lifecycle_action,omitempty"`
 }
 
 // CommandFingerprint is stable across display-only catalog edits. Environment
@@ -183,7 +188,7 @@ func CommandFingerprint(c CommandDefinition) string {
 	if kind == "" {
 		kind = "service"
 	}
-	parts := []string{strings.TrimSpace(c.ProjectID), strings.TrimSpace(c.Cwd), shell, strings.Join(strings.Fields(c.Command), " "), kind}
+	parts := []string{strings.TrimSpace(c.ProjectID), strings.TrimSpace(c.Cwd), shell, strings.Join(strings.Fields(c.Command), " "), kind, strings.TrimSpace(c.LifecycleMode), strings.Join(strings.Fields(c.StopCommand), " "), strings.Join(strings.Fields(c.RestartCommand), " ")}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:])
 }

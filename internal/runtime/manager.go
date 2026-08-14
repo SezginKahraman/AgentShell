@@ -127,7 +127,7 @@ func (m *Manager) Start(ctx context.Context, spec domain.StartSpec) (*domain.Run
 		source = "user"
 	}
 	now := time.Now().UTC()
-	r := &domain.Run{ID: NewID("run"), Label: label, Command: spec.Command, Cwd: cwd, Shell: shell, Kind: kind, Source: source, Status: domain.RunStarting, Readiness: domain.ReadinessUnknown, CreatedAt: now, ExpectedPorts: spec.ExpectedPorts, Env: spec.Env, CommandDefinitionID: spec.CommandDefinitionID, StackRunID: spec.StackRunID, ProjectID: spec.ProjectID}
+	r := &domain.Run{ID: NewID("run"), Label: label, Command: spec.Command, Cwd: cwd, Shell: shell, Kind: kind, Source: source, Status: domain.RunStarting, Readiness: domain.ReadinessUnknown, CreatedAt: now, ExpectedPorts: spec.ExpectedPorts, Env: spec.Env, CommandDefinitionID: spec.CommandDefinitionID, StackRunID: spec.StackRunID, ProjectID: spec.ProjectID, LifecycleAction: spec.LifecycleAction}
 	if len(spec.ExpectedPorts) > 0 {
 		r.Readiness = domain.ReadinessWaiting
 	}
@@ -316,25 +316,28 @@ func (m *Manager) wait(id string, cmd *exec.Cmd, files ...*os.File) {
 	for _, f := range files {
 		_ = f.Close()
 	}
-	ctx := context.Background()
-	r, e := m.store.Run(ctx, id)
-	if e != nil {
-		return
-	}
 	end := time.Now().UTC()
-	r.EndedAt = &end
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
 	}
-	r.ExitCode = &code
+	ctx := context.Background()
 	m.mu.Lock()
+	r, e := m.store.Run(ctx, id)
+	if e != nil {
+		delete(m.stopping, id)
+		delete(m.forceKilled, id)
+		delete(m.cmds, id)
+		m.mu.Unlock()
+		return
+	}
+	r.EndedAt = &end
+	r.ExitCode = &code
 	stopping := m.stopping[id]
 	forceKilled := m.forceKilled[id]
 	delete(m.stopping, id)
 	delete(m.forceKilled, id)
 	delete(m.cmds, id)
-	m.mu.Unlock()
 	if stopping {
 		if forceKilled {
 			r.Status = domain.RunKilled
@@ -348,6 +351,7 @@ func (m *Manager) wait(id string, cmd *exec.Cmd, files ...*os.File) {
 	}
 	r.Readiness = domain.ReadinessUnknown
 	_ = m.store.SaveRun(ctx, r)
+	m.mu.Unlock()
 	m.publish(*r)
 }
 
@@ -355,20 +359,41 @@ func (m *Manager) Stop(ctx context.Context, id string) (*domain.Run, error) {
 	return m.stop(ctx, id, "requested")
 }
 func (m *Manager) stop(ctx context.Context, id, reason string) (*domain.Run, error) {
+	m.mu.Lock()
 	r, err := m.store.Run(ctx, id)
 	if err != nil {
+		m.mu.Unlock()
 		return nil, err
 	}
 	if !r.Active() {
+		m.mu.Unlock()
+		return r, nil
+	}
+	if r.ProcessGroupID <= 0 || !groupAlive(r.ProcessGroupID) {
+		end := time.Now().UTC()
+		r.Status = domain.RunStopped
+		r.Readiness = domain.ReadinessUnknown
+		r.StopReason = reason
+		r.EndedAt = &end
+		if err = m.store.SaveRun(ctx, r); err != nil {
+			m.mu.Unlock()
+			return nil, err
+		}
+		delete(m.stopping, id)
+		delete(m.forceKilled, id)
+		delete(m.cmds, id)
+		m.mu.Unlock()
+		m.publish(*r)
 		return r, nil
 	}
 	r.Status = domain.RunStopping
 	r.StopReason = reason
+	m.stopping[id] = true
 	if err = m.store.SaveRun(ctx, r); err != nil {
+		delete(m.stopping, id)
+		m.mu.Unlock()
 		return nil, err
 	}
-	m.mu.Lock()
-	m.stopping[id] = true
 	m.mu.Unlock()
 	m.publish(*r)
 	if r.ProcessGroupID > 0 {
@@ -407,7 +432,7 @@ func (m *Manager) Restart(ctx context.Context, id string) (*domain.Run, error) {
 			}
 		}
 	}
-	r, err := m.Start(ctx, domain.StartSpec{Command: old.Command, Cwd: old.Cwd, Label: old.Label, Shell: old.Shell, Env: old.Env, ExpectedPorts: old.ExpectedPorts, Kind: old.Kind, Source: old.Source, CommandDefinitionID: old.CommandDefinitionID, StackRunID: old.StackRunID, ProjectID: old.ProjectID})
+	r, err := m.Start(ctx, domain.StartSpec{Command: old.Command, Cwd: old.Cwd, Label: old.Label, Shell: old.Shell, Env: old.Env, ExpectedPorts: old.ExpectedPorts, Kind: old.Kind, Source: old.Source, CommandDefinitionID: old.CommandDefinitionID, StackRunID: old.StackRunID, ProjectID: old.ProjectID, LifecycleAction: old.LifecycleAction})
 	if r != nil {
 		r.RestartOfRunID = id
 		_ = m.store.SaveRun(ctx, r)
@@ -450,9 +475,29 @@ func (m *Manager) startCommandLocked(ctx context.Context, id string, stackRunID 
 			return nil, fmt.Errorf("invalid concurrency policy %q", policy)
 		}
 	}
-	return m.Start(ctx, domain.StartSpec{Command: c.Command, Cwd: c.Cwd, Label: c.Name, Shell: c.Shell, Env: c.Env, ExpectedPorts: c.ExpectedPorts, Kind: c.Kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID})
+	if lifecycleMode(c) == "external" {
+		started, last, e := m.externalStarted(ctx, c.ID)
+		if e != nil {
+			return nil, e
+		}
+		if started {
+			switch policy {
+			case "forbid":
+				return last, ErrAlreadyRunning
+			case "replace":
+				return m.startLifecycleAction(ctx, c, restartCommand(c), "restart", stackRunID)
+			}
+		}
+	}
+	return m.startLifecycleAction(ctx, c, c.Command, "start", stackRunID)
 }
 func (m *Manager) StopCommand(ctx context.Context, id string) ([]domain.Run, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+	c, err := m.store.Command(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	runs, err := m.store.ActiveRunsForCommand(ctx, id)
 	if err != nil {
 		return nil, err
@@ -464,11 +509,27 @@ func (m *Manager) StopCommand(ctx context.Context, id string) ([]domain.Run, err
 		}
 		runs[i] = *r
 	}
+	if lifecycleMode(c) == "external" {
+		if len(runs) > 0 {
+			if e := m.waitCommandStopped(ctx, id); e != nil {
+				return nil, e
+			}
+		}
+		r, e := m.startLifecycleAction(ctx, c, c.StopCommand, "stop", "")
+		if e != nil {
+			return nil, e
+		}
+		runs = append(runs, *r)
+	}
 	return runs, nil
 }
 func (m *Manager) RestartCommand(ctx context.Context, id string) (*domain.Run, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
+	c, err := m.store.Command(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	runs, err := m.store.ActiveRunsForCommand(ctx, id)
 	if err != nil {
 		return nil, err
@@ -476,7 +537,66 @@ func (m *Manager) RestartCommand(ctx context.Context, id string) (*domain.Run, e
 	for i := range runs {
 		_, _ = m.Stop(ctx, runs[i].ID)
 	}
+	if lifecycleMode(c) == "external" {
+		if len(runs) > 0 {
+			if err := m.waitCommandStopped(ctx, id); err != nil {
+				return nil, err
+			}
+		}
+		return m.startLifecycleAction(ctx, c, restartCommand(c), "restart", "")
+	}
 	return m.startCommandAfterStopLocked(ctx, id)
+}
+
+func lifecycleMode(c domain.CommandDefinition) string {
+	if c.LifecycleMode == "external" {
+		return "external"
+	}
+	return "managed"
+}
+
+func restartCommand(c domain.CommandDefinition) string {
+	if strings.TrimSpace(c.RestartCommand) != "" {
+		return c.RestartCommand
+	}
+	return "(" + c.StopCommand + ") && (" + c.Command + ")"
+}
+
+func (m *Manager) startLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, stackRunID string) (*domain.Run, error) {
+	label := c.Name
+	kind := c.Kind
+	expected := c.ExpectedPorts
+	if action == "stop" {
+		label += " · Stop"
+		kind = "task"
+		expected = nil
+	} else if action == "restart" {
+		label += " · Restart"
+		if lifecycleMode(c) == "external" {
+			expected = nil
+		}
+	}
+	return m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, ExpectedPorts: expected, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action})
+}
+
+func (m *Manager) externalStarted(ctx context.Context, id string) (bool, *domain.Run, error) {
+	runs, err := m.store.RunsForCommand(ctx, id, 100)
+	if err != nil {
+		return false, nil, err
+	}
+	for i := range runs {
+		r := &runs[i]
+		if r.LifecycleAction == "" {
+			continue
+		}
+		switch r.LifecycleAction {
+		case "stop":
+			return r.Status == domain.RunFailed, r, nil
+		case "start", "restart":
+			return r.Status == domain.RunCompleted || r.Active(), r, nil
+		}
+	}
+	return false, nil, nil
 }
 func (m *Manager) waitCommandStopped(ctx context.Context, id string) error {
 	deadline := time.Now().Add(m.cfg.StopGrace + 2*time.Second)
@@ -501,7 +621,7 @@ func (m *Manager) startCommandAfterStopLocked(ctx context.Context, id string) (*
 	if e != nil {
 		return nil, e
 	}
-	return m.Start(ctx, domain.StartSpec{Command: c.Command, Cwd: c.Cwd, Label: c.Name, Shell: c.Shell, Env: c.Env, ExpectedPorts: c.ExpectedPorts, Kind: c.Kind, Source: "catalog", CommandDefinitionID: c.ID, ProjectID: c.ProjectID})
+	return m.startLifecycleAction(ctx, c, c.Command, "start", "")
 }
 
 func (m *Manager) RestartStack(ctx context.Context, id string) ([]domain.Run, error) {
@@ -674,7 +794,7 @@ func (m *Manager) observe() {
 				r.Readiness = domain.ReadinessWaiting
 			}
 		}
-		_ = m.store.SaveRun(ctx, r)
+		_ = m.store.UpdateRunObservation(ctx, r)
 		m.publish(*r)
 	}
 }

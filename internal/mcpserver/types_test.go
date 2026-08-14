@@ -18,6 +18,8 @@ func TestRevision3InputValidation(t *testing.T) {
 		{"duplicate promote tags", (PromoteRunInput{RunID: "run-1", Tags: []string{"api", "api"}}).validate(), "duplicate"},
 		{"invalid direct run kind", (RunInput{Command: "go test ./...", CWD: "/tmp/p", Kind: "job"}).validate(), "kind"},
 		{"invalid direct run project", (RunInput{Command: "go test ./...", CWD: "/tmp/p", ProjectID: "bad id"}).validate(), "project_id"},
+		{"external service without stop", (SaveCommandInput{Name: "Infra", Command: "docker compose up -d", CWD: "/tmp/p", Kind: "service", LifecycleMode: "external"}).validate(), "stop_command"},
+		{"external task", (SaveCommandInput{Name: "Task", Command: "true", StopCommand: "true", CWD: "/tmp/p", Kind: "task", LifecycleMode: "external"}).validate(), "kind=service"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -25,6 +27,13 @@ func TestRevision3InputValidation(t *testing.T) {
 				t.Fatalf("error = %v, want containing %q", test.err, test.want)
 			}
 		})
+	}
+}
+
+func TestExternalLifecycleInputIsAccepted(t *testing.T) {
+	in := SaveCommandInput{Name: "Infra", Command: "docker compose up -d", StopCommand: "docker compose down", CWD: "/tmp/p", Kind: "service", LifecycleMode: "external"}
+	if err := in.validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

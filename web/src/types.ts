@@ -1,4 +1,4 @@
-export type RunStatus = 'starting' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'killed' | 'unknown'
+export type RunStatus = 'starting' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'killed' | 'unknown' | 'external'
 export type Readiness = 'unknown' | 'waiting' | 'ready' | 'degraded' | 'unavailable'
 
 export interface ExpectedPort { port: number; name?: string; protocol?: string }
@@ -28,7 +28,8 @@ export interface Run {
   memory_bytes?: number
   command_definition_id?: string
   stack_run_id?: string
-  project_id?: string
+	project_id?: string
+	lifecycle_action?: 'start' | 'stop' | 'restart'
 }
 
 export interface Summary { running: number; ports: number; failed: number; commands: number }
@@ -40,6 +41,7 @@ export interface SavedCommand {
   cwd: string
   kind: 'service' | 'task'
   shell?: string
+	concurrency_policy?: 'forbid' | 'replace' | 'allow'
   expected_ports?: ExpectedPort[]
   tags?: string[]
   favorite?: boolean
@@ -52,8 +54,16 @@ export interface SavedCommand {
   created_by?: string
   created_from_run_id?: string
   discovery_source?: string
-  fingerprint?: string
+	fingerprint?: string
+	lifecycle_mode?: 'managed' | 'external'
+	stop_command?: string
+	restart_command?: string
+	can_stop?: boolean
+	state_detail?: string
+	run_count?: number
 }
+
+export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
 export interface StackMember { command_id: string; name?: string; command?: SavedCommand; status?: RunStatus; active_run_id?: string }
 export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string }

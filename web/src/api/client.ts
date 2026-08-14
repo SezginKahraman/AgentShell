@@ -1,4 +1,4 @@
-import type { Collection, CollectionInput, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, Summary, Listener } from '../types'
+import type { Collection, CollectionInput, CommandSource, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -7,6 +7,8 @@ export interface AgentShellApi {
   shutdownRuntime(): Promise<ShutdownResult>
   getRun(id: string): Promise<Run>
   getLogs(id: string): Promise<LogResponse>
+	getCommandRuns(id: string): Promise<Run[]>
+	getCommandSource(id: string): Promise<CommandSource>
   stopRun(id: string): Promise<void>
   restartRun(id: string): Promise<void>
   commandAction(id: string, action: 'start' | 'stop' | 'restart'): Promise<void>
@@ -53,6 +55,8 @@ export class HttpApi implements AgentShellApi {
   shutdownRuntime() { return request<ShutdownResult>('/api/runtime/shutdown', { method: 'POST', body: JSON.stringify({ confirm: true }) }) }
   getRun(id: string) { return request<Run>(`/api/runs/${id}`) }
   getLogs(id: string) { return request<LogResponse>(`/api/runs/${id}/logs?stream=combined&tail=300`) }
+	async getCommandRuns(id: string) { return array(await request<Run[] | { items?: Run[] } | null>(`/api/commands/${id}/runs`)) }
+	getCommandSource(id: string) { return request<CommandSource>(`/api/commands/${id}/source`) }
   async stopRun(id: string) { await request(`/api/runs/${id}/stop`, { method: 'POST' }) }
   async restartRun(id: string) { await request(`/api/runs/${id}/restart`, { method: 'POST' }) }
   async commandAction(id: string, action: 'start' | 'stop' | 'restart') { await request(`/api/commands/${id}/${action}`, { method: 'POST' }) }

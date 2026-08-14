@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,6 +71,57 @@ func TestStopTerminatesProcessGroupGracefully(t *testing.T) {
 	if done.Status != domain.RunStopped {
 		t.Fatalf("status=%s", done.Status)
 	}
+}
+
+func TestStopFinalizesStaleActiveRunWhenProcessGroupIsGone(t *testing.T) {
+	m, s := testManager(t, 50*time.Millisecond)
+	now := time.Now().UTC()
+	r := domain.Run{ID: "stale", Label: "stale", Command: "true", Cwd: t.TempDir(), Shell: "/bin/sh", Kind: "service", Source: "test", Status: domain.RunRunning, Readiness: domain.ReadinessReady, RootPID: 99999999, ProcessGroupID: 99999999, CreatedAt: now, StartedAt: &now}
+	if err := s.SaveRun(context.Background(), &r); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := m.Stop(context.Background(), r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Status != domain.RunStopped || stopped.EndedAt == nil {
+		t.Fatalf("stopped=%+v", stopped)
+	}
+}
+
+func TestExternalCommandKeepsLifecycleActionsOnOneLauncher(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	root := t.TempDir()
+	now := time.Now().UTC()
+	c := domain.CommandDefinition{ID: "external", Name: "Detached service", Command: "printf started > state", StopCommand: "printf stopped > state", Cwd: root, Kind: "service", LifecycleMode: "external", ConcurrencyPolicy: "forbid", CreatedAt: now, UpdatedAt: now}
+	if err := s.SaveCommand(context.Background(), &c); err != nil {
+		t.Fatal(err)
+	}
+	started, err := m.StartCommand(context.Background(), c.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.LifecycleAction != "start" {
+		t.Fatalf("start action=%q", started.LifecycleAction)
+	}
+	_ = waitInactive(t, s, started.ID)
+	if existing, err := m.StartCommand(context.Background(), c.ID, ""); !errors.Is(err, ErrAlreadyRunning) || existing.ID != started.ID {
+		t.Fatalf("duplicate=%+v err=%v", existing, err)
+	}
+	stops, err := m.StopCommand(context.Background(), c.ID)
+	if err != nil || len(stops) != 1 || stops[0].LifecycleAction != "stop" {
+		t.Fatalf("stops=%+v err=%v", stops, err)
+	}
+	_ = waitInactive(t, s, stops[0].ID)
+	content, err := os.ReadFile(filepath.Join(root, "state"))
+	if err != nil || string(content) != "stopped" {
+		t.Fatalf("state=%q err=%v", content, err)
+	}
+	startedAgain, err := m.StartCommand(context.Background(), c.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = waitInactive(t, s, startedAgain.ID)
 }
 
 func TestCloseTerminatesManagedProcessGroups(t *testing.T) {

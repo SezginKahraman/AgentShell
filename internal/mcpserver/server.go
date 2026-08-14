@@ -57,7 +57,7 @@ func newServer(normalized normalizedConfig, client *daemonClient, initialized fu
 		Title:   "AgentShell local runtime manager",
 		Version: normalized.version,
 	}, &mcp.ServerOptions{
-		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. wait_timeout_ms only limits how long the MCP call waits; run_timeout_ms limits the command lifetime.",
+		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. wait_timeout_ms only limits how long the MCP call waits; run_timeout_ms limits the command lifetime.",
 		InitializedHandler: initialized,
 	})
 	registerRuntimeTools(server, client)
@@ -337,7 +337,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/commands", query, nil)
 		})
 
-	addTool(server, "save_command", "Save command", toolIntent+"Create a reusable AgentShell service or task launcher. This saves metadata only and does not execute the command.", mutating("Save command", false, false), SaveCommandInput.validate,
+	addTool(server, "save_command", "Save command", toolIntent+"Create a reusable AgentShell service or task launcher. Use managed lifecycle for foreground processes; for detached resources keep stop_command on the same external launcher instead of creating a separate stop launcher. This saves metadata only and does not execute the command.", mutating("Save command", false, false), SaveCommandInput.validate,
 		func(ctx context.Context, input SaveCommandInput) (map[string]any, error) {
 			payload, err := commandPayload(input)
 			if err != nil {
@@ -374,7 +374,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.waitForRun(ctx, result, input.WaitFor, input.WaitTimeoutMS)
 		})
 
-	addTool(server, "stop_command", "Stop saved command", toolIntent+"Stop the active Run owned by a saved service launcher.", mutating("Stop saved command", true, true), StopCommandInput.validate,
+	addTool(server, "stop_command", "Stop saved command", toolIntent+"Stop the active process group for a managed launcher or execute the same launcher's stop_command for an external lifecycle.", mutating("Stop saved command", true, true), StopCommandInput.validate,
 		func(ctx context.Context, input StopCommandInput) (map[string]any, error) {
 			return client.do(ctx, http.MethodPost, commandPath(input.ID)+"/stop", nil, nil)
 		})
@@ -465,6 +465,7 @@ func objectPayload(value any, omit ...string) (map[string]any, error) {
 var commandFields = []string{
 	"project_id", "name", "command", "cwd", "shell", "kind",
 	"concurrency_policy", "env", "expected_ports", "tags", "favorite",
+	"lifecycle_mode", "stop_command", "restart_command",
 }
 
 var projectFields = []string{"name", "root_path"}

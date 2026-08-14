@@ -44,6 +44,9 @@ type catalogCommandInput struct {
 	ConcurrencyPolicy string                `json:"concurrency_policy,omitempty"`
 	Favorite          bool                  `json:"favorite,omitempty"`
 	DiscoverySource   string                `json:"discovery_source,omitempty"`
+	LifecycleMode     string                `json:"lifecycle_mode,omitempty"`
+	StopCommand       string                `json:"stop_command,omitempty"`
+	RestartCommand    string                `json:"restart_command,omitempty"`
 }
 type catalogStackInput struct {
 	Key           string   `json:"key,omitempty"`
@@ -144,7 +147,7 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 		if !pathWithin(root, cwd) {
 			return out, errors.New("command cwd must be inside project.root_path")
 		}
-		c := domain.CommandDefinition{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), Command: strings.TrimSpace(v.Command), Cwd: cwd, Shell: strings.TrimSpace(v.Shell), Kind: strings.TrimSpace(v.Kind), ConcurrencyPolicy: strings.TrimSpace(v.ConcurrencyPolicy), Env: v.Env, ExpectedPorts: v.ExpectedPorts, Tags: v.Tags, Favorite: v.Favorite, DiscoverySource: strings.TrimSpace(v.DiscoverySource)}
+		c := domain.CommandDefinition{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), Command: strings.TrimSpace(v.Command), Cwd: cwd, Shell: strings.TrimSpace(v.Shell), Kind: strings.TrimSpace(v.Kind), ConcurrencyPolicy: strings.TrimSpace(v.ConcurrencyPolicy), Env: v.Env, ExpectedPorts: v.ExpectedPorts, Tags: v.Tags, Favorite: v.Favorite, DiscoverySource: strings.TrimSpace(v.DiscoverySource), LifecycleMode: strings.TrimSpace(v.LifecycleMode), StopCommand: strings.TrimSpace(v.StopCommand), RestartCommand: strings.TrimSpace(v.RestartCommand)}
 		defaultsCommand(&c)
 		if err = validateCommand(&c); err != nil {
 			return out, err

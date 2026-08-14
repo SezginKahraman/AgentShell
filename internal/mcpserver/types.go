@@ -288,6 +288,9 @@ type ApplyCatalogCommand struct {
 	ConcurrencyPolicy string            `json:"concurrency_policy,omitempty" jsonschema:"forbid, replace, or allow"`
 	Favorite          bool              `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
 	DiscoverySource   string            `json:"discovery_source,omitempty" jsonschema:"Inspection evidence source such as package.json or Makefile"`
+	LifecycleMode     string            `json:"lifecycle_mode,omitempty" jsonschema:"Lifecycle ownership: managed for foreground processes or external for detached resources"`
+	StopCommand       string            `json:"stop_command,omitempty" jsonschema:"Required external stop action; keep it on the same launcher instead of creating a separate stop launcher"`
+	RestartCommand    string            `json:"restart_command,omitempty" jsonschema:"Optional external restart action; defaults to stop then start"`
 }
 
 type ApplyCatalogStack struct {
@@ -431,6 +434,9 @@ func validateApplyCommand(prefix string, in ApplyCatalogCommand, collectionKeys 
 	if err := oneOf(prefix+".concurrency_policy", in.ConcurrencyPolicy, "", "forbid", "replace", "allow"); err != nil {
 		return err
 	}
+	if err := validateLifecycle(prefix, in.Kind, in.LifecycleMode, in.StopCommand, in.RestartCommand); err != nil {
+		return err
+	}
 	if in.CollectionKey != "" {
 		if _, ok := collectionKeys[in.CollectionKey]; !ok {
 			return fmt.Errorf("%s.collection_key references unknown key %q", prefix, in.CollectionKey)
@@ -520,6 +526,9 @@ type SaveCommandInput struct {
 	Tags              []string          `json:"tags,omitempty" jsonschema:"Search and grouping tags"`
 	ConcurrencyPolicy string            `json:"concurrency_policy,omitempty" jsonschema:"Behavior when already running: forbid, replace, or allow; services should normally use forbid"`
 	Favorite          bool              `json:"favorite,omitempty" jsonschema:"Show this launcher prominently in the dashboard"`
+	LifecycleMode     string            `json:"lifecycle_mode,omitempty" jsonschema:"managed for a foreground process; external for detached resources such as docker start or compose up -d"`
+	StopCommand       string            `json:"stop_command,omitempty" jsonschema:"Required stop action for external lifecycle; do not create a separate stop launcher"`
+	RestartCommand    string            `json:"restart_command,omitempty" jsonschema:"Optional restart action for external lifecycle; omitted means stop then start"`
 }
 
 func (in SaveCommandInput) validate() error {
@@ -541,6 +550,9 @@ func (in SaveCommandInput) validate() error {
 	if err := oneOf("concurrency_policy", in.ConcurrencyPolicy, "", "forbid", "replace", "allow"); err != nil {
 		return err
 	}
+	if err := validateLifecycle("command", in.Kind, in.LifecycleMode, in.StopCommand, in.RestartCommand); err != nil {
+		return err
+	}
 	return validatePorts(in.ExpectedPorts)
 }
 
@@ -557,6 +569,9 @@ type UpdateCommandInput struct {
 	Tags              *[]string          `json:"tags,omitempty" jsonschema:"Replacement tag list"`
 	ConcurrencyPolicy *string            `json:"concurrency_policy,omitempty" jsonschema:"New concurrency policy: forbid, replace, or allow"`
 	Favorite          *bool              `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
+	LifecycleMode     *string            `json:"lifecycle_mode,omitempty" jsonschema:"New lifecycle ownership: managed or external"`
+	StopCommand       *string            `json:"stop_command,omitempty" jsonschema:"New external stop action"`
+	RestartCommand    *string            `json:"restart_command,omitempty" jsonschema:"New external restart action"`
 }
 
 func (in UpdateCommandInput) validate() error {
@@ -586,8 +601,33 @@ func (in UpdateCommandInput) validate() error {
 			return err
 		}
 	}
+	if in.LifecycleMode != nil {
+		if err := oneOf("lifecycle_mode", *in.LifecycleMode, "managed", "external"); err != nil {
+			return err
+		}
+	}
 	if in.ExpectedPorts != nil {
 		return validatePorts(*in.ExpectedPorts)
+	}
+	return nil
+}
+
+func validateLifecycle(prefix, kind, mode, stopCommand, restartCommand string) error {
+	if mode == "" {
+		mode = "managed"
+	}
+	if err := oneOf(prefix+".lifecycle_mode", mode, "managed", "external"); err != nil {
+		return err
+	}
+	if mode == "external" {
+		if kind != "service" {
+			return fmt.Errorf("%s external lifecycle requires kind=service", prefix)
+		}
+		if strings.TrimSpace(stopCommand) == "" {
+			return fmt.Errorf("%s.stop_command is required for external lifecycle", prefix)
+		}
+	} else if strings.TrimSpace(stopCommand) != "" || strings.TrimSpace(restartCommand) != "" {
+		return fmt.Errorf("%s stop_command and restart_command require lifecycle_mode=external", prefix)
 	}
 	return nil
 }

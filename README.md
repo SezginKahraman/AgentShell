@@ -9,6 +9,7 @@ AgentShell is a local-first runtime manager for commands started by people and A
 - Child process, CPU, memory, and listening-port discovery
 - Separate stdout, stderr, and combined logs
 - Saved projects, collections, service/task commands, and multi-command stacks
+- Managed and external service lifecycles with launcher-level stop/restart actions
 - History-to-launcher promotion with duplicate-safe command fingerprints
 - Atomic, dry-runnable catalog imports for AI-created project launchers
 - Concurrency policies (`forbid`, `replace`, `allow`)
@@ -38,6 +39,10 @@ Start a directly managed Run:
 ```
 
 ## MCP configuration
+
+For complete, client-specific setup and agent operating guidance, see
+[`read.md`](read.md). It includes separate Claude Code and Cursor Agent
+configuration, verification, prompts, tool policy, and troubleshooting.
 
 Start the Runtime first with `./start.sh`, then register the thin stdio bridge in an MCP-capable client:
 
@@ -89,11 +94,23 @@ Example workflow:
 
 Saved service definitions default to duplicate protection. If a service is already active, AgentShell returns the existing Run instead of silently starting another copy.
 
+Foreground services use the default `managed` lifecycle: AgentShell owns their
+process group and Stop sends a graceful signal before the forced-kill fallback.
+Detached resources such as `docker compose up -d` use `external` lifecycle and
+store `stop_command` plus an optional `restart_command` on the same launcher.
+Agents should not create a separate stop launcher for either case.
+
 The dashboard exposes the same catalog under **Projects**. Project and global
 scopes are distinct; collections are organizational folders, while stacks are
 executable groups. History rows can open logs, run again, or be saved as a
 launcher. Ports observed during a Run are suggestions during promotion and are
 never selected as expected ports without an explicit choice.
+
+Launcher cards open a detail drawer with their complete command definition,
+previous Runs, selectable historical logs, and lifecycle actions. When a
+launcher directly references a `.sh` file, its source can be viewed read-only;
+the API only reads regular script files inside the launcher's working directory
+and caps the response at 512 KiB.
 
 ## Development
 

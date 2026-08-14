@@ -65,6 +65,11 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
     await expect(service).toBeVisible()
     await expect(page.getByTestId(`stop-command-${first.id}`)).toBeVisible()
     await expect(page.getByTestId(`restart-command-${first.id}`)).toBeVisible()
+	await service.click()
+	await expect(page.getByTestId('command-detail-drawer')).toContainText(`:${firstPort}`)
+	await page.getByTestId('command-tab-runs').click()
+	await expect(page.getByTestId('command-detail-drawer')).toContainText(`http.server ${firstPort}`)
+	await page.getByTestId('command-detail-drawer').getByRole('button', { name: 'Close launcher details' }).click()
 
     await page.getByRole('button', { name: 'Stacks' }).click()
     const stackCard = page.locator('article.stack-card').filter({ hasText: `Live Stack ${suffix}` })
@@ -86,7 +91,7 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
     await expect(page.getByTestId('logs-page').getByRole('tab', { name: `Live E2E ${suffix}`, exact: true })).toBeVisible()
     await expect(page.getByTestId('logs-page').getByRole('tab', { name: new RegExp(`:${firstPort}`) })).toBeVisible()
     await expect(page.getByTestId('live-log-terminal')).toContainText('Serving HTTP')
-    await expect(page.getByTestId('logs-page').getByRole('tab', { name: 'Unfiled', exact: true })).toBeVisible()
+	await expect(page.getByTestId('logs-page').getByRole('tab', { name: 'Project root', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Ports' }).click()
     await expect(page.getByRole('link', { name: `Open port ${firstPort}` })).toBeVisible()
     await expect(page.getByRole('link', { name: `Open port ${secondPort}` })).toBeVisible()
@@ -97,4 +102,36 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
     await request.delete(`${liveURL}/api/commands/${second.id}`)
     await request.delete(`${liveURL}/api/projects/${project.id}`)
   }
+})
+
+test('live daemon keeps detached start and stop actions on one external launcher', async ({ page, request }) => {
+	test.skip(!liveURL, 'AGENTSHELL_LIVE_URL is required for the live daemon test')
+	const suffix = Date.now().toString(36)
+	const response = await request.post(`${liveURL}/api/commands`, { data: {
+		name: `External lifecycle ${suffix}`,
+		command: "printf 'external started\\n'",
+		stop_command: "printf 'external stopped\\n'",
+		cwd: process.cwd(),
+		kind: 'service',
+		lifecycle_mode: 'external',
+		concurrency_policy: 'forbid',
+		tags: ['live-e2e'],
+	} })
+	expect(response.ok()).toBeTruthy()
+	const command = await response.json()
+	try {
+		expect((await request.post(`${liveURL}/api/commands/${command.id}/start`, { data: {} })).ok()).toBeTruthy()
+		await expect.poll(async () => (await (await request.get(`${liveURL}/api/commands/${command.id}`)).json()).status).toBe('external')
+		await page.goto(liveURL!)
+		await page.getByRole('button', { name: 'Services' }).click()
+		const card = page.getByTestId(`command-card-${command.id}`)
+		await expect(card).toContainText('external')
+		await page.getByTestId(`stop-command-${command.id}`).click()
+		await expect.poll(async () => (await (await request.get(`${liveURL}/api/commands/${command.id}`)).json()).status).toBe('stopped')
+		await card.click()
+		await page.getByTestId('command-tab-runs').click()
+		await expect(page.getByTestId('command-detail-drawer')).toContainText('stop ·')
+	} finally {
+		await request.delete(`${liveURL}/api/commands/${command.id}`)
+	}
 })

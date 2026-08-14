@@ -32,7 +32,7 @@ func TestAdditiveMigrationFromRevisionTwoDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.CollectionID != "" || c.Fingerprint != "" || c.Description != "" {
+	if c.CollectionID != "" || c.Fingerprint != "" || c.Description != "" || c.LifecycleMode != "managed" || c.StopCommand != "" {
 		t.Fatalf("unexpected migrated values: %+v", c)
 	}
 	now := time.Now().UTC()

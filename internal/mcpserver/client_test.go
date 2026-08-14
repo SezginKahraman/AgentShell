@@ -147,7 +147,7 @@ func TestMergeAndPutUsesStrictCommandShape(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = io.WriteString(w, `{"id":"cmd-1","name":"Old","command":"make go","cwd":"/tmp/p","shell":"zsh","kind":"service","concurrency_policy":"forbid","env":{},"expected_ports":[{"port":8080,"name":"API","protocol":"tcp","service":"http"}],"tags":["internal"],"favorite":false,"status":"running","active_run_id":"run-1","created_at":"ignored"}`)
+			_, _ = io.WriteString(w, `{"id":"cmd-1","name":"Old","command":"make go","cwd":"/tmp/p","shell":"zsh","kind":"service","concurrency_policy":"forbid","env":{},"expected_ports":[{"port":8080,"name":"API","protocol":"tcp","service":"http"}],"tags":["internal"],"favorite":false,"lifecycle_mode":"managed","stop_command":"","restart_command":"","status":"running","active_run_id":"run-1","created_at":"ignored"}`)
 		case http.MethodPut:
 			if err := json.NewDecoder(r.Body).Decode(&put); err != nil {
 				t.Errorf("decode PUT: %v", err)

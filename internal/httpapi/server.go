@@ -718,6 +718,21 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request, parts []string
 	}
 	id := parts[0]
 	if len(parts) > 1 {
+		if parts[1] == "runs" && r.Method == http.MethodGet {
+			v, e := s.store.RunsForCommand(ctx, id, 100)
+			respond(w, v, e)
+			return
+		}
+		if parts[1] == "source" && r.Method == http.MethodGet {
+			command, e := s.store.Command(ctx, id)
+			if e != nil {
+				respond(w, nil, e)
+				return
+			}
+			v, e := readCommandSource(command)
+			respond(w, v, e)
+			return
+		}
 		if r.Method != http.MethodPost {
 			method(w)
 			return
@@ -798,6 +813,15 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request, parts []string
 		}
 		respond(w, v, e)
 	case http.MethodDelete:
+		view, viewErr := s.commandView(ctx, id)
+		if viewErr != nil {
+			respond(w, nil, viewErr)
+			return
+		}
+		if view.LifecycleMode == "external" && view.CanStop {
+			fail(w, fmt.Errorf("%w: stop the external launcher before deleting it", store.ErrConflict))
+			return
+		}
 		e := s.store.DeleteCommand(ctx, id)
 		if e == nil {
 			s.catalog("command.deleted", map[string]string{"id": id})
@@ -981,6 +1005,9 @@ type commandView struct {
 	Status      string      `json:"status"`
 	ActiveRunID string      `json:"active_run_id,omitempty"`
 	LastRun     *domain.Run `json:"last_run,omitempty"`
+	CanStop     bool        `json:"can_stop"`
+	StateDetail string      `json:"state_detail,omitempty"`
+	RunCount    int         `json:"run_count"`
 }
 
 func (s *Server) commandViews(ctx context.Context) ([]commandView, error) {
@@ -1025,18 +1052,58 @@ func (s *Server) commandView(ctx context.Context, id string) (commandView, error
 	return makeCommandView(c, own), nil
 }
 func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView {
-	v := commandView{CommandDefinition: c, Status: "stopped"}
+	v := commandView{CommandDefinition: c, Status: "stopped", RunCount: len(runs)}
 	if len(runs) > 0 {
 		copy := runs[0]
 		v.LastRun = &copy
 	}
 	for _, r := range runs {
 		if r.Active() {
-			v.Status = string(r.Status)
+			if c.LifecycleMode == "external" && r.LifecycleAction == "stop" {
+				v.Status = "stopping"
+				v.StateDetail = "External stop action is running."
+			} else if c.LifecycleMode == "external" {
+				v.Status = "starting"
+				v.CanStop = true
+				v.StateDetail = "External start action is running."
+			} else {
+				v.Status = string(r.Status)
+				v.CanStop = true
+			}
 			v.ActiveRunID = r.ID
-			break
+			return v
 		}
 	}
+	if c.LifecycleMode != "external" {
+		return v
+	}
+	for _, r := range runs {
+		switch r.LifecycleAction {
+		case "start", "restart":
+			if r.Status == domain.RunCompleted {
+				v.Status = "external"
+				v.CanStop = true
+				v.StateDetail = "The start action succeeded; external process health is not verified."
+			} else if r.Status == domain.RunFailed {
+				v.Status = "failed"
+				v.CanStop = true
+				v.StateDetail = "The external start action failed and may have partially changed resources."
+			}
+			return v
+		case "stop":
+			if r.Status == domain.RunFailed {
+				v.Status = "failed"
+				v.CanStop = true
+				v.StateDetail = "The external stop action failed; resources may still be active."
+			} else {
+				v.StateDetail = "The external stop action completed."
+			}
+			return v
+		}
+	}
+	v.Status = "unknown"
+	v.CanStop = true
+	v.StateDetail = "External lifecycle was configured after earlier Runs; current resource state is not verified."
 	return v
 }
 
@@ -1046,6 +1113,7 @@ type stackMemberView struct {
 	Name        string `json:"name"`
 	Status      string `json:"status"`
 	ActiveRunID string `json:"active_run_id,omitempty"`
+	CanStop     bool   `json:"can_stop"`
 }
 type stackView struct {
 	ID            string            `json:"id"`
@@ -1106,8 +1174,8 @@ func makeStackView(st domain.Stack, commands map[string]commandView) stackView {
 	v := stackView{ID: st.ID, ProjectID: st.ProjectID, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
 	for _, m := range st.Members {
 		c := commands[m.CommandID]
-		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, Name: c.Name, Status: c.Status, ActiveRunID: c.ActiveRunID}
-		if c.ActiveRunID != "" {
+		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, Name: c.Name, Status: c.Status, ActiveRunID: c.ActiveRunID, CanStop: c.CanStop}
+		if c.ActiveRunID != "" || c.CanStop {
 			v.RunningCount++
 		}
 		v.Members = append(v.Members, mv)
@@ -1202,6 +1270,9 @@ type commandPatch struct {
 	CreatedFromRunID  *string                `json:"created_from_run_id,omitempty"`
 	DiscoverySource   *string                `json:"discovery_source,omitempty"`
 	StableKey         *string                `json:"stable_key,omitempty"`
+	LifecycleMode     *string                `json:"lifecycle_mode,omitempty"`
+	StopCommand       *string                `json:"stop_command,omitempty"`
+	RestartCommand    *string                `json:"restart_command,omitempty"`
 	Env               *map[string]string     `json:"env,omitempty"`
 	ExpectedPorts     *[]domain.ExpectedPort `json:"expected_ports,omitempty"`
 	Tags              *[]string              `json:"tags,omitempty"`
@@ -1245,6 +1316,15 @@ func (p commandPatch) apply(v *domain.CommandDefinition) {
 	}
 	if p.StableKey != nil {
 		v.StableKey = *p.StableKey
+	}
+	if p.LifecycleMode != nil {
+		v.LifecycleMode = *p.LifecycleMode
+	}
+	if p.StopCommand != nil {
+		v.StopCommand = *p.StopCommand
+	}
+	if p.RestartCommand != nil {
+		v.RestartCommand = *p.RestartCommand
 	}
 	if p.Env != nil {
 		v.Env = *p.Env
@@ -1390,16 +1470,22 @@ func defaultsCommand(v *domain.CommandDefinition) {
 	if v.Env == nil {
 		v.Env = map[string]string{}
 	}
+	if v.LifecycleMode == "" {
+		v.LifecycleMode = "managed"
+	}
 }
 func validateCommand(v *domain.CommandDefinition) error {
 	v.Name = strings.TrimSpace(v.Name)
 	v.Command = strings.TrimSpace(v.Command)
 	v.Cwd = strings.TrimSpace(v.Cwd)
 	v.Description = strings.TrimSpace(v.Description)
+	v.LifecycleMode = strings.TrimSpace(v.LifecycleMode)
+	v.StopCommand = strings.TrimSpace(v.StopCommand)
+	v.RestartCommand = strings.TrimSpace(v.RestartCommand)
 	if strings.TrimSpace(v.Name) == "" || strings.TrimSpace(v.Command) == "" || strings.TrimSpace(v.Cwd) == "" {
 		return errors.New("name, command and cwd are required")
 	}
-	if len(v.Name) > 200 || len(v.Description) > 4000 || len(v.Command) > 65536 || len(v.Cwd) > 4096 {
+	if len(v.Name) > 200 || len(v.Description) > 4000 || len(v.Command) > 65536 || len(v.StopCommand) > 65536 || len(v.RestartCommand) > 65536 || len(v.Cwd) > 4096 {
 		return errors.New("command field exceeds maximum length")
 	}
 	seenTags := map[string]bool{}
@@ -1427,6 +1513,19 @@ func validateCommand(v *domain.CommandDefinition) error {
 	}
 	if v.ConcurrencyPolicy != "forbid" && v.ConcurrencyPolicy != "replace" && v.ConcurrencyPolicy != "allow" {
 		return errors.New("invalid concurrency_policy")
+	}
+	if v.LifecycleMode != "managed" && v.LifecycleMode != "external" {
+		return errors.New("lifecycle_mode must be managed or external")
+	}
+	if v.LifecycleMode == "external" {
+		if v.Kind != "service" {
+			return errors.New("external lifecycle is supported only for service commands")
+		}
+		if v.StopCommand == "" {
+			return errors.New("stop_command is required for external lifecycle")
+		}
+	} else if v.StopCommand != "" || v.RestartCommand != "" {
+		return errors.New("stop_command and restart_command require external lifecycle")
 	}
 	for _, p := range v.ExpectedPorts {
 		if p.Port < 1 || p.Port > 65535 {
