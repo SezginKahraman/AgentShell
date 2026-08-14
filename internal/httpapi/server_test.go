@@ -108,6 +108,8 @@ func TestSummaryAndOriginGuard(t *testing.T) {
 	}
 }
 
+func TestEmptyListEndpointsEncodeArrays(t *testing.T){srv,_:=testServer(t);for _,endpoint:=range []string{"projects","collections","commands","stacks","runs","history"}{var raw json.RawMessage;status:=request(t,srv.Client(),http.MethodGet,srv.URL+"/api/"+endpoint,nil,&raw);if status!=http.StatusOK||string(raw)!="[]"{t.Fatalf("endpoint=%s status=%d body=%s",endpoint,status,raw)}}}
+
 func TestCollectionCRUDAndProjectFilter(t *testing.T) {
 	srv, _ := testServer(t)
 	client := srv.Client()

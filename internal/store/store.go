@@ -224,7 +224,7 @@ func (s *Store) Runs(ctx context.Context, limit int) ([]domain.Run, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Run
+	out := make([]domain.Run, 0)
 	for rows.Next() {
 		r, e := scanRun(rows)
 		if e != nil {
@@ -241,7 +241,7 @@ func (s *Store) ActiveRunsForCommand(ctx context.Context, id string) ([]domain.R
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Run
+	out := make([]domain.Run, 0)
 	for rows.Next() {
 		r, e := scanRun(rows)
 		if e != nil {
@@ -273,7 +273,7 @@ func (s *Store) Projects(ctx context.Context) ([]domain.Project, error) {
 		return nil, e
 	}
 	defer rows.Close()
-	var out []domain.Project
+	out := make([]domain.Project, 0)
 	for rows.Next() {
 		var p domain.Project
 		var c, u string
@@ -409,7 +409,7 @@ func (s *Store) CommandsFiltered(ctx context.Context, projectID, collectionID *s
 		return nil, e
 	}
 	defer rows.Close()
-	var out []domain.CommandDefinition
+	out := make([]domain.CommandDefinition, 0)
 	for rows.Next() {
 		c, e := scanCommand(rows)
 		if e != nil {
@@ -505,7 +505,7 @@ func (s *Store) StacksFiltered(ctx context.Context, projectID, collectionID *str
 		return nil, e
 	}
 	defer rows.Close()
-	var out []domain.Stack
+	out := make([]domain.Stack, 0)
 	for rows.Next() {
 		v, e := scanStack(rows)
 		if e != nil {
