@@ -8,9 +8,9 @@ import {
 } from 'lucide-react'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
-import type { Collection, Listener, Project, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from './types'
+import type { Collection, CollectionInput, Listener, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from './types'
 
-type Page = 'dashboard' | 'runs' | 'ports' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
+type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details'
 
 const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [] }
@@ -37,7 +37,7 @@ function IconButton({ label, children, onClick, danger, disabled, testId }: { la
 
 function Sidebar({ page, setPage, open, close, runtime, mode }: { page: Page; setPage: (p: Page) => void; open: boolean; close: () => void; runtime?: RuntimeInfo; mode: AgentShellApi['mode'] }) {
   const groups: { label: string; links: [Page, string, React.ReactNode][] }[] = [
-    { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['history', 'History', <History />]] },
+    { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['logs', 'Logs', <ScrollText />], ['history', 'History', <History />]] },
     { label: 'Workspace', links: [['projects', 'Projects', <FolderKanban />]] },
     { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['stacks', 'Stacks', <Boxes />]] },
   ]
@@ -98,7 +98,8 @@ function RunCard({ run, select, act, busy, accepting = true }: { run: Run; selec
 
 function HistoryTable({ runs, onSelect, onRunAgain, onPromote, full = false, accepting = true }: { runs: Run[]; onSelect: (r: Run, tab?: DetailTab) => void; onRunAgain?: (r: Run) => void; onPromote?: (r: Run) => void; full?: boolean; accepting?: boolean }) {
   const shown = full ? runs : runs.slice(0, 5)
-  return <div className="table-wrap history-table"><table><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{full && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{full && <td><div className="history-actions"><button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>{!running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
+  const showActions = full || !!onPromote
+  return <div className="table-wrap history-table"><table><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
 }
 
 function PortsTable({ ports, full = false }: { ports: Listener[]; full?: boolean }) {
@@ -110,16 +111,99 @@ function Panel({ title, action, children, className = '' }: { title: string; act
   return <section className={`panel ${className}`}><header><h2>{title}</h2>{action}</header>{children}</section>
 }
 
-function Dashboard({ data, select, runAction, busy, navigate, accepting }: { data: Snapshot; select: (r: Run, tab?: DetailTab) => void; runAction: (r: Run, a: 'stop' | 'restart') => void; busy: string; navigate: (p: Page) => void; accepting: boolean }) {
+function Dashboard({ data, select, runAction, busy, navigate, promote, accepting }: { data: Snapshot; select: (r: Run, tab?: DetailTab) => void; runAction: (r: Run, a: 'stop' | 'restart') => void; busy: string; navigate: (p: Page) => void; promote: (r: Run) => void; accepting: boolean }) {
   return <><SummaryCards snapshot={data} />
     <Panel title="Active Runs" action={<button className="text-button" onClick={() => navigate('runs')}>View all <ChevronRight /></button>}>
       <div className="run-list">{data.runs.filter(r => running(r.status)).slice(0, 3).map(run => <RunCard key={run.id} run={run} select={tab => select(run, tab)} act={a => runAction(run, a)} busy={busy === run.id} accepting={accepting} />)}{!data.runs.length && <Empty title="Nothing is running" detail="Start a saved service to see it here." />}</div>
     </Panel>
     <div className="dashboard-bottom">
-      <Panel title="Command History" action={<button className="text-button" onClick={() => navigate('history')}>View all <ChevronRight /></button>}><HistoryTable runs={data.history} onSelect={select} /></Panel>
+      <Panel title="Command History" action={<button className="text-button" onClick={() => navigate('history')}>View all <ChevronRight /></button>}><HistoryTable runs={data.history} onSelect={select} onPromote={promote} /></Panel>
       <Panel title="Port Overview" action={<button className="text-button" onClick={() => navigate('ports')}>View all <ChevronRight /></button>}><PortsTable ports={data.ports} /></Panel>
     </div>
   </>
+}
+
+function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
+  const [projectScope, setProjectScope] = useState('all')
+  const [collectionScope, setCollectionScope] = useState('all')
+  const [selectedKey, setSelectedKey] = useState('')
+  const [content, setContent] = useState('')
+  const [logError, setLogError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [live, setLive] = useState(true)
+  const [follow, setFollow] = useState(true)
+  const [refreshToken, setRefreshToken] = useState(0)
+  const [updatedAt, setUpdatedAt] = useState<Date>()
+  const terminal = useRef<HTMLPreElement>(null)
+
+  const entries = data.ports.flatMap((port, index) => {
+    const run = data.runs.find(item => item.id === port.run_id)
+      ?? data.runs.find(item => item.listeners?.some(listener => listener.port === port.port && (!port.pid || listener.pid === port.pid)))
+    if (!run || !running(run.status)) return []
+    const command = data.commands.find(item => item.id === run.command_definition_id)
+      ?? data.commands.find(item => item.active_run_id === run.id)
+    const projectID = run.project_id || command?.project_id || ''
+    const project = data.projects.find(item => item.id === projectID)
+    const collectionID = command?.collection_id || ''
+    const collection = data.collections.find(item => item.id === collectionID)
+    const scopeID = projectID || (command ? 'global' : 'unassigned')
+    return [{
+      key: `${run.id}:${port.port}:${port.address ?? index}`,
+      port, run, scopeID, collectionID: collectionID || 'unfiled',
+      projectName: project?.name || (projectID ? `Project ${projectID}` : command ? 'Global catalog' : 'Unassigned'),
+      collectionName: collection?.name || (collectionID ? `Collection ${collectionID}` : 'Unfiled'),
+    }]
+  })
+
+  const projectTabs = [{ id: 'all', name: 'All projects' }]
+  for (const entry of entries) if (!projectTabs.some(tab => tab.id === entry.scopeID)) projectTabs.push({ id: entry.scopeID, name: entry.projectName })
+  const projectEntries = projectScope === 'all' ? entries : entries.filter(entry => entry.scopeID === projectScope)
+  const collectionTabs = [{ id: 'all', name: 'All collections' }]
+  for (const entry of projectEntries) if (!collectionTabs.some(tab => tab.id === entry.collectionID)) collectionTabs.push({ id: entry.collectionID, name: entry.collectionName })
+  const visibleEntries = collectionScope === 'all' ? projectEntries : projectEntries.filter(entry => entry.collectionID === collectionScope)
+  const visibleKey = visibleEntries.map(entry => entry.key).join('|')
+  const selected = visibleEntries.find(entry => entry.key === selectedKey) ?? visibleEntries[0]
+  const selectedRunID = selected?.run.id
+
+  useEffect(() => {
+    if (!visibleEntries.some(entry => entry.key === selectedKey)) setSelectedKey(visibleEntries[0]?.key ?? '')
+  }, [selectedKey, visibleKey])
+  useEffect(() => {
+    if (!collectionTabs.some(tab => tab.id === collectionScope)) setCollectionScope('all')
+  }, [collectionScope, projectScope, collectionTabs.map(tab => tab.id).join('|')])
+  useEffect(() => {
+    if (!selectedRunID) { setContent(''); setLogError(''); setLoading(false); return }
+    let cancelled = false
+    const load = async (initial = false) => {
+      if (initial) setLoading(true)
+      try {
+        const response = await api.getLogs(selectedRunID)
+        if (!cancelled) { setContent(response.content); setLogError(''); setUpdatedAt(new Date()) }
+      } catch (error) {
+        if (!cancelled) setLogError(error instanceof Error ? error.message : 'Unable to read logs')
+      } finally { if (!cancelled && initial) setLoading(false) }
+    }
+    setContent(''); setLogError(''); load(true)
+    const timer = live ? window.setInterval(() => load(), 1000) : undefined
+    return () => { cancelled = true; if (timer) window.clearInterval(timer) }
+  }, [api, selectedRunID, live, refreshToken])
+  useEffect(() => {
+    if (follow && terminal.current) terminal.current.scrollTop = terminal.current.scrollHeight
+  }, [content, follow])
+
+  const chooseProject = (id: string) => { setProjectScope(id); setCollectionScope('all'); setSelectedKey('') }
+  return <section className="logs-workspace" data-testid="logs-page">
+    <div className="log-scope"><span>Project</span><div className="log-scope-tabs" role="tablist" aria-label="Log projects">{projectTabs.map(tab => <button key={tab.id} role="tab" aria-selected={projectScope === tab.id} className={projectScope === tab.id ? 'active' : ''} onClick={() => chooseProject(tab.id)}>{tab.name}</button>)}</div></div>
+    <div className="log-scope"><span>Collection</span><div className="log-scope-tabs" role="tablist" aria-label="Log collections">{collectionTabs.map(tab => <button key={tab.id} role="tab" aria-selected={collectionScope === tab.id} className={collectionScope === tab.id ? 'active' : ''} onClick={() => { setCollectionScope(tab.id); setSelectedKey('') }}>{tab.name}</button>)}</div></div>
+    {!entries.length ? <div className="logs-empty"><Empty title="No open port logs" detail="Start a service with a listening port to follow its shell output here." /></div> : !visibleEntries.length ? <div className="logs-empty"><Empty title="No ports in this scope" detail="Choose another project or collection." /></div> : <>
+      <div className="port-log-tabs" role="tablist" aria-label="Open port logs">{visibleEntries.map(entry => <button key={entry.key} role="tab" aria-selected={selected?.key === entry.key} className={selected?.key === entry.key ? 'active' : ''} onClick={() => setSelectedKey(entry.key)}><span className="live-dot" /><strong>:{entry.port.port}</strong><span>{entry.port.name ?? entry.run.label}</span><small>{entry.projectName} · {entry.collectionName}</small></button>)}</div>
+      {selected && <div className="terminal-shell">
+        <header><div className="terminal-title"><span className="terminal-lights"><i /><i /><i /></span><div><strong>{selected.run.label}</strong><small>{selected.projectName} / {selected.collectionName} / :{selected.port.port}</small></div></div><div className="terminal-actions"><label><input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> Follow output</label><button className={`button small ${live ? 'live-active' : ''}`} onClick={() => setLive(value => !value)}><Activity /> {live ? 'Live' : 'Paused'}</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton></div></header>
+        <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">{loading ? '$ attaching to combined stdout/stderr…' : logError ? `$ log stream error: ${logError}` : content || '$ connected — waiting for process output…'}</pre>
+        <footer><code>$ {selected.run.command}</code><span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Connecting…'} · combined stdout/stderr · last 300 lines</span></footer>
+      </div>}
+    </>}
+  </section>
 }
 
 function Empty({ title, detail }: { title: string; detail: string }) { return <div className="empty"><FileTerminal /><strong>{title}</strong><span>{detail}</span></div> }
@@ -194,7 +278,7 @@ function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accep
   </div>
 }
 
-function PromoteDialog({ run, projects, collections, close, submit, busy }: { run: Run; projects: Project[]; collections: Collection[]; close: () => void; submit: (input: PromoteRunInput) => void; busy: boolean }) {
+function PromoteDialog({ run, projects, collections, close, submit, createProject, createCollection, busy }: { run: Run; projects: Project[]; collections: Collection[]; close: () => void; submit: (input: PromoteRunInput) => void; createProject: (input: ProjectInput) => Promise<Project>; createCollection: (input: CollectionInput) => Promise<Collection>; busy: boolean }) {
   const [name, setName] = useState(run.label || run.command)
   const [projectID, setProjectID] = useState(run.project_id ?? '')
   const [collectionID, setCollectionID] = useState('')
@@ -202,13 +286,53 @@ function PromoteDialog({ run, projects, collections, close, submit, busy }: { ru
   const [tags, setTags] = useState('')
   const [favorite, setFavorite] = useState(false)
   const [ports, setPorts] = useState<number[]>([])
+  const [projectCreator, setProjectCreator] = useState(false)
+  const [collectionCreator, setCollectionCreator] = useState(false)
+  const pathParts = run.cwd.replace(/\/+$/, '').split('/').filter(Boolean)
+  const [projectName, setProjectName] = useState(pathParts[pathParts.length - 1] || run.label || 'Project')
+  const [projectRoot, setProjectRoot] = useState(run.cwd)
+  const [collectionName, setCollectionName] = useState('')
+  const [createdProjects, setCreatedProjects] = useState<Project[]>([])
+  const [createdCollections, setCreatedCollections] = useState<Collection[]>([])
+  const [creating, setCreating] = useState<'project' | 'collection' | ''>('')
+  const [createError, setCreateError] = useState('')
   const observed = run.listeners ?? []
-  const eligibleCollections = collections.filter(item => projectID ? item.project_id === projectID : !item.project_id)
+  const allProjects = [...projects, ...createdProjects.filter(created => !projects.some(project => project.id === created.id))]
+  const allCollections = [...collections, ...createdCollections.filter(created => !collections.some(collection => collection.id === created.id))]
+  const eligibleCollections = allCollections.filter(item => item?.id && item?.name && (item.project_id ?? '') === projectID)
   const togglePort = (port: number) => setPorts(current => current.includes(port) ? current.filter(value => value !== port) : [...current, port])
   const save = (event: React.FormEvent) => { event.preventDefault(); submit({ name: name.trim(), project_id: projectID || undefined, collection_id: collectionID || undefined, kind, tags: tags.split(',').map(value => value.trim()).filter(Boolean), favorite, expected_ports: observed.filter(item => ports.includes(item.port)).map(item => ({ port: item.port, name: item.name, protocol: item.protocol })) }) }
-  return <><button className="modal-scrim" aria-label="Cancel save launcher" onClick={close} /><form className="modal promote-modal" role="dialog" aria-modal="true" aria-labelledby="promote-title" onSubmit={save} data-testid="promote-modal"><span className="modal-icon"><BookmarkPlus /></span><h2 id="promote-title">Save run as launcher</h2><p className="modal-command"><code>{run.command}</code><span>{run.cwd}</span></p><label>Name<input autoFocus value={name} onChange={event => setName(event.target.value)} required /></label><div className="form-row"><label>Project<select aria-label="Project" value={projectID} onChange={event => { setProjectID(event.target.value); setCollectionID('') }}><option value="">Global catalog</option>{projects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label><label>Kind<select aria-label="Kind" value={kind} onChange={event => setKind(event.target.value as 'service' | 'task')}><option value="service">Service</option><option value="task">Task</option></select></label></div><label>Collection<select aria-label="Collection" value={collectionID} onChange={event => setCollectionID(event.target.value)}><option value="">Unfiled</option>{eligibleCollections.map(collection => <option value={collection.id} key={collection.id}>{collection.name}</option>)}</select></label><label>Tags<input aria-label="Tags" placeholder="internal, backend" value={tags} onChange={event => setTags(event.target.value)} /></label>
+  const addProject = async () => {
+    if (!projectName.trim() || !projectRoot.trim()) return
+    setCreating('project'); setCreateError('')
+    try {
+      const existing = allProjects.find(project => project.root_path === projectRoot.trim())
+      const created = existing ?? await createProject({ name: projectName.trim(), root_path: projectRoot.trim() })
+      setCreatedProjects(current => current.some(project => project.id === created.id) ? current : [...current, created])
+      setProjectID(created.id); setCollectionID(''); setProjectCreator(false)
+    } catch (error) { setCreateError(error instanceof Error ? error.message : 'Unable to create project') }
+    finally { setCreating('') }
+  }
+  const addCollection = async () => {
+    if (!collectionName.trim()) return
+    setCreating('collection'); setCreateError('')
+    try {
+      const existing = eligibleCollections.find(collection => collection.name.toLowerCase() === collectionName.trim().toLowerCase())
+      const created = existing ?? await createCollection({ name: collectionName.trim(), project_id: projectID || undefined })
+      setCreatedCollections(current => current.some(collection => collection.id === created.id) ? current : [...current, created])
+      setCollectionID(created.id); setCollectionName(''); setCollectionCreator(false)
+    } catch (error) { setCreateError(error instanceof Error ? error.message : 'Unable to create collection') }
+    finally { setCreating('') }
+  }
+  return <><button className="modal-scrim" aria-label="Cancel save launcher" onClick={close} /><form className="modal promote-modal" role="dialog" aria-modal="true" aria-labelledby="promote-title" onSubmit={save} data-testid="promote-modal"><span className="modal-icon"><BookmarkPlus /></span><h2 id="promote-title">Save run as launcher</h2><p className="modal-command"><code>{run.command}</code><span>{run.cwd}</span></p><label>Name<input autoFocus value={name} onChange={event => setName(event.target.value)} required /></label>
+    <div className="form-row"><div className="field-block"><div className="field-heading"><span>Project</span><button type="button" className="inline-add" onClick={() => { setProjectCreator(value => !value); setCollectionCreator(false); setCreateError('') }}><Plus /> New project</button></div><select aria-label="Project" value={projectID} onChange={event => { setProjectID(event.target.value); setCollectionID(''); setCollectionCreator(false) }}><option value="">Global catalog</option>{allProjects.filter(project => project?.id).map(project => <option value={project.id} key={project.id}>{project.name || 'Unnamed project'}</option>)}</select><small>Workspace and root directory this launcher belongs to.</small></div><label>Kind<select aria-label="Kind" value={kind} onChange={event => setKind(event.target.value as 'service' | 'task')}><option value="service">Service</option><option value="task">Task</option></select></label></div>
+    {projectCreator && <div className="inline-create" data-testid="inline-project-create"><strong>New project</strong><label>Project name<input aria-label="New project name" value={projectName} onChange={event => setProjectName(event.target.value)} /></label><label>Root directory<input aria-label="New project root" value={projectRoot} onChange={event => setProjectRoot(event.target.value)} /></label><small>The command directory is filled in automatically.</small><div><button type="button" className="button small" onClick={() => setProjectCreator(false)}>Cancel</button><button type="button" className="button small primary" data-testid="create-project-inline" onClick={addProject} disabled={creating === 'project' || !projectName.trim() || !projectRoot.trim()}>{creating === 'project' ? 'Creating…' : 'Create & select'}</button></div></div>}
+    <div className="field-block"><div className="field-heading"><span>Collection</span><button type="button" className="inline-add" onClick={() => { setCollectionCreator(value => !value); setProjectCreator(false); setCreateError('') }}><Plus /> New collection</button></div><select aria-label="Collection" value={collectionID} onChange={event => setCollectionID(event.target.value)}><option value="">No collection (Unfiled)</option>{eligibleCollections.map(collection => <option value={collection.id} key={collection.id}>{collection.name || 'Unnamed collection'}</option>)}</select><small>Optional folder inside {projectID ? 'the selected project' : 'the global catalog'}, such as Services, Tests, or Build.</small></div>
+    {collectionCreator && <div className="inline-create compact" data-testid="inline-collection-create"><strong>New collection in {allProjects.find(project => project.id === projectID)?.name || 'Global catalog'}</strong><label>Collection name<input aria-label="New collection name" placeholder="Development, Tests, Internal services…" value={collectionName} onChange={event => setCollectionName(event.target.value)} /></label><div><button type="button" className="button small" onClick={() => setCollectionCreator(false)}>Cancel</button><button type="button" className="button small primary" data-testid="create-collection-inline" onClick={addCollection} disabled={creating === 'collection' || !collectionName.trim()}>{creating === 'collection' ? 'Creating…' : 'Create & select'}</button></div></div>}
+    {createError && <p className="inline-error" role="alert">{createError}</p>}
+    <label>Tags<input aria-label="Tags" placeholder="internal, backend" value={tags} onChange={event => setTags(event.target.value)} /></label>
     {!!observed.length && <fieldset className="port-suggestions"><legend>Observed ports — optional suggestions</legend><p>Ports are not selected automatically. Include only stable ports this launcher should wait for.</p>{observed.map(port => <label key={port.port}><input type="checkbox" checked={ports.includes(port.port)} onChange={() => togglePort(port.port)} /><span>:{port.port}</span><small>{port.name ?? port.protocol ?? 'listener'}</small></label>)}</fieldset>}
-    <label className="check-label"><input type="checkbox" checked={favorite} onChange={event => setFavorite(event.target.checked)} /><Star /> Pin to favorites</label><footer><button type="button" className="button" onClick={close} disabled={busy}>Cancel</button><button className="button primary" data-testid="confirm-promote" disabled={busy || !name.trim()}><Save /> {busy ? 'Saving…' : 'Save launcher'}</button></footer></form></>
+    <label className="check-label"><input type="checkbox" checked={favorite} onChange={event => setFavorite(event.target.checked)} /><Star /> Pin to favorites</label><footer><button type="button" className="button" onClick={close} disabled={busy}>Cancel</button><button className="button primary" data-testid="confirm-promote" disabled={busy || !!creating || !name.trim()}><Save /> {busy ? 'Saving…' : 'Save launcher'}</button></footer></form></>
 }
 
 function CollectionDialog({ project, close, submit, busy }: { project?: Project; close: () => void; submit: (name: string) => void; busy: boolean }) {
@@ -304,6 +428,23 @@ export default function App() {
     catch (e) { setError(e instanceof Error ? e.message : 'Unable to save launcher') }
     finally { setBusy('') }
   }
+  const createProjectForPromotion = async (input: ProjectInput) => {
+    if (!api) throw new Error('API is not ready')
+    const existing = data.projects.find(project => project.root_path === input.root_path)
+    if (existing) return existing
+    const created = await api.createProject(input)
+    await reload()
+    return created
+  }
+  const createCollectionForPromotion = async (input: CollectionInput) => {
+    if (!api) throw new Error('API is not ready')
+    const scope = input.project_id ?? ''
+    const existing = data.collections.find(collection => (collection.project_id ?? '') === scope && collection.name.toLowerCase() === input.name.toLowerCase())
+    if (existing) return existing
+    const created = await api.createCollection({ ...input, sort_order: data.collections.filter(collection => (collection.project_id ?? '') === scope).length })
+    await reload()
+    return created
+  }
   const createCollection = async (name: string) => {
     if (!api) return
     setBusy('create-collection')
@@ -313,7 +454,7 @@ export default function App() {
   }
   const shutdown = async () => { if (!api) return; setBusy('runtime-shutdown'); try { await api.shutdownRuntime(); setShutdownOpen(false); setShutdownRequested(true); setSelected(null); setRuntime(current => current ? { ...current, status: 'stopping' } : current) } catch (e) { setError(e instanceof Error ? e.message : 'Shutdown failed') } finally { setBusy('') } }
   const select = (run: Run, selectedTab: DetailTab = 'Overview') => { setSelected(run); setTab(selectedTab) }
-  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
+  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
   const filter = <T extends { name?: string; label?: string; command?: string }>(items: T[]) => items.filter(i => `${i.name} ${i.label} ${i.command}`.toLowerCase().includes(query.toLowerCase()))
   const commands = filter(data.commands)
 
@@ -327,9 +468,10 @@ export default function App() {
       {fallback && <div className="demo-banner" role="status"><Sparkles /><span><strong>Demo data</strong> — no live Runtime data is shown ({fallback}). Actions stay inside the isolated browser demo adapter.</span></div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={reload}>Try again</button></div>}
       <div className="content">
-        {page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} accepting={accepting} />}
+        {page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} />}
         {page === 'runs' && <Panel title={`${filter(data.runs).filter(r => running(r.status)).length} active runs`}><div className="run-list">{filter(data.runs).filter(r => running(r.status)).map(r => <RunCard key={r.id} run={r} select={tab => select(r, tab)} act={a => runAction(r, a)} busy={busy === r.id} accepting={accepting} />)}</div></Panel>}
         {page === 'ports' && <Panel title={`${data.ports.length} listening ports`}><PortsTable ports={data.ports} full /></Panel>}
+        {page === 'logs' && api && <LogsPage data={data} api={api} />}
         {page === 'history' && <Panel title={`${data.history.length} commands`}><HistoryTable runs={filter(data.history)} onSelect={select} onRunAgain={runAgain} onPromote={setPromoteRun} accepting={accepting} full /></Panel>}
         {page === 'projects' && <ProjectCatalog data={data} selectedProject={selectedProject} setSelectedProject={setSelectedProject} busy={busy} accepting={accepting} handlers={catalogHandlers} selectRun={select} runAgain={runAgain} promote={setPromoteRun} addCollection={() => setCollectionOpen(true)} />}
         {page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} />)}</div>}
@@ -339,7 +481,7 @@ export default function App() {
       </div>
     </main>
     {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} api={api} action={a => runAction(selected, a)} busy={busy === selected.id} accepting={accepting} />}
-    {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} busy={busy === `promote-${promoteRun.id}`} />}
+    {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}
     {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === selectedProject)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
     {promotionReceipt && <PromotionReceipt result={promotionReceipt} project={data.projects.find(item => item.id === promotionReceipt.command.project_id)} onView={() => { setPage('projects'); setSelectedProject(promotionReceipt.command.project_id ?? 'global'); setPromotionReceipt(null) }} close={() => setPromotionReceipt(null)} />}
     {shutdownOpen && api && <ShutdownDialog data={data} close={() => setShutdownOpen(false)} confirm={shutdown} busy={busy === 'runtime-shutdown'} mode={api.mode} />}

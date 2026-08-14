@@ -8,7 +8,9 @@ AgentShell is a local-first runtime manager for commands started by people and A
 - Process-group lifecycle with graceful stop and forced-kill fallback
 - Child process, CPU, memory, and listening-port discovery
 - Separate stdout, stderr, and combined logs
-- Saved projects, service/task commands, and multi-command stacks
+- Saved projects, collections, service/task commands, and multi-command stacks
+- History-to-launcher promotion with duplicate-safe command fingerprints
+- Atomic, dry-runnable catalog imports for AI-created project launchers
 - Concurrency policies (`forbid`, `replace`, `allow`)
 - React dashboard with live SSE updates
 - Stdio MCP server for runtime and catalog operations
@@ -45,15 +47,31 @@ Start the Runtime first with `./start.sh`, then register the thin stdio bridge i
     "agentshell": {
       "type": "stdio",
       "command": "/absolute/path/to/AgentShell/bin/agentshell",
-      "args": ["mcp"]
+      "args": ["mcp", "-workspace-root", "/absolute/path/to/your/workspace"]
     }
   }
 }
 ```
 
+When the client supports workspace interpolation, the last argument can be its
+workspace variable (for example `${workspaceFolder}`). `AGENTSHELL_WORKSPACE_ROOT`
+provides the same explicit setting. AgentShell never guesses the active project
+from the Runtime daemon's own working directory; the MCP tool reports whether a
+workspace root was actually configured.
+
 The MCP process never starts or owns the Runtime. It discovers the verified runtime record and exits with a clear error when AgentShell is not running. After a real MCP initialization handshake, it renews a short lease and uses the client's advertised title/name in the dashboard; disconnected or crashed bridges disappear automatically. `-client-name` is only an explicit fallback for clients that do not advertise an identity.
 
-The MCP catalog can inspect a project without executing it, register projects, save service/task launchers, create stacks such as `Internal Microservices`, and start or stop them later. Runtime tools include `get_runtime`, `list_ports`, `run`, `list_runs`, `inspect_run`, `get_logs`, `stop_run`, `restart_run`, and the confirmation-gated `shutdown_runtime`.
+The MCP catalog can inspect a project without executing it, register projects,
+organize launchers in collections, create stacks such as `Internal
+Microservices`, promote a proven History Run into a saved launcher, and start or
+stop saved items later. Inspection is bounded and read-only; it discovers common
+Make, Go, Node, Compose, and shell-script entry points with evidence and warnings.
+`apply_catalog` supports a no-write `dry_run` and applies the accepted project,
+collections, commands, and stacks atomically and idempotently.
+
+Runtime tools include `get_runtime`, `get_workspace_context`, `list_ports`,
+`run`, `list_runs`, `inspect_run`, `get_logs`, `stop_run`, `restart_run`, and the
+confirmation-gated `shutdown_runtime`.
 
 Example workflow:
 
@@ -62,9 +80,20 @@ Example workflow:
  Internal Microservices stack. Do not start it yet."
 
 "Start Internal Microservices."
+
+"Save the build and test commands from this workspace under Build & Test.
+ Do not run them."
+
+"Save the command from the last Run as Backend Tests and pin it."
 ```
 
 Saved service definitions default to duplicate protection. If a service is already active, AgentShell returns the existing Run instead of silently starting another copy.
+
+The dashboard exposes the same catalog under **Projects**. Project and global
+scopes are distinct; collections are organizational folders, while stacks are
+executable groups. History rows can open logs, run again, or be saved as a
+launcher. Ports observed during a Run are suggestions during promotion and are
+never selected as expected ports without an explicit choice.
 
 ## Development
 

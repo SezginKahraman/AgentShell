@@ -82,6 +82,11 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
     await expect(page.getByTestId('log-panel')).toContainText('Serving HTTP')
 
     await page.getByTestId('run-detail-drawer').getByRole('button', { name: 'Close run details' }).click()
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Logs', exact: true }).click()
+    await expect(page.getByTestId('logs-page').getByRole('tab', { name: `Live E2E ${suffix}`, exact: true })).toBeVisible()
+    await expect(page.getByTestId('logs-page').getByRole('tab', { name: new RegExp(`:${firstPort}`) })).toBeVisible()
+    await expect(page.getByTestId('live-log-terminal')).toContainText('Serving HTTP')
+    await expect(page.getByTestId('logs-page').getByRole('tab', { name: 'Unfiled', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Ports' }).click()
     await expect(page.getByRole('link', { name: `Open port ${firstPort}` })).toBeVisible()
     await expect(page.getByRole('link', { name: `Open port ${secondPort}` })).toBeVisible()

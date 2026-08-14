@@ -206,13 +206,13 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 	if _, exists := promote["run_id"]; exists {
 		t.Errorf("promote payload leaked run_id: %#v", promote)
 	}
-	if _, exists := promote["expected_ports"].([]any)[0].(map[string]any)["service"]; exists {
-		t.Errorf("promote payload leaked service: %#v", promote)
+	if promote["expected_ports"].([]any)[0].(map[string]any)["service"] != "http" {
+		t.Errorf("promote payload lost service: %#v", promote)
 	}
 	apply := requests[6].Body
 	command := apply["commands"].([]any)[0].(map[string]any)
-	if _, exists := command["expected_ports"].([]any)[0].(map[string]any)["service"]; exists {
-		t.Errorf("apply payload leaked service: %#v", apply)
+	if command["expected_ports"].([]any)[0].(map[string]any)["service"] != "http" {
+		t.Errorf("apply payload lost service: %#v", apply)
 	}
 }
 

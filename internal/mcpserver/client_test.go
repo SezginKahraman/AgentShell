@@ -119,8 +119,8 @@ func TestDaemonClientForwardsAndPreservesResults(t *testing.T) {
 		t.Errorf("source = %#v", received["source"])
 	}
 	ports := received["expected_ports"].([]any)
-	if _, ok := ports[0].(map[string]any)["service"]; ok {
-		t.Errorf("strict daemon expected port contains unsupported service: %#v", ports[0])
+	if ports[0].(map[string]any)["service"] != "http" {
+		t.Errorf("expected port lost application protocol service: %#v", ports[0])
 	}
 }
 
@@ -147,7 +147,7 @@ func TestMergeAndPutUsesStrictCommandShape(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = io.WriteString(w, `{"id":"cmd-1","name":"Old","command":"make go","cwd":"/tmp/p","shell":"zsh","kind":"service","concurrency_policy":"forbid","env":{},"expected_ports":[{"port":8080,"name":"API","protocol":"tcp"}],"tags":["internal"],"favorite":false,"status":"running","active_run_id":"run-1","created_at":"ignored"}`)
+			_, _ = io.WriteString(w, `{"id":"cmd-1","name":"Old","command":"make go","cwd":"/tmp/p","shell":"zsh","kind":"service","concurrency_policy":"forbid","env":{},"expected_ports":[{"port":8080,"name":"API","protocol":"tcp","service":"http"}],"tags":["internal"],"favorite":false,"status":"running","active_run_id":"run-1","created_at":"ignored"}`)
 		case http.MethodPut:
 			if err := json.NewDecoder(r.Body).Decode(&put); err != nil {
 				t.Errorf("decode PUT: %v", err)
@@ -167,6 +167,9 @@ func TestMergeAndPutUsesStrictCommandShape(t *testing.T) {
 	if got["name"] != "New" || put["command"] != "make go" {
 		t.Fatalf("merged result = %#v, payload = %#v", got, put)
 	}
+	if put["expected_ports"].([]any)[0].(map[string]any)["service"] != "http" {
+		t.Errorf("update payload lost expected port service: %#v", put)
+	}
 	for _, forbidden := range []string{"id", "status", "active_run_id", "created_at", "updated_at"} {
 		if _, ok := put[forbidden]; ok {
 			t.Errorf("PUT payload contains response-only field %q", forbidden)
@@ -174,6 +177,20 @@ func TestMergeAndPutUsesStrictCommandShape(t *testing.T) {
 	}
 	if keys := sortedMapKeys(put); !reflect.DeepEqual(keys, sortedStrings(commandFields)) {
 		t.Fatalf("PUT keys = %v, want %v", keys, sortedStrings(commandFields))
+	}
+}
+
+func TestSaveCommandPayloadPreservesExpectedPortService(t *testing.T) {
+	payload, err := commandPayload(SaveCommandInput{
+		Name: "Web", Command: "npm run dev", CWD: "/tmp/web", Kind: "service",
+		ExpectedPorts: []ExpectedPort{{Port: 3000, Protocol: "tcp", Service: "http"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := payload["expected_ports"].([]any)[0].(map[string]any)
+	if port["protocol"] != "tcp" || port["service"] != "http" {
+		t.Fatalf("expected port payload = %#v", port)
 	}
 }
 

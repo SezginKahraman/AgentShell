@@ -47,7 +47,9 @@ describe('DemoApi', () => {
 
   it('creates collections and toggles favorites', async () => {
     const api = new DemoApi()
-    const collection = await api.createCollection({ name: 'Deploy', project_id: 'project-api' })
+    const project = await api.createProject({ name: 'Payments', root_path: '/projects/payments' })
+    expect((await api.getSnapshot()).projects.some(item => item.id === project.id)).toBe(true)
+    const collection = await api.createCollection({ name: 'Deploy', project_id: project.id })
     expect((await api.getSnapshot()).collections.some(item => item.id === collection.id)).toBe(true)
     await api.updateCommand('cmd-worker', { favorite: true })
     expect((await api.getSnapshot()).commands.find(item => item.id === 'cmd-worker')?.favorite).toBe(true)

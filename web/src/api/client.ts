@@ -1,4 +1,4 @@
-import type { Collection, CollectionInput, LogResponse, Project, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, Summary, Listener } from '../types'
+import type { Collection, CollectionInput, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -14,6 +14,7 @@ export interface AgentShellApi {
   promoteRun(id: string, input: PromoteRunInput): Promise<PromoteRunResult>
   updateCommand(id: string, input: Partial<SavedCommand>): Promise<SavedCommand>
   updateStack(id: string, input: Partial<Stack>): Promise<Stack>
+  createProject(input: ProjectInput): Promise<Project>
   createCollection(input: CollectionInput): Promise<Collection>
   updateCollection(id: string, input: CollectionInput): Promise<Collection>
   deleteCollection(id: string): Promise<void>
@@ -59,6 +60,7 @@ export class HttpApi implements AgentShellApi {
   promoteRun(id: string, input: PromoteRunInput) { return request<PromoteRunResult>(`/api/runs/${id}/promote`, { method: 'POST', body: JSON.stringify(input) }) }
   updateCommand(id: string, input: Partial<SavedCommand>) { return request<SavedCommand>(`/api/commands/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   updateStack(id: string, input: Partial<Stack>) { return request<Stack>(`/api/stacks/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+  createProject(input: ProjectInput) { return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }) }
   createCollection(input: CollectionInput) { return request<Collection>('/api/collections', { method: 'POST', body: JSON.stringify(input) }) }
   updateCollection(id: string, input: CollectionInput) { return request<Collection>(`/api/collections/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   async deleteCollection(id: string) { await request(`/api/collections/${id}`, { method: 'DELETE' }) }

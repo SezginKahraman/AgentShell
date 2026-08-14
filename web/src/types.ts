@@ -60,6 +60,7 @@ export interface Stack { id: string; name: string; description?: string; members
 export interface LogResponse { run_id: string; stream: string; content: string }
 
 export interface Project { id: string; name: string; root_path: string; description?: string; created_at?: string; updated_at?: string }
+export interface ProjectInput { name: string; root_path: string }
 export interface Collection { id: string; name: string; project_id?: string; parent_id?: string; sort_order?: number; created_at?: string; updated_at?: string }
 export interface CollectionInput { name: string; project_id?: string; parent_id?: string; sort_order?: number }
 export interface PromoteRunInput { name: string; project_id?: string; collection_id?: string; kind?: 'service' | 'task'; tags?: string[]; favorite?: boolean; expected_ports?: ExpectedPort[] }

@@ -93,7 +93,6 @@ func (c *daemonClient) mergeAndPut(ctx context.Context, path string, patch map[s
 		}
 		merged["members"] = clean
 	}
-	sanitizeExpectedPorts(merged)
 	return c.do(ctx, http.MethodPut, path, nil, merged)
 }
 

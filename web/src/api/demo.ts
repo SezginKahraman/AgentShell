@@ -1,5 +1,5 @@
 import type { AgentShellApi } from './client'
-import type { Collection, CollectionInput, Project, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from '../types'
+import type { Collection, CollectionInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from '../types'
 
 const now = Date.now()
 const iso = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
@@ -68,6 +68,7 @@ export class DemoApi implements AgentShellApi {
   }
   async updateCommand(id: string, input: Partial<SavedCommand>) { const item = commands.find(value => value.id === id); if (!item) throw new Error('Command not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
   async updateStack(id: string, input: Partial<Stack>) { const item = stacks.find(value => value.id === id); if (!item) throw new Error('Stack not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
+  async createProject(input: ProjectInput) { const item: Project = { ...input, id: `project-${Date.now()}` }; projects.push(item); this.emit(); return structuredClone(item) }
   async createCollection(input: CollectionInput) { const item: Collection = { ...input, id: `collection-${Date.now()}` }; collections.push(item); this.emit(); return structuredClone(item) }
   async updateCollection(id: string, input: CollectionInput) { const item = collections.find(value => value.id === id); if (!item) throw new Error('Collection not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
   async deleteCollection(id: string) { const index = collections.findIndex(value => value.id === id); if (index >= 0) collections.splice(index, 1); commands.filter(value => value.collection_id === id).forEach(value => value.collection_id = undefined); this.emit() }

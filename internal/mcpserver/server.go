@@ -314,7 +314,6 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			if err != nil {
 				return nil, err
 			}
-			sanitizeExpectedPorts(payload)
 			return client.do(ctx, http.MethodPost, runPath(input.RunID)+"/promote", nil, payload)
 		})
 
@@ -324,7 +323,6 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			if err != nil {
 				return nil, err
 			}
-			sanitizeCatalogPorts(payload)
 			return client.do(ctx, http.MethodPost, "/api/catalog/apply", nil, payload)
 		})
 
@@ -482,7 +480,6 @@ func runtimePayload(input RunInput) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	sanitizeExpectedPorts(payload)
 	return payload, nil
 }
 
@@ -491,7 +488,6 @@ func commandPayload(input any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	sanitizeExpectedPorts(payload)
 	return payload, nil
 }
 
@@ -515,28 +511,4 @@ func stackPayload(input any) (map[string]any, error) {
 	delete(payload, "command_ids")
 	payload["members"] = members
 	return payload, nil
-}
-
-func sanitizeExpectedPorts(payload map[string]any) {
-	ports, ok := payload["expected_ports"].([]any)
-	if !ok {
-		return
-	}
-	for _, raw := range ports {
-		if port, ok := raw.(map[string]any); ok {
-			delete(port, "service")
-		}
-	}
-}
-
-func sanitizeCatalogPorts(payload map[string]any) {
-	commands, ok := payload["commands"].([]any)
-	if !ok {
-		return
-	}
-	for _, raw := range commands {
-		if command, ok := raw.(map[string]any); ok {
-			sanitizeExpectedPorts(command)
-		}
-	}
 }

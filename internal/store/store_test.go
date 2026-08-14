@@ -49,7 +49,34 @@ func TestAdditiveMigrationFromRevisionTwoDatabase(t *testing.T) {
 	}
 }
 
-func TestEmptyListsAreNonNil(t *testing.T){s,err:=Open(filepath.Join(t.TempDir(),"empty.db"));if err!=nil{t.Fatal(err)};defer s.Close();ctx:=context.Background();runs,err:=s.Runs(ctx,10);if err!=nil||runs==nil{t.Fatalf("runs=%#v err=%v",runs,err)};projects,err:=s.Projects(ctx);if err!=nil||projects==nil{t.Fatalf("projects=%#v err=%v",projects,err)};commands,err:=s.Commands(ctx);if err!=nil||commands==nil{t.Fatalf("commands=%#v err=%v",commands,err)};stacks,err:=s.Stacks(ctx);if err!=nil||stacks==nil{t.Fatalf("stacks=%#v err=%v",stacks,err)};collections,err:=s.Collections(ctx,nil);if err!=nil||collections==nil{t.Fatalf("collections=%#v err=%v",collections,err)}}
+func TestEmptyListsAreNonNil(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "empty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	runs, err := s.Runs(ctx, 10)
+	if err != nil || runs == nil {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	projects, err := s.Projects(ctx)
+	if err != nil || projects == nil {
+		t.Fatalf("projects=%#v err=%v", projects, err)
+	}
+	commands, err := s.Commands(ctx)
+	if err != nil || commands == nil {
+		t.Fatalf("commands=%#v err=%v", commands, err)
+	}
+	stacks, err := s.Stacks(ctx)
+	if err != nil || stacks == nil {
+		t.Fatalf("stacks=%#v err=%v", stacks, err)
+	}
+	collections, err := s.Collections(ctx, nil)
+	if err != nil || collections == nil {
+		t.Fatalf("collections=%#v err=%v", collections, err)
+	}
+}
 
 func TestStoreCatalogAndRunRoundTrip(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "state", "test.db"))
