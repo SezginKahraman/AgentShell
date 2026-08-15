@@ -1,4 +1,4 @@
-import type { Collection, CollectionInput, CommandSource, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, Summary, Listener } from '../types'
+import type { Collection, CollectionInput, CommandSource, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -16,6 +16,7 @@ export interface AgentShellApi {
   promoteRun(id: string, input: PromoteRunInput): Promise<PromoteRunResult>
   updateCommand(id: string, input: Partial<SavedCommand>): Promise<SavedCommand>
   updateStack(id: string, input: Partial<Stack>): Promise<Stack>
+	createStack(input: StackInput): Promise<Stack>
 	deleteCommand(id: string): Promise<void>
 	deleteStack(id: string): Promise<void>
   createProject(input: ProjectInput): Promise<Project>
@@ -70,6 +71,7 @@ export class HttpApi implements AgentShellApi {
   promoteRun(id: string, input: PromoteRunInput) { return request<PromoteRunResult>(`/api/runs/${id}/promote`, { method: 'POST', body: JSON.stringify(input) }) }
   updateCommand(id: string, input: Partial<SavedCommand>) { return request<SavedCommand>(`/api/commands/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   updateStack(id: string, input: Partial<Stack>) { return request<Stack>(`/api/stacks/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+	createStack(input: StackInput) { return request<Stack>('/api/stacks', { method: 'POST', body: JSON.stringify(input) }) }
 	async deleteCommand(id: string) { await request(`/api/commands/${id}`, { method: 'DELETE' }) }
 	async deleteStack(id: string) { await request(`/api/stacks/${id}`, { method: 'DELETE' }) }
   createProject(input: ProjectInput) { return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }) }

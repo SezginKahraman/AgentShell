@@ -316,10 +316,10 @@ Project, Collection ve birden fazla launcher birlikte istenmişse ayrı ayrı `s
 - Build, test, lint, migration ve kısa script için `kind: task` kullan.
 - Doğrudan yeni komut için `run` kullan.
 - Kayıtlı launcher için `start_command` kullan.
-- Bir grup launcher için `start_stack` kullan. Yalnız belirli stack üyeleri istenmişse aynı çağrıda `command_ids` alt kümesini ver.
+- Bir grup launcher için `start_stack` kullan. Yalnız belirli stack üyeleri istenmişse aynı çağrıda `command_ids` alt kümesini ver; AgentShell seçilen üyelerin transitif `depends_on` bağımlılıklarını otomatik olarak dahil eder.
 - Servis başlatmadan önce duplicate durumunu kontrol et.
 - `wait_for: ready`, yalnız readiness için bilinen expected port varsa anlamlıdır.
-- `wait_timeout_ms`, yalnız MCP çağrısının bekleme süresidir.
+- Doğrudan `run`/command çağrısındaki `wait_timeout_ms`, MCP yanıtının bekleme süresidir. Stack member üzerindeki `wait_timeout_ms` ise o member'ın orchestration koşulunun gerçek timeout'udur.
 - `run_timeout_ms`, çalışan komutun maksimum yaşam süresidir.
 
 ### 7.5. Gözlem ve sonuç
@@ -382,10 +382,10 @@ AgentShell şu anda 35 MCP tool sunar.
 | Tool | Amaç |
 | --- | --- |
 | `list_stacks` | Stack ve member durumlarını listelemek |
-| `save_stack` | Project/Collection sahibiyle Stack tanımı kaydetmek; member'ları başlatmaz |
-| `update_stack` | Stack sahibi, Collection, adı, strateji veya üyelerini güncellemek |
+| `save_stack` | Project/Collection sahibiyle Stack tanımı ve dependency orchestration kaydetmek; member'ları başlatmaz |
+| `update_stack` | Stack sahibi, Collection, adı, strateji, üyeler veya dependency/readiness ayarlarını güncellemek |
 | `delete_stack` | Stack kaydını silmek |
-| `start_stack` | Tüm çalışmayan member'ları veya verilen `command_ids` alt kümesini başlatmak |
+| `start_stack` | Tüm çalışmayan member'ları veya verilen alt kümeyi transitif bağımlılıklarıyla başlatmak |
 | `stop_stack` | Aktif member Run'larını durdurmak |
 | `restart_stack` | Çalışanları restart edip eksikleri başlatmak |
 
@@ -395,7 +395,33 @@ Collection'a bağlı tam proje kataloğu oluştururken `apply_catalog` içindeki
 
 History'deki bir Run kaydedilirken `promote_run.collection_id` kullanılabilir.
 
-Primitive `save_command` ve `save_stack` tool şemaları şu anda doğrudan Collection ataması sunmaz. Bu nedenle agent, “proje + collection + launcher + stack oluştur” isteğinde tercihen `apply_catalog` kullanmalıdır. Bu sınır dokümanda özellikle belirtilmiştir; agent olmayan bir alanı varmış gibi göstermemelidir.
+`save_command` ve `save_stack` doğrudan `collection_id` kabul eder. Project, Collection, çok sayıda launcher ve stack birlikte oluşturulacaksa atomiklik ve idempotency için yine de `apply_catalog` tercih edilmelidir.
+
+### Stack dependency orchestration
+
+Basit bir stack için sıralı `command_ids` hâlâ desteklenir. Gerçek servis bağımlılıklarında `members` kullanılır:
+
+```json
+{
+  "name": "Local application",
+  "start_strategy": "parallel",
+  "failure_policy": "stop",
+  "members": [
+    { "command_id": "database-id", "position": 0, "wait_for": "ready", "wait_timeout_ms": 60000 },
+    { "command_id": "api-id", "position": 1, "depends_on": ["database-id"], "wait_for": "ready", "wait_timeout_ms": 60000 },
+    { "command_id": "ui-id", "position": 2, "depends_on": ["api-id"], "wait_for": "spawn", "wait_timeout_ms": 30000 }
+  ]
+}
+```
+
+- `depends_on`, aynı stack içindeki command ID'lerini referanslar; self-reference, bilinmeyen ID, duplicate dependency ve cycle reddedilir.
+- `wait_for: spawn`, process oluşturulduğunda koşulu tamamlar.
+- `wait_for: ready`, managed Run'ın expected portlarını; external lifecycle için doğrulanmış expected-port geçişlerini bekler. External launcher'da bu mod için `expected_ports` zorunludur.
+- `wait_for: exit`, command'ın exit code 0 ile tamamlanmasını bekler; migration, build veya setup task'ları için uygundur.
+- `parallel`, aynı anda bağımlılığı açılmış member'ları bir wave olarak başlatır. `sequential`, stable `position` sırasıyla tek tek ilerler.
+- `failure_policy: stop`, ilk start/wait hatasında yeni member planlamayı bırakır. `continue`, yalnız bağımsız dalları sürdürür; başarısız üyeye bağlı dallar başlatılmaz.
+- Stop işlemi dependency sırasının tersidir. Örneğin DB → API → UI, UI → API → DB olarak durdurulur.
+- Dashboard'daki Stack detayında **Orchestration** düzenleyicisi aynı alanları yönetir. “Start selected” kullanıldığında gerekli bağımlılıklar otomatik eklenir.
 
 ## 9. Önerilen prompt örnekleri
 
@@ -426,6 +452,16 @@ Aynı kayıt varsa duplicate oluşturma; reused sonucunu koru.
 AgentShell kataloğundaki internal service launcher'larını bul.
 Internal Microservices isimli, parallel start ve continue failure policy kullanan bir stack tasarla.
 Önce dry-run göster. Kaydettikten sonra başlatma.
+```
+
+DB, API ve UI bağımlılıkları varsa agent'a şu kadar açık tarif verilebilir:
+
+```text
+Local Application stack'ini AgentShell'de dependency orchestration ile kaydet.
+Önce Database başlasın ve expected portları ready olsun.
+Ardından Backend API başlasın ve ready olsun; son olarak Frontend UI başlasın.
+DB -> API -> UI bağımlılıklarını members.depends_on ile tanımla, her readiness için 60 saniye timeout kullan.
+Önce apply_catalog dry-run göster ve hiçbir şeyi başlatma.
 ```
 
 ### 9.4. Stack'i başlat ve doğrula

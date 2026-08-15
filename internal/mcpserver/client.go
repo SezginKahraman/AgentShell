@@ -86,10 +86,13 @@ func (c *daemonClient) mergeAndPut(ctx context.Context, path string, patch map[s
 			if !ok {
 				continue
 			}
-			clean = append(clean, map[string]any{
-				"command_id": member["command_id"],
-				"position":   member["position"],
-			})
+			item := map[string]any{"command_id": member["command_id"], "position": member["position"]}
+			for _, field := range []string{"depends_on", "wait_for", "wait_timeout_ms"} {
+				if value, exists := member[field]; exists {
+					item[field] = value
+				}
+			}
+			clean = append(clean, item)
 		}
 		merged["members"] = clean
 	}

@@ -919,12 +919,15 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 			v.CreatedAt = now
 			v.UpdatedAt = now
 			e := validateStack(ctx, s.store, &v)
-			if e == nil {
-				e = s.validateStackRelations(ctx, &v)
+			if e != nil {
+				writeError(w, http.StatusBadRequest, e.Error())
+				return
 			}
-			if e == nil {
-				e = s.store.SaveStack(ctx, &v)
+			if e = s.validateStackRelations(ctx, &v); e != nil {
+				writeError(w, http.StatusBadRequest, e.Error())
+				return
 			}
+			e = s.store.SaveStack(ctx, &v)
 			if e == nil {
 				s.catalog("stack.saved", v)
 			}
@@ -987,12 +990,15 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 		v.UpdatedAt = time.Now().UTC()
 		defaultsStack(&v)
 		e = validateStack(ctx, s.store, &v)
-		if e == nil {
-			e = s.validateStackRelations(ctx, &v)
+		if e != nil {
+			writeError(w, http.StatusBadRequest, e.Error())
+			return
 		}
-		if e == nil {
-			e = s.store.SaveStack(ctx, &v)
+		if e = s.validateStackRelations(ctx, &v); e != nil {
+			writeError(w, http.StatusBadRequest, e.Error())
+			return
 		}
+		e = s.store.SaveStack(ctx, &v)
 		if e == nil {
 			s.catalog("stack.saved", v)
 		}

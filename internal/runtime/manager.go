@@ -980,6 +980,9 @@ func (m *Manager) waitStackMember(ctx context.Context, member domain.StackMember
 		case <-ticker.C:
 			stored, loadErr := m.store.Run(waitCtx, initial.ID)
 			if loadErr != nil {
+				if errors.Is(loadErr, context.DeadlineExceeded) || errors.Is(loadErr, context.Canceled) {
+					return fmt.Errorf("wait_for=%s timed out after %s", member.WaitFor, timeout)
+				}
 				return loadErr
 			}
 			current = stored

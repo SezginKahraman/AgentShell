@@ -1,5 +1,5 @@
 import type { AgentShellApi } from './client'
-import type { Collection, CollectionInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from '../types'
+import type { Collection, CollectionInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
 
 const now = Date.now()
 const iso = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
@@ -37,7 +37,7 @@ const collections: Collection[] = [
   { id: 'collection-web-dev', project_id: 'project-web', name: 'Development', sort_order: 0 },
 ]
 
-const stacks: Stack[] = [{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', running_count: 1, total_count: 2, members: [{ command_id: 'cmd-api', name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', name: 'Notification Worker', status: 'stopped' }] }]
+const stacks: Stack[] = [{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 2, members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] }]
 
 export class DemoApi implements AgentShellApi {
   mode = 'demo' as const
@@ -82,7 +82,8 @@ export class DemoApi implements AgentShellApi {
     commands.push(command); this.emit(); return { action: 'created', command: structuredClone(command) }
   }
   async updateCommand(id: string, input: Partial<SavedCommand>) { const item = commands.find(value => value.id === id); if (!item) throw new Error('Command not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
-  async updateStack(id: string, input: Partial<Stack>) { const item = stacks.find(value => value.id === id); if (!item) throw new Error('Stack not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
+  async updateStack(id: string, input: Partial<Stack>) { const item = stacks.find(value => value.id === id); if (!item) throw new Error('Stack not found'); const members = input.members?.map(member => ({ ...(item.members?.find(current => current.command_id === member.command_id) ?? {}), ...member })); Object.assign(item, input, members ? { members } : {}); this.emit(); return structuredClone(item) }
+  async createStack(input: StackInput) { const item: Stack = { ...input, id: `stack-${Date.now()}`, status: 'stopped', running_count: 0, total_count: input.members.length }; stacks.push(item); this.emit(); return structuredClone(item) }
 	async deleteCommand(id: string) {
 		const item = commands.find(value => value.id === id)
 		if (!item) throw new Error('Launcher not found')

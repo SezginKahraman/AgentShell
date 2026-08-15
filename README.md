@@ -124,8 +124,14 @@ launcher directly references a `.sh` file, its source can be viewed read-only;
 the API only reads regular script files inside the launcher's working directory
 and caps the response at 512 KiB.
 
-When a stack card is opened, stopped members can be selected and started as a
-verified subset while the card-level Start all action remains available.
+When a stack card is opened, stopped members can be selected and started while
+their transitive dependencies are included automatically. The Orchestration
+editor configures stable order, `depends_on`, `spawn`/`ready`/`exit` conditions,
+per-member timeouts, parallel or sequential starts, and failure policy. The same
+model is available through MCP `save_stack`, `update_stack`, and `apply_catalog`.
+Dependency cycles are rejected; downstream members do not start before their
+prerequisites satisfy the configured condition, and Stop uses reverse dependency
+order.
 
 ## Development
 

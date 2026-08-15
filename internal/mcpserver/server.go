@@ -57,7 +57,7 @@ func newServer(normalized normalizedConfig, client *daemonClient, initialized fu
 		Title:   "AgentShell local runtime manager",
 		Version: normalized.version,
 	}, &mcp.ServerOptions{
-		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. wait_timeout_ms only limits how long the MCP call waits; run_timeout_ms limits the command lifetime.",
+		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime.",
 		InitializedHandler: initialized,
 	})
 	registerRuntimeTools(server, client)
@@ -317,7 +317,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, runPath(input.RunID)+"/promote", nil, payload)
 		})
 
-	addTool(server, "apply_catalog", "Apply catalog", toolIntent+"Atomically validate and idempotently apply one project's collections, saved commands, and stacks. Use dry_run first when reviewing inferred project structure. This never starts a Run.", mutating("Apply catalog", false, true), ApplyCatalogInput.validate,
+	addTool(server, "apply_catalog", "Apply catalog", toolIntent+"Atomically validate and idempotently apply one project's collections, saved commands, and stacks. Stack members may reference request-local command keys with depends_on, wait_for, and wait_timeout_ms. Use dry_run first. This never starts a Run.", mutating("Apply catalog", false, true), ApplyCatalogInput.validate,
 		func(ctx context.Context, input ApplyCatalogInput) (map[string]any, error) {
 			payload, err := objectPayload(input)
 			if err != nil {
@@ -393,7 +393,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/stacks", nil, nil)
 		})
 
-	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Preserve its project_id and requested collection_id so it appears beside its launchers. This saves the group only and does not start its members.", mutating("Save stack", false, false), SaveStackInput.validate,
+	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Preserve project_id and collection_id. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
 		func(ctx context.Context, input SaveStackInput) (map[string]any, error) {
 			payload, err := stackPayload(input)
 			if err != nil {
@@ -402,7 +402,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, "/api/stacks", nil, payload)
 		})
 
-	addTool(server, "update_stack", "Update stack", toolIntent+"Update selected fields or membership of a saved AgentShell stack without starting it.", mutating("Update stack", false, false), UpdateStackInput.validate,
+	addTool(server, "update_stack", "Update stack", toolIntent+"Update metadata or replace members and their dependency/readiness configuration without starting the stack. Dependency graphs must be acyclic.", mutating("Update stack", false, false), UpdateStackInput.validate,
 		func(ctx context.Context, input UpdateStackInput) (map[string]any, error) {
 			patch, err := stackPayload(input)
 			if err != nil {
@@ -417,7 +417,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodDelete, stackPath(input.ID), nil, nil)
 		})
 
-	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or only the optional command_ids subset, through AgentShell. Every selected ID must belong to the stack. Preserve already_running and partial-start member results so failures are never hidden.", mutating("Start stack", false, false), StartStackInput.validate,
+	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or the optional command_ids subset, through AgentShell. Selected members automatically include transitive dependencies. Dependents wait for each dependency's configured spawn, ready, or exit condition. Preserve partial results and errors.", mutating("Start stack", false, false), StartStackInput.validate,
 		func(ctx context.Context, input StartStackInput) (map[string]any, error) {
 			payload, err := objectPayload(input, "id")
 			if err != nil {

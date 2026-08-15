@@ -22,6 +22,10 @@ func TestRevision3InputValidation(t *testing.T) {
 		{"external task", (SaveCommandInput{Name: "Task", Command: "true", StopCommand: "true", CWD: "/tmp/p", Kind: "task", LifecycleMode: "external"}).validate(), "kind=service"},
 		{"invalid command collection", (SaveCommandInput{Name: "Task", Command: "true", CWD: "/tmp/p", Kind: "task", CollectionID: "bad id"}).validate(), "collection_id"},
 		{"duplicate stack subset", (StartStackInput{ID: "stack-1", CommandIDs: []string{"command-1", "command-1"}}).validate(), "duplicate"},
+		{"cyclic stack dependencies", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "db", DependsOn: []string{"api"}}, {CommandID: "api", DependsOn: []string{"db"}}}}).validate(), "cycle"},
+		{"unknown stack dependency", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "api", DependsOn: []string{"db"}}}}).validate(), "unknown"},
+		{"invalid stack wait policy", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "api", WaitFor: "healthy"}}}).validate(), "wait_for"},
+		{"mixed stack membership shapes", (SaveStackInput{Name: "App", CommandIDs: []string{"api"}, Members: []StackMemberInput{{CommandID: "api"}}}).validate(), "not both"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -58,6 +62,10 @@ func TestApplyCatalogRejectsCyclesDuplicatesAndUnknownKeys(t *testing.T) {
 		{"unknown stack command", func(in *ApplyCatalogInput) {
 			in.Stacks = []ApplyCatalogStack{{Name: "All", CommandKeys: []string{"missing"}}}
 		}, "unknown"},
+		{"catalog stack dependency cycle", func(in *ApplyCatalogInput) {
+			in.Commands = []ApplyCatalogCommand{{Key: "db", Name: "DB", Command: "true", CWD: "/tmp/workspace", Kind: "task"}, {Key: "api", Name: "API", Command: "true", CWD: "/tmp/workspace", Kind: "task"}}
+			in.Stacks = []ApplyCatalogStack{{Name: "All", Members: []ApplyCatalogStackMember{{CommandKey: "db", DependsOnKeys: []string{"api"}}, {CommandKey: "api", DependsOnKeys: []string{"db"}}}}}
+		}, "cycle"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

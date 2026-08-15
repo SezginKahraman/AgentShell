@@ -280,6 +280,96 @@ func TestStartStackMembersStartsOnlySelectedCommands(t *testing.T) {
 	}
 }
 
+func TestStackDependenciesWaitForExitAndSelectionIncludesDependencies(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	ctx := context.Background()
+	root := t.TempDir()
+	dbMarker := filepath.Join(root, "db-ready")
+	marker := filepath.Join(root, "api-ready")
+	uiMarker := filepath.Join(root, "ui-started")
+	now := time.Now().UTC()
+	db := domain.CommandDefinition{ID: "dependency-db", Name: "Database migration", Command: "sleep 0.1; printf ready > " + strconv.Quote(dbMarker), Cwd: root, Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	api := domain.CommandDefinition{ID: "dependency-api", Name: "API build", Command: "test -f " + strconv.Quote(dbMarker) + " && printf ready > " + strconv.Quote(marker), Cwd: root, Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	ui := domain.CommandDefinition{ID: "dependency-ui", Name: "UI", Command: "test -f " + strconv.Quote(marker) + " && printf started > " + strconv.Quote(uiMarker), Cwd: root, Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	for _, command := range []*domain.CommandDefinition{&db, &api, &ui} {
+		if err := s.SaveCommand(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stack := domain.Stack{ID: "dependency-stack", Name: "Application", StartStrategy: "parallel", FailurePolicy: "stop", Members: []domain.StackMember{
+		{CommandID: db.ID, Position: 0, WaitFor: "exit", WaitTimeoutMS: 3000},
+		{CommandID: api.ID, Position: 1, DependsOn: []string{db.ID}, WaitFor: "exit", WaitTimeoutMS: 3000},
+		{CommandID: ui.ID, Position: 2, DependsOn: []string{api.ID}, WaitFor: "exit", WaitTimeoutMS: 3000},
+	}, CreatedAt: now, UpdatedAt: now}
+	if err := s.SaveStack(ctx, &stack); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := m.StartStackMembers(ctx, stack.ID, []string{ui.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("runs=%d, want dependency closure of 3: %+v", len(runs), runs)
+	}
+	if _, err = os.Stat(uiMarker); err != nil {
+		t.Fatalf("UI did not start after ready dependency chain: %v", err)
+	}
+}
+
+func TestStackReadyTimeoutStopsDependentScheduling(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	ctx := context.Background()
+	root := t.TempDir()
+	marker := filepath.Join(root, "must-not-start")
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+	now := time.Now().UTC()
+	db := domain.CommandDefinition{ID: "timeout-db", Name: "Database", Command: "sleep 30", Cwd: root, Kind: "service", ConcurrencyPolicy: "forbid", ExpectedPorts: []domain.ExpectedPort{{Port: port}}, CreatedAt: now, UpdatedAt: now}
+	api := domain.CommandDefinition{ID: "timeout-api", Name: "API", Command: "touch " + strconv.Quote(marker), Cwd: root, Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	for _, command := range []*domain.CommandDefinition{&db, &api} {
+		if err = s.SaveCommand(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stack := domain.Stack{ID: "timeout-stack", Name: "Timeout", StartStrategy: "parallel", FailurePolicy: "stop", Members: []domain.StackMember{
+		{CommandID: db.ID, Position: 0, WaitFor: "ready", WaitTimeoutMS: 150},
+		{CommandID: api.ID, Position: 1, DependsOn: []string{db.ID}, WaitFor: "spawn", WaitTimeoutMS: 1000},
+	}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveStack(ctx, &stack); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := m.StartStack(ctx, stack.ID)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("runs=%+v err=%v, want readiness timeout", runs, err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs=%d, dependent must not start", len(runs))
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("dependent command unexpectedly ran: %v", statErr)
+	}
+	_, _ = m.StopCommand(ctx, db.ID)
+}
+
+func TestStackMemberReadyConditionSupportsManagedAndExternalRuns(t *testing.T) {
+	managed := &domain.Run{ID: "managed", Status: domain.RunRunning, Readiness: domain.ReadinessReady}
+	if done, err := stackMemberCondition(managed, "ready"); !done || err != nil {
+		t.Fatalf("managed ready: done=%v err=%v", done, err)
+	}
+	external := &domain.Run{ID: "external", Status: domain.RunCompleted, LifecycleAction: "start", PortVerifications: []domain.PortVerification{{Port: 5432, Status: "verified"}, {Port: 6379, Status: "preexisting"}}}
+	if done, err := stackMemberCondition(external, "ready"); !done || err != nil {
+		t.Fatalf("external ready: done=%v err=%v", done, err)
+	}
+	external.PortVerifications[0].Status = "unavailable"
+	if done, err := stackMemberCondition(external, "ready"); done || err == nil {
+		t.Fatalf("external unavailable: done=%v err=%v", done, err)
+	}
+}
+
 func TestCloseTerminatesManagedProcessGroups(t *testing.T) {
 	dir := t.TempDir()
 	s, err := store.Open(filepath.Join(dir, "test.db"))

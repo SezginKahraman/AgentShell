@@ -294,14 +294,22 @@ type ApplyCatalogCommand struct {
 }
 
 type ApplyCatalogStack struct {
-	Key           string   `json:"key,omitempty" jsonschema:"Request-local stack key"`
-	Name          string   `json:"name" jsonschema:"Stack name"`
-	Description   string   `json:"description,omitempty" jsonschema:"Stack purpose"`
-	CollectionKey string   `json:"collection_key,omitempty" jsonschema:"Request-local owning collection key"`
-	CommandKeys   []string `json:"command_keys" jsonschema:"Ordered request-local command keys"`
-	StartStrategy string   `json:"start_strategy,omitempty" jsonschema:"parallel or sequential"`
-	FailurePolicy string   `json:"failure_policy,omitempty" jsonschema:"continue or stop"`
-	Favorite      bool     `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
+	Key           string                    `json:"key,omitempty" jsonschema:"Request-local stack key"`
+	Name          string                    `json:"name" jsonschema:"Stack name"`
+	Description   string                    `json:"description,omitempty" jsonschema:"Stack purpose"`
+	CollectionKey string                    `json:"collection_key,omitempty" jsonschema:"Request-local owning collection key"`
+	CommandKeys   []string                  `json:"command_keys,omitempty" jsonschema:"Backward-compatible ordered request-local command keys"`
+	Members       []ApplyCatalogStackMember `json:"members,omitempty" jsonschema:"Members referencing command keys with dependency orchestration"`
+	StartStrategy string                    `json:"start_strategy,omitempty" jsonschema:"parallel or sequential"`
+	FailurePolicy string                    `json:"failure_policy,omitempty" jsonschema:"continue or stop"`
+	Favorite      bool                      `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
+}
+
+type ApplyCatalogStackMember struct {
+	CommandKey    string   `json:"command_key" jsonschema:"Request-local command key"`
+	DependsOnKeys []string `json:"depends_on,omitempty" jsonschema:"Stack command keys that must satisfy their wait conditions first"`
+	WaitFor       string   `json:"wait_for,omitempty" jsonschema:"spawn, ready, or exit"`
+	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty" jsonschema:"Wait timeout; defaults to 30000 and must be 100..600000"`
 }
 
 type ApplyCatalogInput struct {
@@ -394,16 +402,23 @@ func (in ApplyCatalogInput) validate() error {
 				return fmt.Errorf("%s.collection_key references unknown key %q", prefix, stack.CollectionKey)
 			}
 		}
-		if len(stack.CommandKeys) == 0 {
-			return fmt.Errorf("%s.command_keys must contain at least one key", prefix)
+		if len(stack.CommandKeys) == 0 && len(stack.Members) == 0 {
+			return fmt.Errorf("%s.command_keys or members must contain at least one key", prefix)
 		}
-		if err := uniqueNonEmpty(prefix+".command_keys", stack.CommandKeys); err != nil {
-			return err
+		if len(stack.CommandKeys) > 0 && len(stack.Members) > 0 {
+			return fmt.Errorf("%s must use command_keys or members, not both", prefix)
 		}
-		for _, key := range stack.CommandKeys {
-			if _, ok := commandKeys[key]; !ok {
-				return fmt.Errorf("%s.command_keys references unknown key %q", prefix, key)
+		if len(stack.CommandKeys) > 0 {
+			if err := uniqueNonEmpty(prefix+".command_keys", stack.CommandKeys); err != nil {
+				return err
 			}
+			for _, key := range stack.CommandKeys {
+				if _, ok := commandKeys[key]; !ok {
+					return fmt.Errorf("%s.command_keys references unknown key %q", prefix, key)
+				}
+			}
+		} else if err := validateApplyStackMembers(prefix+".members", stack.Members, commandKeys); err != nil {
+			return err
 		}
 		if err := oneOf(prefix+".start_strategy", stack.StartStrategy, "", "parallel", "sequential"); err != nil {
 			return err
@@ -413,6 +428,72 @@ func (in ApplyCatalogInput) validate() error {
 		}
 	}
 	return validateCollectionCycles(in.Collections)
+}
+
+func validateApplyStackMembers(field string, members []ApplyCatalogStackMember, commandKeys map[string]struct{}) error {
+	stackKeys := make(map[string]bool, len(members))
+	for i, member := range members {
+		prefix := fmt.Sprintf("%s[%d]", field, i)
+		if err := requestKey(prefix+".command_key", member.CommandKey); err != nil {
+			return err
+		}
+		if _, ok := commandKeys[member.CommandKey]; !ok {
+			return fmt.Errorf("%s.command_key references unknown key %q", prefix, member.CommandKey)
+		}
+		if stackKeys[member.CommandKey] {
+			return fmt.Errorf("%s contains duplicate command_key %q", field, member.CommandKey)
+		}
+		stackKeys[member.CommandKey] = true
+		if err := oneOf(prefix+".wait_for", member.WaitFor, "", "spawn", "ready", "exit"); err != nil {
+			return err
+		}
+		if member.WaitTimeoutMS != 0 && (member.WaitTimeoutMS < 100 || member.WaitTimeoutMS > 600000) {
+			return fmt.Errorf("%s.wait_timeout_ms must be between 100 and 600000", prefix)
+		}
+	}
+	dependencies := make(map[string][]string, len(members))
+	for i, member := range members {
+		prefix := fmt.Sprintf("%s[%d].depends_on", field, i)
+		seen := map[string]bool{}
+		for _, dependency := range member.DependsOnKeys {
+			if !stackKeys[dependency] {
+				return fmt.Errorf("%s references unknown stack command_key %q", prefix, dependency)
+			}
+			if dependency == member.CommandKey {
+				return fmt.Errorf("%s cannot reference its own command", prefix)
+			}
+			if seen[dependency] {
+				return fmt.Errorf("%s contains duplicate command_key %q", prefix, dependency)
+			}
+			seen[dependency] = true
+		}
+		dependencies[member.CommandKey] = member.DependsOnKeys
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(key string) error {
+		if visiting[key] {
+			return fmt.Errorf("%s contains a dependency cycle at %q", field, key)
+		}
+		if visited[key] {
+			return nil
+		}
+		visiting[key] = true
+		for _, dependency := range dependencies[key] {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		delete(visiting, key)
+		visited[key] = true
+		return nil
+	}
+	for key := range dependencies {
+		if err := visit(key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateApplyCommand(prefix string, in ApplyCatalogCommand, collectionKeys map[string]struct{}) error {
@@ -698,23 +779,35 @@ func (in RestartCommandInput) validate() error {
 	return nonNegative("wait_timeout_ms", in.WaitTimeoutMS)
 }
 
+type StackMemberInput struct {
+	CommandID     string   `json:"command_id" jsonschema:"Saved command identifier"`
+	Position      int      `json:"position,omitempty" jsonschema:"Stable zero-based display and sequential-start position"`
+	DependsOn     []string `json:"depends_on,omitempty" jsonschema:"Stack command identifiers that must satisfy their wait condition before this member starts"`
+	WaitFor       string   `json:"wait_for,omitempty" jsonschema:"Condition this member must satisfy before dependents start: spawn, ready, or exit"`
+	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty" jsonschema:"Condition timeout in milliseconds; defaults to 30000 and must be 100..600000"`
+}
+
 type SaveStackInput struct {
-	Name          string   `json:"name" jsonschema:"Human-readable stack name"`
-	Description   string   `json:"description,omitempty" jsonschema:"Purpose of this collection of saved commands"`
-	ProjectID     string   `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
-	CollectionID  string   `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
-	CommandIDs    []string `json:"command_ids" jsonschema:"Ordered saved command identifiers included in the stack"`
-	StartStrategy string   `json:"start_strategy,omitempty" jsonschema:"Start strategy: parallel or sequential"`
-	FailurePolicy string   `json:"failure_policy,omitempty" jsonschema:"Behavior after a member fails: continue or stop"`
-	Favorite      bool     `json:"favorite,omitempty" jsonschema:"Show this stack prominently in the dashboard"`
+	Name          string             `json:"name" jsonschema:"Human-readable stack name"`
+	Description   string             `json:"description,omitempty" jsonschema:"Purpose of this collection of saved commands"`
+	ProjectID     string             `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
+	CollectionID  string             `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
+	CommandIDs    []string           `json:"command_ids,omitempty" jsonschema:"Backward-compatible ordered command identifiers; use members for dependency orchestration"`
+	Members       []StackMemberInput `json:"members,omitempty" jsonschema:"Ordered members with dependency, readiness, and timeout configuration"`
+	StartStrategy string             `json:"start_strategy,omitempty" jsonschema:"Start strategy: parallel starts each unblocked wave together; sequential starts one at a time"`
+	FailurePolicy string             `json:"failure_policy,omitempty" jsonschema:"Behavior after a member fails its start or wait condition: continue independent branches or stop scheduling"`
+	Favorite      bool               `json:"favorite,omitempty" jsonschema:"Show this stack prominently in the dashboard"`
 }
 
 func (in SaveStackInput) validate() error {
 	if err := required("name", in.Name); err != nil {
 		return err
 	}
-	if len(in.CommandIDs) == 0 {
-		return fmt.Errorf("command_ids must contain at least one command")
+	if len(in.CommandIDs) == 0 && len(in.Members) == 0 {
+		return fmt.Errorf("command_ids or members must contain at least one command")
+	}
+	if len(in.CommandIDs) > 0 && len(in.Members) > 0 {
+		return fmt.Errorf("provide command_ids or members, not both")
 	}
 	for field, value := range map[string]string{"project_id": in.ProjectID, "collection_id": in.CollectionID} {
 		if value != "" {
@@ -723,7 +816,11 @@ func (in SaveStackInput) validate() error {
 			}
 		}
 	}
-	if err := uniqueNonEmpty("command_ids", in.CommandIDs); err != nil {
+	if len(in.CommandIDs) > 0 {
+		if err := uniqueNonEmpty("command_ids", in.CommandIDs); err != nil {
+			return err
+		}
+	} else if err := validateStackMembers("members", in.Members); err != nil {
 		return err
 	}
 	if err := oneOf("start_strategy", in.StartStrategy, "", "parallel", "sequential"); err != nil {
@@ -733,15 +830,16 @@ func (in SaveStackInput) validate() error {
 }
 
 type UpdateStackInput struct {
-	ID            string    `json:"id" jsonschema:"Stack identifier"`
-	Name          *string   `json:"name,omitempty" jsonschema:"New stack name"`
-	Description   *string   `json:"description,omitempty" jsonschema:"New description"`
-	ProjectID     *string   `json:"project_id,omitempty" jsonschema:"New owning project identifier; empty makes the stack global"`
-	CollectionID  *string   `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the stack to the project root"`
-	CommandIDs    *[]string `json:"command_ids,omitempty" jsonschema:"Replacement ordered command identifiers"`
-	StartStrategy *string   `json:"start_strategy,omitempty" jsonschema:"New start strategy: parallel or sequential"`
-	FailurePolicy *string   `json:"failure_policy,omitempty" jsonschema:"New failure policy: continue or stop"`
-	Favorite      *bool     `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
+	ID            string              `json:"id" jsonschema:"Stack identifier"`
+	Name          *string             `json:"name,omitempty" jsonschema:"New stack name"`
+	Description   *string             `json:"description,omitempty" jsonschema:"New description"`
+	ProjectID     *string             `json:"project_id,omitempty" jsonschema:"New owning project identifier; empty makes the stack global"`
+	CollectionID  *string             `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the stack to the project root"`
+	CommandIDs    *[]string           `json:"command_ids,omitempty" jsonschema:"Backward-compatible replacement ordered command identifiers"`
+	Members       *[]StackMemberInput `json:"members,omitempty" jsonschema:"Replacement members with dependency orchestration settings"`
+	StartStrategy *string             `json:"start_strategy,omitempty" jsonschema:"New start strategy: parallel or sequential"`
+	FailurePolicy *string             `json:"failure_policy,omitempty" jsonschema:"New failure policy: continue or stop"`
+	Favorite      *bool               `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
 }
 
 func (in UpdateStackInput) validate() error {
@@ -760,11 +858,21 @@ func (in UpdateStackInput) validate() error {
 			}
 		}
 	}
+	if in.CommandIDs != nil && in.Members != nil {
+		return fmt.Errorf("provide command_ids or members, not both")
+	}
 	if in.CommandIDs != nil {
 		if len(*in.CommandIDs) == 0 {
 			return fmt.Errorf("command_ids must contain at least one command")
 		}
 		if err := uniqueNonEmpty("command_ids", *in.CommandIDs); err != nil {
+			return err
+		}
+	} else if in.Members != nil {
+		if len(*in.Members) == 0 {
+			return fmt.Errorf("members must contain at least one command")
+		}
+		if err := validateStackMembers("members", *in.Members); err != nil {
 			return err
 		}
 	}
@@ -775,6 +883,72 @@ func (in UpdateStackInput) validate() error {
 	}
 	if in.FailurePolicy != nil {
 		if err := oneOf("failure_policy", *in.FailurePolicy, "continue", "stop"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateStackMembers(field string, members []StackMemberInput) error {
+	ids := make(map[string]bool, len(members))
+	for i, member := range members {
+		prefix := fmt.Sprintf("%s[%d]", field, i)
+		if err := identifier(prefix+".command_id", member.CommandID); err != nil {
+			return err
+		}
+		if ids[member.CommandID] {
+			return fmt.Errorf("%s contains duplicate command_id %q", field, member.CommandID)
+		}
+		ids[member.CommandID] = true
+		if member.Position < 0 {
+			return fmt.Errorf("%s.position cannot be negative", prefix)
+		}
+		if err := oneOf(prefix+".wait_for", member.WaitFor, "", "spawn", "ready", "exit"); err != nil {
+			return err
+		}
+		if member.WaitTimeoutMS != 0 && (member.WaitTimeoutMS < 100 || member.WaitTimeoutMS > 600000) {
+			return fmt.Errorf("%s.wait_timeout_ms must be between 100 and 600000", prefix)
+		}
+	}
+	dependencies := make(map[string][]string, len(members))
+	for i, member := range members {
+		prefix := fmt.Sprintf("%s[%d].depends_on", field, i)
+		seen := map[string]bool{}
+		for _, dependency := range member.DependsOn {
+			if !ids[dependency] {
+				return fmt.Errorf("%s references unknown command_id %q", prefix, dependency)
+			}
+			if dependency == member.CommandID {
+				return fmt.Errorf("%s cannot reference its own command", prefix)
+			}
+			if seen[dependency] {
+				return fmt.Errorf("%s contains duplicate command_id %q", prefix, dependency)
+			}
+			seen[dependency] = true
+		}
+		dependencies[member.CommandID] = member.DependsOn
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(id string) error {
+		if visiting[id] {
+			return fmt.Errorf("%s contains a dependency cycle at %q", field, id)
+		}
+		if visited[id] {
+			return nil
+		}
+		visiting[id] = true
+		for _, dependency := range dependencies[id] {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		delete(visiting, id)
+		visited[id] = true
+		return nil
+	}
+	for id := range dependencies {
+		if err := visit(id); err != nil {
 			return err
 		}
 	}

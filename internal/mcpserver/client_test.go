@@ -214,6 +214,22 @@ func TestStackPayloadUsesOrderedMembers(t *testing.T) {
 	}
 }
 
+func TestStackPayloadPreservesDependencyOrchestration(t *testing.T) {
+	payload, err := stackPayload(SaveStackInput{Name: "Application", Members: []StackMemberInput{
+		{CommandID: "db", Position: 0, WaitFor: "ready", WaitTimeoutMS: 45000},
+		{CommandID: "api", Position: 1, DependsOn: []string{"db"}, WaitFor: "ready"},
+		{CommandID: "ui", Position: 2, DependsOn: []string{"api"}, WaitFor: "spawn"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := payload["members"].([]any)
+	api := members[1].(map[string]any)
+	if api["wait_for"] != "ready" || api["depends_on"].([]any)[0] != "db" {
+		t.Fatalf("dependency member = %#v", api)
+	}
+}
+
 func TestDecodeObjectRejectsMultipleValues(t *testing.T) {
 	if _, err := decodeObject([]byte(`{} {}`)); err == nil || !strings.Contains(err.Error(), "multiple") {
 		t.Fatalf("error = %v", err)

@@ -221,3 +221,34 @@ func TestApplyCatalogDryRunIdempotencyAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestApplyCatalogResolvesStackDependencyKeys(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "dependency-apply.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	root := t.TempDir()
+	bundle := CatalogBundle{
+		Project: domain.Project{Name: "Workspace", RootPath: root},
+		Commands: []CatalogCommand{
+			{Key: "db", Definition: domain.CommandDefinition{Name: "DB", Command: "true", Cwd: root, Kind: "task", ConcurrencyPolicy: "allow"}},
+			{Key: "api", Definition: domain.CommandDefinition{Name: "API", Command: "true", Cwd: root, Kind: "task", ConcurrencyPolicy: "allow"}},
+		},
+		Stacks: []CatalogStack{{Key: "app", Members: []CatalogStackMember{
+			{CommandKey: "db", WaitFor: "exit", WaitTimeoutMS: 12000},
+			{CommandKey: "api", DependsOnKeys: []string{"db"}, WaitFor: "ready", WaitTimeoutMS: 45000},
+		}, Definition: domain.Stack{Name: "Application", StartStrategy: "parallel", FailurePolicy: "stop"}}},
+	}
+	if _, err = s.ApplyCatalog(ctx, bundle, false); err != nil {
+		t.Fatal(err)
+	}
+	stacks, err := s.Stacks(ctx)
+	if err != nil || len(stacks) != 1 || len(stacks[0].Members) != 2 {
+		t.Fatalf("stacks=%+v err=%v", stacks, err)
+	}
+	if stacks[0].Members[1].DependsOn[0] != stacks[0].Members[0].CommandID || stacks[0].Members[1].WaitFor != "ready" || stacks[0].Members[1].WaitTimeoutMS != 45000 {
+		t.Fatalf("resolved members=%+v", stacks[0].Members)
+	}
+}

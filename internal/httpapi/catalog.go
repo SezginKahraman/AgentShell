@@ -49,14 +49,21 @@ type catalogCommandInput struct {
 	RestartCommand    string                `json:"restart_command,omitempty"`
 }
 type catalogStackInput struct {
-	Key           string   `json:"key,omitempty"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description,omitempty"`
-	CollectionKey string   `json:"collection_key,omitempty"`
-	CommandKeys   []string `json:"command_keys"`
-	StartStrategy string   `json:"start_strategy,omitempty"`
-	FailurePolicy string   `json:"failure_policy,omitempty"`
-	Favorite      bool     `json:"favorite,omitempty"`
+	Key           string                    `json:"key,omitempty"`
+	Name          string                    `json:"name"`
+	Description   string                    `json:"description,omitempty"`
+	CollectionKey string                    `json:"collection_key,omitempty"`
+	CommandKeys   []string                  `json:"command_keys,omitempty"`
+	Members       []catalogStackMemberInput `json:"members,omitempty"`
+	StartStrategy string                    `json:"start_strategy,omitempty"`
+	FailurePolicy string                    `json:"failure_policy,omitempty"`
+	Favorite      bool                      `json:"favorite,omitempty"`
+}
+type catalogStackMemberInput struct {
+	CommandKey    string   `json:"command_key"`
+	DependsOnKeys []string `json:"depends_on,omitempty"`
+	WaitFor       string   `json:"wait_for,omitempty"`
+	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty"`
 }
 
 func (s *Server) catalogAPI(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -169,15 +176,74 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 		if v.CollectionKey != "" && !collectionKeys[v.CollectionKey] {
 			return out, errors.New("unknown stack collection_key: " + v.CollectionKey)
 		}
-		if len(v.CommandKeys) == 0 {
-			return out, errors.New("stack command_keys must not be empty")
+		if len(v.CommandKeys) == 0 && len(v.Members) == 0 {
+			return out, errors.New("stack command_keys or members must not be empty")
+		}
+		if len(v.CommandKeys) > 0 && len(v.Members) > 0 {
+			return out, errors.New("stack must use command_keys or members, not both")
 		}
 		seen := map[string]bool{}
-		for _, key := range v.CommandKeys {
+		memberKeys := v.CommandKeys
+		if len(v.Members) > 0 {
+			memberKeys = make([]string, len(v.Members))
+			for i := range v.Members {
+				memberKeys[i] = v.Members[i].CommandKey
+			}
+		}
+		for _, key := range memberKeys {
 			if strings.TrimSpace(key) == "" || seen[key] {
-				return out, errors.New("stack command_keys must be unique and non-empty")
+				return out, errors.New("stack member command keys must be unique and non-empty")
 			}
 			seen[key] = true
+		}
+		catalogMembers := make([]store.CatalogStackMember, 0, len(v.Members))
+		dependencies := map[string][]string{}
+		for _, member := range v.Members {
+			if member.WaitFor != "" && member.WaitFor != "spawn" && member.WaitFor != "ready" && member.WaitFor != "exit" {
+				return out, errors.New("invalid stack member wait_for")
+			}
+			if member.WaitTimeoutMS != 0 && (member.WaitTimeoutMS < 100 || member.WaitTimeoutMS > 600000) {
+				return out, errors.New("stack member wait_timeout_ms must be between 100 and 600000")
+			}
+			depSeen := map[string]bool{}
+			for _, dependency := range member.DependsOnKeys {
+				if !seen[dependency] {
+					return out, errors.New("unknown stack dependency command_key: " + dependency)
+				}
+				if dependency == member.CommandKey {
+					return out, errors.New("stack member cannot depend on itself")
+				}
+				if depSeen[dependency] {
+					return out, errors.New("duplicate stack dependency command_key: " + dependency)
+				}
+				depSeen[dependency] = true
+			}
+			dependencies[member.CommandKey] = member.DependsOnKeys
+			catalogMembers = append(catalogMembers, store.CatalogStackMember{CommandKey: member.CommandKey, DependsOnKeys: member.DependsOnKeys, WaitFor: member.WaitFor, WaitTimeoutMS: member.WaitTimeoutMS})
+		}
+		visiting, visited := map[string]bool{}, map[string]bool{}
+		var visit func(string) error
+		visit = func(key string) error {
+			if visiting[key] {
+				return errors.New("stack dependency cycle includes command_key: " + key)
+			}
+			if visited[key] {
+				return nil
+			}
+			visiting[key] = true
+			for _, dependency := range dependencies[key] {
+				if err := visit(dependency); err != nil {
+					return err
+				}
+			}
+			delete(visiting, key)
+			visited[key] = true
+			return nil
+		}
+		for key := range dependencies {
+			if err := visit(key); err != nil {
+				return out, err
+			}
 		}
 		st := domain.Stack{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), StartStrategy: strings.TrimSpace(v.StartStrategy), FailurePolicy: strings.TrimSpace(v.FailurePolicy), Favorite: v.Favorite}
 		defaultsStack(&st)
@@ -187,7 +253,7 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 		if st.FailurePolicy != "continue" && st.FailurePolicy != "stop" {
 			return out, errors.New("invalid stack failure_policy")
 		}
-		out.Stacks = append(out.Stacks, store.CatalogStack{Key: v.Key, CollectionKey: v.CollectionKey, CommandKeys: v.CommandKeys, Definition: st})
+		out.Stacks = append(out.Stacks, store.CatalogStack{Key: v.Key, CollectionKey: v.CollectionKey, CommandKeys: v.CommandKeys, Members: catalogMembers, Definition: st})
 	}
 	return out, nil
 }

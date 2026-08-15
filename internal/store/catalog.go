@@ -29,7 +29,14 @@ type CatalogStack struct {
 	Key           string
 	CollectionKey string
 	CommandKeys   []string
+	Members       []CatalogStackMember
 	Definition    domain.Stack
+}
+type CatalogStackMember struct {
+	CommandKey    string
+	DependsOnKeys []string
+	WaitFor       string
+	WaitTimeoutMS int
 }
 type CatalogBundle struct {
 	Project     domain.Project
@@ -143,9 +150,17 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		appendResult(&result, action, CatalogResultItem{Type: "command", Key: item.Key, ID: c.ID})
 	}
 	for _, item := range b.Stacks {
-		members := make([]domain.StackMember, 0, len(item.CommandKeys))
+		specs := item.Members
+		if len(specs) == 0 {
+			specs = make([]CatalogStackMember, len(item.CommandKeys))
+			for i, key := range item.CommandKeys {
+				specs[i] = CatalogStackMember{CommandKey: key, WaitFor: "spawn", WaitTimeoutMS: 30000}
+			}
+		}
+		resolved := make(map[string]string, len(specs))
 		missing := ""
-		for i, key := range item.CommandKeys {
+		for _, spec := range specs {
+			key := spec.CommandKey
 			id := commandIDs[key]
 			if id == "" {
 				existing, e := findCommandByStableTx(ctx, tx, project.ID, key)
@@ -157,10 +172,37 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 				missing = key
 				break
 			}
-			members = append(members, domain.StackMember{CommandID: id, Position: i})
+			resolved[key] = id
 		}
 		if missing != "" {
 			result.Conflicts = append(result.Conflicts, CatalogResultItem{Type: "stack", Key: item.Key, Message: "unknown command_key: " + missing})
+			return result, &CatalogConflictError{Result: result}
+		}
+		members := make([]domain.StackMember, 0, len(specs))
+		for i, spec := range specs {
+			dependencies := make([]string, 0, len(spec.DependsOnKeys))
+			for _, key := range spec.DependsOnKeys {
+				if resolved[key] == "" {
+					missing = key
+					break
+				}
+				dependencies = append(dependencies, resolved[key])
+			}
+			if missing != "" {
+				break
+			}
+			waitFor := spec.WaitFor
+			if waitFor == "" {
+				waitFor = "spawn"
+			}
+			timeout := spec.WaitTimeoutMS
+			if timeout == 0 {
+				timeout = 30000
+			}
+			members = append(members, domain.StackMember{CommandID: resolved[spec.CommandKey], Position: i, DependsOn: dependencies, WaitFor: waitFor, WaitTimeoutMS: timeout})
+		}
+		if missing != "" {
+			result.Conflicts = append(result.Conflicts, CatalogResultItem{Type: "stack", Key: item.Key, Message: "unknown stack dependency command_key: " + missing})
 			return result, &CatalogConflictError{Result: result}
 		}
 		v := item.Definition

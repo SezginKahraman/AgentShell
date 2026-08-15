@@ -168,6 +168,46 @@ func TestStackStartAcceptsValidatedMemberSubset(t *testing.T) {
 	}
 }
 
+func TestStackDependenciesRoundTripAndSelectedStartIncludesClosure(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	root := t.TempDir()
+	create := func(name, command string) string {
+		var created map[string]any
+		if status := request(t, client, http.MethodPost, srv.URL+"/api/commands", map[string]any{"name": name, "command": command, "cwd": root, "kind": "task", "concurrency_policy": "allow"}, &created); status != http.StatusCreated {
+			t.Fatalf("create %s status=%d body=%v", name, status, created)
+		}
+		return created["id"].(string)
+	}
+	dbID := create("Database setup", "sleep 0.05")
+	apiID := create("API setup", "printf api")
+	members := []map[string]any{
+		{"command_id": dbID, "position": 0, "wait_for": "exit", "wait_timeout_ms": 2000},
+		{"command_id": apiID, "position": 1, "depends_on": []string{dbID}, "wait_for": "exit", "wait_timeout_ms": 2000},
+	}
+	var stack map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks", map[string]any{"name": "Ordered app", "members": members, "start_strategy": "parallel", "failure_policy": "stop"}, &stack); status != http.StatusCreated {
+		t.Fatalf("create stack status=%d body=%v", status, stack)
+	}
+	views := stack["members"].([]any)
+	apiMember := views[1].(map[string]any)
+	if apiMember["wait_for"] != "exit" || apiMember["depends_on"].([]any)[0] != dbID {
+		t.Fatalf("dependency view=%v", apiMember)
+	}
+	var runs []domain.Run
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+stack["id"].(string)+"/start", map[string]any{"command_ids": []string{apiID}}, &runs); status != http.StatusCreated || len(runs) != 2 {
+		t.Fatalf("dependency closure status=%d runs=%+v", status, runs)
+	}
+	var failure map[string]any
+	cyclic := []map[string]any{
+		{"command_id": dbID, "position": 0, "depends_on": []string{apiID}, "wait_for": "spawn", "wait_timeout_ms": 1000},
+		{"command_id": apiID, "position": 1, "depends_on": []string{dbID}, "wait_for": "spawn", "wait_timeout_ms": 1000},
+	}
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/stacks/"+stack["id"].(string), map[string]any{"members": cyclic}, &failure); status != http.StatusBadRequest {
+		t.Fatalf("cyclic update status=%d body=%v", status, failure)
+	}
+}
+
 func TestSummaryAndOriginGuard(t *testing.T) {
 	srv, _ := testServer(t)
 	var summary map[string]int

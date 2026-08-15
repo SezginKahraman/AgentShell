@@ -68,8 +68,9 @@ export interface SavedCommand {
 
 export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
-export interface StackMember { command_id: string; name?: string; command?: SavedCommand; status?: RunStatus; active_run_id?: string; can_stop?: boolean }
+export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; status?: RunStatus; active_run_id?: string; can_stop?: boolean }
 export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
+export interface StackInput { name: string; description?: string; project_id?: string; collection_id?: string; members: StackMember[]; favorite?: boolean; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
 export interface LogResponse { run_id: string; stream: string; content: string }
 
 export interface Project { id: string; name: string; root_path: string; description?: string; created_at?: string; updated_at?: string }
