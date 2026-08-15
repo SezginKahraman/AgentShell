@@ -78,6 +78,36 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 	}
 }
 
+func TestDeleteCommandRejectsStackMember(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "delete.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	command := domain.CommandDefinition{ID: "command-delete", Name: "API", Command: "true", Cwd: t.TempDir(), Kind: "task", ConcurrencyPolicy: "forbid", CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveCommand(ctx, &command); err != nil {
+		t.Fatal(err)
+	}
+	stack := domain.Stack{ID: "stack-delete", Name: "Development", StartStrategy: "parallel", FailurePolicy: "continue", Members: []domain.StackMember{{CommandID: command.ID}}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveStack(ctx, &stack); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteCommand(ctx, command.ID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("delete referenced command err=%v", err)
+	}
+	if err = s.DeleteStack(ctx, stack.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DeleteCommand(ctx, command.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Command(ctx, command.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted command lookup err=%v", err)
+	}
+}
+
 func TestStoreCatalogAndRunRoundTrip(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "state", "test.db"))
 	if err != nil {
@@ -102,7 +132,7 @@ func TestStoreCatalogAndRunRoundTrip(t *testing.T) {
 	if err = s.SaveStack(ctx, &stack); err != nil {
 		t.Fatal(err)
 	}
-	r := domain.Run{ID: "r1", ProjectID: p.ID, Label: "serve", Command: c.Command, Cwd: c.Cwd, Shell: "/bin/sh", Kind: "service", Source: "test", Status: domain.RunRunning, Readiness: domain.ReadinessWaiting, CreatedAt: now, ExpectedPorts: c.ExpectedPorts, Env: map[string]string{"HELLO": "world"}, CommandDefinitionID: c.ID}
+	r := domain.Run{ID: "r1", ProjectID: p.ID, Label: "serve", Command: c.Command, Cwd: c.Cwd, Shell: "/bin/sh", Kind: "service", Source: "test", Status: domain.RunRunning, Readiness: domain.ReadinessWaiting, CreatedAt: now, ExpectedPorts: c.ExpectedPorts, PortVerifications: []domain.PortVerification{{Port: 8080, Before: "closed", After: "listening", Status: "verified", Confidence: "high", CheckedAt: now}}, Env: map[string]string{"HELLO": "world"}, CommandDefinitionID: c.ID}
 	if err = s.SaveRun(ctx, &r); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +140,7 @@ func TestStoreCatalogAndRunRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.CommandDefinitionID != c.ID || got.ProjectID != p.ID || got.Env["HELLO"] != "world" || len(got.ExpectedPorts) != 1 {
+	if got.CommandDefinitionID != c.ID || got.ProjectID != p.ID || got.Env["HELLO"] != "world" || len(got.ExpectedPorts) != 1 || len(got.PortVerifications) != 1 || got.PortVerifications[0].Status != "verified" {
 		t.Fatalf("unexpected run: %#v", got)
 	}
 	active, err := s.ActiveRunsForCommand(ctx, c.ID)

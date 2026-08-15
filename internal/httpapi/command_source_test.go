@@ -50,3 +50,23 @@ func TestExternalCommandViewUsesLifecycleHistoryWithoutClaimingVerifiedHealth(t 
 		t.Fatalf("stopped view=%+v", v)
 	}
 }
+
+func TestExternalCommandViewAndPortsExposeOnlyTransitionVerifiedListeners(t *testing.T) {
+	now := time.Now().UTC()
+	c := domain.CommandDefinition{ID: "external", Name: "Infra", LifecycleMode: "external", Kind: "service"}
+	verified := domain.Run{ID: "verified-start", CommandDefinitionID: c.ID, LifecycleAction: "start", Status: domain.RunCompleted, CreatedAt: now, PortVerifications: []domain.PortVerification{{Port: 3307, Name: "MySQL", Service: "mysql", Before: "closed", After: "listening", Status: "verified", Confidence: "high", CheckedAt: now}}}
+	v := makeCommandView(c, []domain.Run{verified})
+	if v.Status != "external" || !v.CanStop || !strings.Contains(v.StateDetail, "verified") || len(v.PortVerifications) != 1 {
+		t.Fatalf("verified view=%+v", v)
+	}
+	ports := currentListeners([]domain.Run{verified}, []domain.CommandDefinition{c})
+	if len(ports) != 1 || ports[0].Port != 3307 || ports[0].Status != "external_verified" || ports[0].Attribution != "external" || ports[0].PID != 0 {
+		t.Fatalf("verified ports=%+v", ports)
+	}
+	preexisting := verified
+	preexisting.ID = "pre-existing-start"
+	preexisting.PortVerifications = []domain.PortVerification{{Port: 3307, Before: "listening", After: "listening", Status: "preexisting", CheckedAt: now}}
+	if ports = currentListeners([]domain.Run{preexisting}, []domain.CommandDefinition{c}); len(ports) != 0 {
+		t.Fatalf("pre-existing port was attributed: %+v", ports)
+	}
+}

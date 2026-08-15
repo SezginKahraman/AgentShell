@@ -22,7 +22,7 @@ const commands: SavedCommand[] = [
   { id: 'cmd-worker', name: 'Notification Worker', command: './scripts/worker.sh', cwd: '~/projects/notification', project_id: 'project-api', collection_id: 'collection-workers', kind: 'service', tags: ['internal', 'worker'], status: 'stopped', created_by: 'AI', discovery_source: 'scripts/worker.sh' },
   { id: 'cmd-test', name: 'Backend Tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', project_id: 'project-api', collection_id: 'collection-quality', kind: 'task', tags: ['test'], status: 'completed', last_run: history[3], created_from_run_id: 'hist-test', created_by: 'User' },
   { id: 'cmd-build', name: 'Frontend Build', command: 'npm run build', cwd: '~/projects/butcembu-web', project_id: 'project-web', collection_id: 'collection-web-dev', kind: 'task', tags: ['build'], status: 'failed', last_run: history[4], created_by: 'Cursor', discovery_source: 'package.json' },
-  { id: 'cmd-global-db', name: 'Local PostgreSQL', command: 'docker compose up postgres', cwd: '~/projects/shared', kind: 'service', tags: ['global', 'database'], status: 'stopped', favorite: true, created_by: 'User' },
+  { id: 'cmd-global-db', name: 'Local PostgreSQL', command: 'docker compose up -d postgres', stop_command: 'docker compose stop postgres', lifecycle_mode: 'external', expected_ports: [{ port: 5432, name: 'PostgreSQL', service: 'postgresql' }], cwd: '~/projects/shared', kind: 'service', tags: ['global', 'database'], status: 'stopped', favorite: true, created_by: 'User' },
 ]
 
 const projects: Project[] = [
@@ -59,7 +59,20 @@ export class DemoApi implements AgentShellApi {
   async stopRun(id: string) { const run = runs.find(r => r.id === id); if (run) run.status = 'stopped'; commands.filter(c => c.active_run_id === id).forEach(c => { c.status = 'stopped'; c.active_run_id = undefined }); this.emit() }
   async restartRun(id: string) { const run = runs.find(r => r.id === id); if (run) { run.status = 'running'; run.started_at = new Date().toISOString() } this.emit() }
   async commandAction(id: string, action: 'start' | 'stop' | 'restart') { const item = commands.find(c => c.id === id); if (!item) return; item.status = action === 'stop' ? 'stopped' : 'running'; if (action !== 'stop') item.active_run_id = item.active_run_id ?? `demo-${id}`; else item.active_run_id = undefined; this.emit() }
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart') { const stack = stacks.find(s => s.id === id); if (!stack) return; stack.status = action === 'stop' ? 'stopped' : 'running'; stack.running_count = action === 'stop' ? 0 : stack.total_count; stack.members?.forEach(m => m.status = action === 'stop' ? 'stopped' : 'running'); this.emit() }
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) {
+		const stack = stacks.find(s => s.id === id); if (!stack) return
+		const selected = action === 'start' && commandIDs ? new Set(commandIDs) : undefined
+		stack.members?.forEach(member => {
+			if (selected && !selected.has(member.command_id)) return
+			member.status = action === 'stop' ? 'stopped' : 'running'
+			member.can_stop = action !== 'stop'
+			const command = commands.find(item => item.id === member.command_id)
+			if (command) { command.status = member.status; command.can_stop = member.can_stop }
+		})
+		stack.running_count = stack.members?.filter(member => runningStatus(member.status)).length ?? 0
+		stack.status = stack.running_count === 0 ? 'stopped' : stack.running_count === (stack.total_count ?? stack.members?.length ?? 0) ? 'running' : 'partial'
+		this.emit()
+	}
   async promoteRun(id: string, input: PromoteRunInput) {
     const run = runs.find(item => item.id === id) ?? history.find(item => item.id === id)
     if (!run) throw new Error('Run not found')
@@ -70,6 +83,20 @@ export class DemoApi implements AgentShellApi {
   }
   async updateCommand(id: string, input: Partial<SavedCommand>) { const item = commands.find(value => value.id === id); if (!item) throw new Error('Command not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
   async updateStack(id: string, input: Partial<Stack>) { const item = stacks.find(value => value.id === id); if (!item) throw new Error('Stack not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
+	async deleteCommand(id: string) {
+		const item = commands.find(value => value.id === id)
+		if (!item) throw new Error('Launcher not found')
+		if (item.can_stop || runningStatus(item.status)) throw new Error('Stop the launcher before deleting it')
+		const owner = stacks.find(stack => (stack.members ?? []).some(member => member.command_id === id))
+		if (owner) throw new Error(`Launcher is used by stack "${owner.name}"`)
+		commands.splice(commands.indexOf(item), 1); this.emit()
+	}
+	async deleteStack(id: string) {
+		const item = stacks.find(value => value.id === id)
+		if (!item) throw new Error('Stack not found')
+		if (item.status === 'running' || item.status === 'partial' || (item.running_count ?? 0) > 0) throw new Error('Stop all stack members before deleting it')
+		stacks.splice(stacks.indexOf(item), 1); this.emit()
+	}
   async createProject(input: ProjectInput) { const item: Project = { ...input, id: `project-${Date.now()}` }; projects.push(item); this.emit(); return structuredClone(item) }
   async createCollection(input: CollectionInput) { const item: Collection = { ...input, id: `collection-${Date.now()}` }; collections.push(item); this.emit(); return structuredClone(item) }
   async updateCollection(id: string, input: CollectionInput) { const item = collections.find(value => value.id === id); if (!item) throw new Error('Collection not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
@@ -77,6 +104,6 @@ export class DemoApi implements AgentShellApi {
   subscribe(onChange: () => void) { this.listeners.add(onChange); return () => this.listeners.delete(onChange) }
 }
 
-const runningStatus = (status: string) => status === 'running' || status === 'starting'
+const runningStatus = (status?: string) => status === 'running' || status === 'starting'
 
 export const demoApi = new DemoApi()

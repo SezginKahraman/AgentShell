@@ -100,6 +100,18 @@ Detached resources such as `docker compose up -d` use `external` lifecycle and
 store `stop_command` plus an optional `restart_command` on the same launcher.
 Agents should not create a separate stop launcher for either case.
 
+When an external launcher declares `expected_ports`, AgentShell snapshots each
+port before the lifecycle action and checks it again afterwards. A port that was
+closed before start and listening afterwards is shown as **external verified**;
+this proves observable port health but does not claim process ownership. Ports
+that were already listening are labelled **pre-existing** and are never
+attributed to the launcher. Stop actions similarly record whether verified ports
+closed or remained listening. AgentShell continues probing the current health of
+the latest external lifecycle result; a previously verified port that later
+closes is removed from `list_ports` without erasing its transition evidence.
+`list_ports` includes managed listeners and only currently listening external
+ports verified by this evidence.
+
 The dashboard exposes the same catalog under **Projects**. Project and global
 scopes are distinct; collections are organizational folders, while stacks are
 executable groups. History rows can open logs, run again, or be saved as a
@@ -111,6 +123,9 @@ previous Runs, selectable historical logs, and lifecycle actions. When a
 launcher directly references a `.sh` file, its source can be viewed read-only;
 the API only reads regular script files inside the launcher's working directory
 and caps the response at 512 KiB.
+
+When a stack card is opened, stopped members can be selected and started as a
+verified subset while the card-level Start all action remains available.
 
 ## Development
 

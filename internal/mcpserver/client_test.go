@@ -147,7 +147,7 @@ func TestMergeAndPutUsesStrictCommandShape(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = io.WriteString(w, `{"id":"cmd-1","name":"Old","command":"make go","cwd":"/tmp/p","shell":"zsh","kind":"service","concurrency_policy":"forbid","env":{},"expected_ports":[{"port":8080,"name":"API","protocol":"tcp","service":"http"}],"tags":["internal"],"favorite":false,"lifecycle_mode":"managed","stop_command":"","restart_command":"","status":"running","active_run_id":"run-1","created_at":"ignored"}`)
+			_, _ = io.WriteString(w, `{"id":"cmd-1","project_id":"project-1","name":"Old","command":"make go","cwd":"/tmp/p","shell":"zsh","kind":"service","concurrency_policy":"forbid","env":{},"expected_ports":[{"port":8080,"name":"API","protocol":"tcp","service":"http"}],"tags":["internal"],"favorite":false,"lifecycle_mode":"managed","stop_command":"","restart_command":"","status":"running","active_run_id":"run-1","created_at":"ignored"}`)
 		case http.MethodPut:
 			if err := json.NewDecoder(r.Body).Decode(&put); err != nil {
 				t.Errorf("decode PUT: %v", err)
@@ -169,6 +169,9 @@ func TestMergeAndPutUsesStrictCommandShape(t *testing.T) {
 	}
 	if put["expected_ports"].([]any)[0].(map[string]any)["service"] != "http" {
 		t.Errorf("update payload lost expected port service: %#v", put)
+	}
+	if put["project_id"] != "project-1" || put["collection_id"] != "" {
+		t.Errorf("update payload lost catalog ownership: %#v", put)
 	}
 	for _, forbidden := range []string{"id", "status", "active_run_id", "created_at", "updated_at"} {
 		if _, ok := put[forbidden]; ok {
@@ -195,7 +198,7 @@ func TestSaveCommandPayloadPreservesExpectedPortService(t *testing.T) {
 }
 
 func TestStackPayloadUsesOrderedMembers(t *testing.T) {
-	payload, err := stackPayload(SaveStackInput{Name: "Internal", CommandIDs: []string{"auth", "payments"}})
+	payload, err := stackPayload(SaveStackInput{Name: "Internal", ProjectID: "project-1", CollectionID: "collection-1", CommandIDs: []string{"auth", "payments"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,6 +208,9 @@ func TestStackPayloadUsesOrderedMembers(t *testing.T) {
 	members := payload["members"].([]any)
 	if len(members) != 2 || members[1].(map[string]any)["command_id"] != "payments" || members[1].(map[string]any)["position"] != 1 {
 		t.Fatalf("members = %#v", members)
+	}
+	if payload["project_id"] != "project-1" || payload["collection_id"] != "collection-1" {
+		t.Fatalf("stack catalog ownership = %#v", payload)
 	}
 }
 

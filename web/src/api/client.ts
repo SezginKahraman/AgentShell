@@ -12,10 +12,12 @@ export interface AgentShellApi {
   stopRun(id: string): Promise<void>
   restartRun(id: string): Promise<void>
   commandAction(id: string, action: 'start' | 'stop' | 'restart'): Promise<void>
-  stackAction(id: string, action: 'start' | 'stop' | 'restart'): Promise<void>
+  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[]): Promise<void>
   promoteRun(id: string, input: PromoteRunInput): Promise<PromoteRunResult>
   updateCommand(id: string, input: Partial<SavedCommand>): Promise<SavedCommand>
   updateStack(id: string, input: Partial<Stack>): Promise<Stack>
+	deleteCommand(id: string): Promise<void>
+	deleteStack(id: string): Promise<void>
   createProject(input: ProjectInput): Promise<Project>
   createCollection(input: CollectionInput): Promise<Collection>
   updateCollection(id: string, input: CollectionInput): Promise<Collection>
@@ -28,7 +30,11 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+  if (!response.ok) {
+	let detail = ''
+	try { detail = (await response.json() as { error?: string }).error ?? '' } catch { /* non-JSON error */ }
+	throw new Error(detail || `${response.status} ${response.statusText}`)
+	}
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
@@ -60,10 +66,12 @@ export class HttpApi implements AgentShellApi {
   async stopRun(id: string) { await request(`/api/runs/${id}/stop`, { method: 'POST' }) }
   async restartRun(id: string) { await request(`/api/runs/${id}/restart`, { method: 'POST' }) }
   async commandAction(id: string, action: 'start' | 'stop' | 'restart') { await request(`/api/commands/${id}/${action}`, { method: 'POST' }) }
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart') { await request(`/api/stacks/${id}/${action}`, { method: 'POST' }) }
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) { await request(`/api/stacks/${id}/${action}`, { method: 'POST', body: action === 'start' && commandIDs ? JSON.stringify({ command_ids: commandIDs }) : undefined }) }
   promoteRun(id: string, input: PromoteRunInput) { return request<PromoteRunResult>(`/api/runs/${id}/promote`, { method: 'POST', body: JSON.stringify(input) }) }
   updateCommand(id: string, input: Partial<SavedCommand>) { return request<SavedCommand>(`/api/commands/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   updateStack(id: string, input: Partial<Stack>) { return request<Stack>(`/api/stacks/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+	async deleteCommand(id: string) { await request(`/api/commands/${id}`, { method: 'DELETE' }) }
+	async deleteStack(id: string) { await request(`/api/stacks/${id}`, { method: 'DELETE' }) }
   createProject(input: ProjectInput) { return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }) }
   createCollection(input: CollectionInput) { return request<Collection>('/api/collections', { method: 'POST', body: JSON.stringify(input) }) }
   updateCollection(id: string, input: CollectionInput) { return request<Collection>(`/api/collections/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }

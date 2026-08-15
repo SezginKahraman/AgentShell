@@ -69,7 +69,7 @@ func (c *daemonClient) mergeAndPut(ctx context.Context, path string, patch map[s
 	}
 	// These references are optional on create/GET but part of full replacement
 	// shapes. Preserve explicit empty values when GET omits them.
-	for _, optionalReference := range []string{"project_id", "parent_id"} {
+	for _, optionalReference := range []string{"project_id", "collection_id", "parent_id"} {
 		if containsField(fields, optionalReference) {
 			if _, ok := merged[optionalReference]; !ok {
 				merged[optionalReference] = ""

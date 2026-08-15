@@ -205,3 +205,20 @@ func PortAvailable(port int) bool {
 	_ = l.Close()
 	return true
 }
+
+// PortListening checks observable TCP health without claiming ownership. It is
+// used for detached/external resources whose processes are outside the managed
+// process group.
+func PortListening(port int) bool {
+	if port < 1 || port > 65535 {
+		return false
+	}
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 150*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+	}
+	return false
+}

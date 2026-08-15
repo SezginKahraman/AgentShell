@@ -45,48 +45,69 @@ type Process struct {
 }
 
 type Listener struct {
-	Port      int    `json:"port"`
-	Address   string `json:"address,omitempty"`
-	Transport string `json:"transport,omitempty"`
-	PID       int    `json:"pid"`
-	Name      string `json:"name,omitempty"`
-	Protocol  string `json:"protocol,omitempty"`
-	RunID     string `json:"run_id,omitempty"`
-	RunLabel  string `json:"run_label,omitempty"`
+	Port        int    `json:"port"`
+	Address     string `json:"address,omitempty"`
+	Transport   string `json:"transport,omitempty"`
+	PID         int    `json:"pid"`
+	Name        string `json:"name,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+	RunID       string `json:"run_id,omitempty"`
+	RunLabel    string `json:"run_label,omitempty"`
+	Status      string `json:"status,omitempty"`
+	Attribution string `json:"attribution,omitempty"`
+	Confidence  string `json:"confidence,omitempty"`
+}
+
+// PortVerification records observable evidence for an expected port without
+// claiming process ownership. Managed listeners are attributed through their
+// process group; external listeners are inferred from a closed -> listening
+// transition around a lifecycle action.
+type PortVerification struct {
+	Port       int       `json:"port"`
+	Name       string    `json:"name,omitempty"`
+	Protocol   string    `json:"protocol,omitempty"`
+	Service    string    `json:"service,omitempty"`
+	Before     string    `json:"before"`
+	After      string    `json:"after,omitempty"`
+	Current    string    `json:"current,omitempty"`
+	Status     string    `json:"status"`
+	Confidence string    `json:"confidence,omitempty"`
+	CheckedAt  time.Time `json:"checked_at"`
 }
 
 type Run struct {
-	ID                  string            `json:"id"`
-	Label               string            `json:"label"`
-	Command             string            `json:"command"`
-	Cwd                 string            `json:"cwd"`
-	Shell               string            `json:"shell"`
-	Kind                string            `json:"kind"`
-	Source              string            `json:"source"`
-	Status              RunStatus         `json:"status"`
-	Readiness           Readiness         `json:"readiness"`
-	RootPID             int               `json:"root_pid,omitempty"`
-	ProcessGroupID      int               `json:"process_group_id,omitempty"`
-	ProcessStartToken   string            `json:"process_start_token,omitempty"`
-	ExitCode            *int              `json:"exit_code,omitempty"`
-	StopReason          string            `json:"stop_reason,omitempty"`
-	CreatedAt           time.Time         `json:"created_at"`
-	StartedAt           *time.Time        `json:"started_at,omitempty"`
-	EndedAt             *time.Time        `json:"ended_at,omitempty"`
-	ExpectedPorts       []ExpectedPort    `json:"expected_ports,omitempty"`
-	Processes           []Process         `json:"processes,omitempty"`
-	Listeners           []Listener        `json:"listeners,omitempty"`
-	CPUPercent          float64           `json:"cpu_percent"`
-	MemoryBytes         int64             `json:"memory_bytes"`
-	StdoutPath          string            `json:"-"`
-	StderrPath          string            `json:"-"`
-	CombinedPath        string            `json:"-"`
-	Env                 map[string]string `json:"-"`
-	CommandDefinitionID string            `json:"command_definition_id,omitempty"`
-	StackRunID          string            `json:"stack_run_id,omitempty"`
-	RestartOfRunID      string            `json:"restart_of_run_id,omitempty"`
-	ProjectID           string            `json:"project_id,omitempty"`
-	LifecycleAction     string            `json:"lifecycle_action,omitempty"`
+	ID                  string             `json:"id"`
+	Label               string             `json:"label"`
+	Command             string             `json:"command"`
+	Cwd                 string             `json:"cwd"`
+	Shell               string             `json:"shell"`
+	Kind                string             `json:"kind"`
+	Source              string             `json:"source"`
+	Status              RunStatus          `json:"status"`
+	Readiness           Readiness          `json:"readiness"`
+	RootPID             int                `json:"root_pid,omitempty"`
+	ProcessGroupID      int                `json:"process_group_id,omitempty"`
+	ProcessStartToken   string             `json:"process_start_token,omitempty"`
+	ExitCode            *int               `json:"exit_code,omitempty"`
+	StopReason          string             `json:"stop_reason,omitempty"`
+	CreatedAt           time.Time          `json:"created_at"`
+	StartedAt           *time.Time         `json:"started_at,omitempty"`
+	EndedAt             *time.Time         `json:"ended_at,omitempty"`
+	ExpectedPorts       []ExpectedPort     `json:"expected_ports,omitempty"`
+	PortVerifications   []PortVerification `json:"port_verifications,omitempty"`
+	Processes           []Process          `json:"processes,omitempty"`
+	Listeners           []Listener         `json:"listeners,omitempty"`
+	CPUPercent          float64            `json:"cpu_percent"`
+	MemoryBytes         int64              `json:"memory_bytes"`
+	StdoutPath          string             `json:"-"`
+	StderrPath          string             `json:"-"`
+	CombinedPath        string             `json:"-"`
+	Env                 map[string]string  `json:"-"`
+	CommandDefinitionID string             `json:"command_definition_id,omitempty"`
+	StackRunID          string             `json:"stack_run_id,omitempty"`
+	RestartOfRunID      string             `json:"restart_of_run_id,omitempty"`
+	ProjectID           string             `json:"project_id,omitempty"`
+	LifecycleAction     string             `json:"lifecycle_action,omitempty"`
 }
 
 func (r Run) Active() bool {
@@ -139,8 +160,11 @@ type CommandDefinition struct {
 }
 
 type StackMember struct {
-	CommandID string `json:"command_id"`
-	Position  int    `json:"position"`
+	CommandID     string   `json:"command_id"`
+	Position      int      `json:"position"`
+	DependsOn     []string `json:"depends_on,omitempty"`
+	WaitFor       string   `json:"wait_for,omitempty"`
+	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty"`
 }
 
 type Stack struct {

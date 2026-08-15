@@ -57,7 +57,7 @@ func newServer(normalized normalizedConfig, client *daemonClient, initialized fu
 		Title:   "AgentShell local runtime manager",
 		Version: normalized.version,
 	}, &mcp.ServerOptions{
-		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. wait_timeout_ms only limits how long the MCP call waits; run_timeout_ms limits the command lifetime.",
+		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. wait_timeout_ms only limits how long the MCP call waits; run_timeout_ms limits the command lifetime.",
 		InitializedHandler: initialized,
 	})
 	registerRuntimeTools(server, client)
@@ -175,7 +175,7 @@ func registerRuntimeTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/runtime", nil, nil)
 		})
 
-	addTool(server, "list_ports", "List listening ports", toolIntent+"List listening ports currently attributed to AgentShell managed Runs.", readOnly("List listening ports"), nil,
+	addTool(server, "list_ports", "List listening ports", toolIntent+"List listening ports attributed to managed Runs plus external expected ports verified by a closed-to-listening transition. Inspect attribution, status, and confidence; external verification proves observable health, not process ownership.", readOnly("List listening ports"), nil,
 		func(ctx context.Context, _ EmptyInput) (map[string]any, error) {
 			return client.do(ctx, http.MethodGet, "/api/ports", nil, nil)
 		})
@@ -337,7 +337,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/commands", query, nil)
 		})
 
-	addTool(server, "save_command", "Save command", toolIntent+"Create a reusable AgentShell service or task launcher. Use managed lifecycle for foreground processes; for detached resources keep stop_command on the same external launcher instead of creating a separate stop launcher. This saves metadata only and does not execute the command.", mutating("Save command", false, false), SaveCommandInput.validate,
+	addTool(server, "save_command", "Save command", toolIntent+"Create a reusable AgentShell service or task launcher. When the user named a collection, pass its collection_id; never silently leave the launcher at project root. Use managed lifecycle for foreground processes; for detached resources keep stop_command on the same external launcher instead of creating a separate stop launcher. This saves metadata only and does not execute the command.", mutating("Save command", false, false), SaveCommandInput.validate,
 		func(ctx context.Context, input SaveCommandInput) (map[string]any, error) {
 			payload, err := commandPayload(input)
 			if err != nil {
@@ -393,7 +393,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/stacks", nil, nil)
 		})
 
-	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. This saves the group only and does not start its members.", mutating("Save stack", false, false), SaveStackInput.validate,
+	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Preserve its project_id and requested collection_id so it appears beside its launchers. This saves the group only and does not start its members.", mutating("Save stack", false, false), SaveStackInput.validate,
 		func(ctx context.Context, input SaveStackInput) (map[string]any, error) {
 			payload, err := stackPayload(input)
 			if err != nil {
@@ -417,9 +417,13 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodDelete, stackPath(input.ID), nil, nil)
 		})
 
-	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members of a saved stack through AgentShell. Preserve already_running and partial-start member results so failures are never hidden.", mutating("Start stack", false, false), StartStackInput.validate,
+	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or only the optional command_ids subset, through AgentShell. Every selected ID must belong to the stack. Preserve already_running and partial-start member results so failures are never hidden.", mutating("Start stack", false, false), StartStackInput.validate,
 		func(ctx context.Context, input StartStackInput) (map[string]any, error) {
-			return client.do(ctx, http.MethodPost, stackPath(input.ID)+"/start", nil, nil)
+			payload, err := objectPayload(input, "id")
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPost, stackPath(input.ID)+"/start", nil, payload)
 		})
 
 	addTool(server, "stop_stack", "Stop stack", toolIntent+"Stop active Runs for all members of a saved stack and preserve per-member outcomes.", mutating("Stop stack", true, true), StopStackInput.validate,
@@ -463,7 +467,7 @@ func objectPayload(value any, omit ...string) (map[string]any, error) {
 }
 
 var commandFields = []string{
-	"project_id", "name", "command", "cwd", "shell", "kind",
+	"project_id", "collection_id", "name", "command", "cwd", "shell", "kind",
 	"concurrency_policy", "env", "expected_ports", "tags", "favorite",
 	"lifecycle_mode", "stop_command", "restart_command",
 }
@@ -473,7 +477,7 @@ var projectFields = []string{"name", "root_path"}
 var collectionFields = []string{"project_id", "name", "parent_id", "sort_order"}
 
 var stackFields = []string{
-	"name", "description", "start_strategy", "failure_policy", "favorite", "members",
+	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members",
 }
 
 func runtimePayload(input RunInput) (map[string]any, error) {

@@ -305,17 +305,18 @@ Tam bir proje düzeni için önerilen yol:
 4. Sonuçtaki `created`, `updated` ve `reused` durumlarını raporla.
 
 `apply_catalog` atomik ve idempotent kullanım için tasarlanmıştır. Bir conflict oluşursa yarım katalog bırakmamalıdır.
+Project, Collection ve birden fazla launcher birlikte istenmişse ayrı ayrı `save_*` çağrıları yerine bu akış tercih edilmelidir. Ayrı çağrılar kullanılıyorsa `save_collection` sonucundaki ID, ilgili her `save_command`/`update_command` ve `save_stack`/`update_stack` çağrısına `collection_id` olarak açıkça verilmelidir; atama sonrasında liste araçlarıyla doğrulanmalıdır.
 
 ### 7.4. Çalıştırma
 
 - Uzun yaşayan web server, API, worker veya database launcher'ı için `kind: service` kullan.
 - Foreground process AgentShell tarafından sahiplenilecekse `lifecycle_mode: managed` kullan; ayrıca stop launcher oluşturma.
 - `docker compose up -d`, `docker start`, `nohup` veya daemon mode gibi detached kaynaklarda `lifecycle_mode: external` ve aynı launcher üzerinde `stop_command` kullan. Ayrı bir “Stop” launcher oluşturma.
-- External launcher için `restart_command` isteğe bağlıdır; verilmezse AgentShell stop ardından start komutunu çalıştırır. Başarılı start yalnız lifecycle isteğinin başarılı olduğunu gösterir; harici kaynağın sağlığı ayrıca doğrulanmadıysa dashboard bunu `external` olarak açıkça belirtir.
+- External launcher için `restart_command` isteğe bağlıdır; verilmezse AgentShell stop ardından start komutunu çalıştırır. `expected_ports` tanımlıysa AgentShell start öncesi port durumunu kaydeder: önce kapalı, sonra dinliyor olan port `external verified`; önceden açık olan port `pre-existing`; süre sonunda açılmayan port `unavailable` olur. Sonrasında current health periyodik kontrol edilir; doğrulanmış bir port kapanırsa `list_ports`tan çıkar fakat geçiş kanıtı geçmişte korunur. Bu doğrulama port sağlığını kanıtlar, process ownership iddiasında bulunmaz.
 - Build, test, lint, migration ve kısa script için `kind: task` kullan.
 - Doğrudan yeni komut için `run` kullan.
 - Kayıtlı launcher için `start_command` kullan.
-- Bir grup launcher için `start_stack` kullan.
+- Bir grup launcher için `start_stack` kullan. Yalnız belirli stack üyeleri istenmişse aynı çağrıda `command_ids` alt kümesini ver.
 - Servis başlatmadan önce duplicate durumunu kontrol et.
 - `wait_for: ready`, yalnız readiness için bilinen expected port varsa anlamlıdır.
 - `wait_timeout_ms`, yalnız MCP çağrısının bekleme süresidir.
@@ -324,7 +325,7 @@ Tam bir proje düzeni için önerilen yol:
 ### 7.5. Gözlem ve sonuç
 
 1. `inspect_run` ile PID, process tree, readiness ve exit state'i oku.
-2. `list_ports` ile yalnız AgentShell'e atfedilmiş dinleyen portları kontrol et.
+2. `list_ports` ile managed Run portlarını ve geçiş kanıtıyla doğrulanmış external portları kontrol et. `attribution`, `status` ve `confidence` alanlarını raporla; pre-existing portları launcher'a aitmiş gibi sunma.
 3. `get_logs` ile `combined`, `stdout` veya `stderr` loglarını oku.
 4. Task tamamlandığında exit code'u raporla.
 5. Service için açık portları ve `already_running` durumunu raporla.
@@ -338,7 +339,7 @@ AgentShell şu anda 35 MCP tool sunar.
 | Tool | Amaç |
 | --- | --- |
 | `get_runtime` | Runtime kimliği, durum, database ve bağlı MCP client'ları |
-| `list_ports` | AgentShell Run'larına atfedilen açık portlar |
+| `list_ports` | Managed Run portları ve kapalı→dinliyor geçişiyle doğrulanmış external expected portlar |
 | `run` | Yeni service veya task başlatmak |
 | `list_runs` | Run durumlarını filtreleyerek listelemek |
 | `inspect_run` | Process, port, süre, kaynak ve exit detayları |
@@ -369,8 +370,8 @@ AgentShell şu anda 35 MCP tool sunar.
 | Tool | Amaç |
 | --- | --- |
 | `list_commands` | Kayıtlı service/task launcher'larını ve runtime durumlarını listelemek |
-| `save_command` | Launcher kaydetmek; çalıştırmaz |
-| `update_command` | Launcher alanlarını güncellemek; çalıştırmaz |
+| `save_command` | Launcher kaydetmek; `project_id` ve `collection_id` kabul eder, çalıştırmaz |
+| `update_command` | Launcher alanları ile Project/Collection atamasını güncellemek; çalıştırmaz |
 | `delete_command` | Launcher kaydını silmek |
 | `start_command` | Kayıtlı launcher'ı başlatmak |
 | `stop_command` | Managed launcher'ın aktif Run'ını veya external launcher'ın kendi stop action'ını çalıştırmak |
@@ -381,16 +382,16 @@ AgentShell şu anda 35 MCP tool sunar.
 | Tool | Amaç |
 | --- | --- |
 | `list_stacks` | Stack ve member durumlarını listelemek |
-| `save_stack` | Stack tanımı kaydetmek; member'ları başlatmaz |
-| `update_stack` | Stack adı, strateji veya üyelerini güncellemek |
+| `save_stack` | Project/Collection sahibiyle Stack tanımı kaydetmek; member'ları başlatmaz |
+| `update_stack` | Stack sahibi, Collection, adı, strateji veya üyelerini güncellemek |
 | `delete_stack` | Stack kaydını silmek |
-| `start_stack` | Çalışmayan member'ları başlatmak |
+| `start_stack` | Tüm çalışmayan member'ları veya verilen `command_ids` alt kümesini başlatmak |
 | `stop_stack` | Aktif member Run'larını durdurmak |
 | `restart_stack` | Çalışanları restart edip eksikleri başlatmak |
 
 ### Collection ataması hakkında mevcut sözleşme
 
-Collection'a bağlı tam proje kataloğu oluştururken `apply_catalog` içindeki `collection_key` kullanılmalıdır.
+Collection'a bağlı tam proje kataloğu oluştururken `apply_catalog` içindeki `collection_key` kullanılmalıdır. Tekil kayıt akışında `collection_id` alanı `save_command`, `update_command`, `save_stack` ve `update_stack` tarafından desteklenir.
 
 History'deki bir Run kaydedilirken `promote_run.collection_id` kullanılabilir.
 

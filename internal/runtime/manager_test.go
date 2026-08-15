@@ -3,8 +3,10 @@ package runtime
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +38,24 @@ func waitInactive(t *testing.T, s *store.Store, id string) domain.Run {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("run %s did not finish", id)
+	return domain.Run{}
+}
+
+func waitPortVerification(t *testing.T, s *store.Store, id, status string) domain.Run {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		r, err := s.Run(context.Background(), id)
+		if err == nil {
+			for _, verification := range r.PortVerifications {
+				if verification.Status == status {
+					return *r
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not reach port verification %s", id, status)
 	return domain.Run{}
 }
 
@@ -122,6 +142,142 @@ func TestExternalCommandKeepsLifecycleActionsOnOneLauncher(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = waitInactive(t, s, startedAgain.ID)
+}
+
+func TestExternalPortTransitionIsVerifiedAndStopClosureIsRecorded(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	m.cfg.ExternalPortTimeout = 500 * time.Millisecond
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+	now := time.Now().UTC()
+	c := domain.CommandDefinition{ID: "external-port", Name: "Detached port", Command: "true", StopCommand: "true", Cwd: t.TempDir(), Kind: "service", LifecycleMode: "external", ConcurrencyPolicy: "forbid", ExpectedPorts: []domain.ExpectedPort{{Port: port, Name: "HTTP", Service: "http"}}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveCommand(context.Background(), &c); err != nil {
+		t.Fatal(err)
+	}
+	started, err := m.StartCommand(context.Background(), c.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := waitPortVerification(t, s, started.ID, "verified")
+	if got := verified.PortVerifications[0]; got.Before != "closed" || got.After != "listening" || got.Current != "listening" || got.Confidence != "high" {
+		t.Fatalf("verification=%+v", got)
+	}
+	stops, err := m.StopCommand(context.Background(), c.ID)
+	if err != nil || len(stops) != 1 {
+		t.Fatalf("stops=%+v err=%v", stops, err)
+	}
+	_ = listener.Close()
+	stopped := waitPortVerification(t, s, stops[0].ID, "stopped")
+	if got := stopped.PortVerifications[0]; got.Before != "listening" || got.After != "closed" || got.Current != "closed" {
+		t.Fatalf("stop verification=%+v", got)
+	}
+}
+
+func TestExternalPreExistingPortIsNotAttributed(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	now := time.Now().UTC()
+	c := domain.CommandDefinition{ID: "external-preexisting", Name: "Pre-existing", Command: "true", StopCommand: "true", Cwd: t.TempDir(), Kind: "service", LifecycleMode: "external", ConcurrencyPolicy: "forbid", ExpectedPorts: []domain.ExpectedPort{{Port: port}}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveCommand(context.Background(), &c); err != nil {
+		t.Fatal(err)
+	}
+	started, err := m.StartCommand(context.Background(), c.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := waitPortVerification(t, s, started.ID, "preexisting")
+	if run.PortVerifications[0].Confidence != "" || run.PortVerifications[0].Current != "listening" {
+		t.Fatalf("pre-existing port was attributed: %+v", run.PortVerifications[0])
+	}
+}
+
+func TestExternalExpectedPortBecomesUnavailableAfterTimeout(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	m.cfg.ExternalPortTimeout = 150 * time.Millisecond
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	_ = probe.Close()
+	now := time.Now().UTC()
+	c := domain.CommandDefinition{ID: "external-unavailable", Name: "Unavailable", Command: "true", StopCommand: "true", Cwd: t.TempDir(), Kind: "service", LifecycleMode: "external", ConcurrencyPolicy: "forbid", ExpectedPorts: []domain.ExpectedPort{{Port: port}}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveCommand(context.Background(), &c); err != nil {
+		t.Fatal(err)
+	}
+	started, err := m.StartCommand(context.Background(), c.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := waitPortVerification(t, s, started.ID, "unavailable")
+	if got := run.PortVerifications[0]; got.Before != "closed" || got.After != "closed" || got.Current != "closed" || got.Confidence != "" {
+		t.Fatalf("unavailable verification=%+v", got)
+	}
+}
+
+func TestExternalVerifiedPortCurrentHealthIsRefreshed(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	now := time.Now().UTC()
+	run := domain.Run{ID: "external-health", Label: "External", Command: "true", Cwd: t.TempDir(), Shell: "/bin/sh", Kind: "service", Source: "catalog", Status: domain.RunCompleted, Readiness: domain.ReadinessUnknown, CreatedAt: now, ExpectedPorts: []domain.ExpectedPort{{Port: port}}, PortVerifications: []domain.PortVerification{{Port: port, Before: "closed", After: "listening", Current: "listening", Status: "verified", Confidence: "high", CheckedAt: now}}, CommandDefinitionID: "external-health-command", LifecycleAction: "start"}
+	if err = s.SaveRun(context.Background(), &run); err != nil {
+		t.Fatal(err)
+	}
+	_ = listener.Close()
+	m.observeExternalPortHealth([]domain.Run{run})
+	updated, err := s.Run(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PortVerifications[0].Status != "verified" || updated.PortVerifications[0].Current != "closed" {
+		t.Fatalf("refreshed verification=%+v", updated.PortVerifications[0])
+	}
+}
+
+func TestStartStackMembersStartsOnlySelectedCommands(t *testing.T) {
+	m, s := testManager(t, 100*time.Millisecond)
+	ctx := context.Background()
+	root := t.TempDir()
+	now := time.Now().UTC()
+	first := domain.CommandDefinition{ID: "stack-first", Name: "First", Command: "printf first", Cwd: root, Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	second := domain.CommandDefinition{ID: "stack-second", Name: "Second", Command: "printf second", Cwd: root, Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	for _, command := range []*domain.CommandDefinition{&first, &second} {
+		if err := s.SaveCommand(ctx, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stack := domain.Stack{ID: "selective-stack", Name: "Selective", StartStrategy: "parallel", FailurePolicy: "continue", Members: []domain.StackMember{{CommandID: first.ID, Position: 0}, {CommandID: second.ID, Position: 1}}, CreatedAt: now, UpdatedAt: now}
+	if err := s.SaveStack(ctx, &stack); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := m.StartStackMembers(ctx, stack.ID, []string{second.ID})
+	if err != nil || len(runs) != 1 || runs[0].CommandDefinitionID != second.ID || runs[0].StackRunID == "" {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	_ = waitInactive(t, s, runs[0].ID)
+	if _, err = m.StartStackMembers(ctx, stack.ID, []string{"not-a-member"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("unknown member err=%v", err)
+	}
+	if _, err = m.StartStackMembers(ctx, stack.ID, []string{}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("empty selection err=%v", err)
+	}
 }
 
 func TestCloseTerminatesManagedProcessGroups(t *testing.T) {

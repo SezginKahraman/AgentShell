@@ -1,8 +1,9 @@
 export type RunStatus = 'starting' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped' | 'killed' | 'unknown' | 'external'
 export type Readiness = 'unknown' | 'waiting' | 'ready' | 'degraded' | 'unavailable'
 
-export interface ExpectedPort { port: number; name?: string; protocol?: string }
-export interface Listener { port: number; address?: string; protocol?: string; name?: string; pid?: number; run_id?: string; run_label?: string; status?: string }
+export interface ExpectedPort { port: number; name?: string; protocol?: string; service?: string }
+export interface PortVerification { port: number; name?: string; protocol?: string; service?: string; before: 'closed' | 'listening'; after?: 'closed' | 'listening'; current?: 'closed' | 'listening'; status: 'pending' | 'verified' | 'preexisting' | 'unavailable' | 'stopped' | 'still_listening'; confidence?: 'high'; checked_at: string }
+export interface Listener { port: number; address?: string; protocol?: string; name?: string; pid?: number; run_id?: string; run_label?: string; status?: string; attribution?: 'managed' | 'external'; confidence?: 'exact' | 'high' }
 export interface ProcessInfo { pid: number; ppid?: number; command?: string; cpu_percent?: number; memory_bytes?: number }
 
 export interface Run {
@@ -22,6 +23,7 @@ export interface Run {
   started_at?: string
   ended_at?: string | null
   expected_ports?: ExpectedPort[]
+	port_verifications?: PortVerification[]
   listeners?: Listener[]
   processes?: ProcessInfo[]
   cpu_percent?: number
@@ -60,13 +62,14 @@ export interface SavedCommand {
 	restart_command?: string
 	can_stop?: boolean
 	state_detail?: string
+	port_verifications?: PortVerification[]
 	run_count?: number
 }
 
 export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
-export interface StackMember { command_id: string; name?: string; command?: SavedCommand; status?: RunStatus; active_run_id?: string }
-export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string }
+export interface StackMember { command_id: string; name?: string; command?: SavedCommand; status?: RunStatus; active_run_id?: string; can_stop?: boolean }
+export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
 export interface LogResponse { run_id: string; stream: string; content: string }
 
 export interface Project { id: string; name: string; root_path: string; description?: string; created_at?: string; updated_at?: string }

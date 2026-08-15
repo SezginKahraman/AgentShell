@@ -87,6 +87,87 @@ func TestCommandListIncludesRuntimeState(t *testing.T) {
 	request(t, client, http.MethodPost, srv.URL+"/api/runs/"+run["id"].(string)+"/stop", map[string]any{}, &map[string]any{})
 }
 
+func TestCatalogDeletionProtectsRunningAndReferencedLaunchers(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	var command map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/commands", map[string]any{"name": "Deletable service", "command": "sleep 30", "cwd": t.TempDir(), "kind": "service", "concurrency_policy": "forbid"}, &command); status != http.StatusCreated {
+		t.Fatalf("create command status=%d body=%v", status, command)
+	}
+	id := command["id"].(string)
+	var stack map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks", map[string]any{"name": "Deletable stack", "command_ids": []string{id}}, &stack); status != http.StatusCreated {
+		t.Fatalf("create stack status=%d body=%v", status, stack)
+	}
+	stackID := stack["id"].(string)
+	var response map[string]any
+	if status := request(t, client, http.MethodDelete, srv.URL+"/api/commands/"+id, nil, &response); status != http.StatusConflict {
+		t.Fatalf("referenced command delete status=%d body=%v", status, response)
+	}
+	var action any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+stackID+"/start", map[string]any{}, &action); status != http.StatusCreated {
+		t.Fatalf("start stack status=%d body=%v", status, action)
+	}
+	if status := request(t, client, http.MethodDelete, srv.URL+"/api/stacks/"+stackID, nil, &response); status != http.StatusConflict {
+		t.Fatalf("running stack delete status=%d body=%v", status, response)
+	}
+	request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+stackID+"/stop", map[string]any{}, &action)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var view map[string]any
+		if status := request(t, client, http.MethodGet, srv.URL+"/api/stacks/"+stackID, nil, &view); status != http.StatusOK {
+			t.Fatalf("stack status=%d body=%v", status, view)
+		}
+		if view["status"] == "stopped" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stack did not stop: %v", view)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if status := request(t, client, http.MethodDelete, srv.URL+"/api/stacks/"+stackID, nil, &response); status != http.StatusOK {
+		t.Fatalf("stopped stack delete status=%d body=%v", status, response)
+	}
+	if status := request(t, client, http.MethodDelete, srv.URL+"/api/commands/"+id, nil, &response); status != http.StatusOK {
+		t.Fatalf("stopped command delete status=%d body=%v", status, response)
+	}
+	var retained []domain.Run
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/commands/"+id+"/runs", nil, &retained); status != http.StatusOK || len(retained) == 0 {
+		t.Fatalf("deleted launcher history status=%d runs=%v", status, retained)
+	}
+}
+
+func TestStackStartAcceptsValidatedMemberSubset(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	root := t.TempDir()
+	create := func(name, command string) string {
+		var created map[string]any
+		if status := request(t, client, http.MethodPost, srv.URL+"/api/commands", map[string]any{"name": name, "command": command, "cwd": root, "kind": "task", "concurrency_policy": "allow"}, &created); status != http.StatusCreated {
+			t.Fatalf("create %s status=%d body=%v", name, status, created)
+		}
+		return created["id"].(string)
+	}
+	firstID := create("First subset task", "printf first")
+	secondID := create("Second subset task", "printf second")
+	var stack map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks", map[string]any{"name": "Subset", "command_ids": []string{firstID, secondID}}, &stack); status != http.StatusCreated {
+		t.Fatalf("create stack status=%d body=%v", status, stack)
+	}
+	var runs []domain.Run
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+stack["id"].(string)+"/start", map[string]any{"command_ids": []string{secondID}}, &runs); status != http.StatusCreated || len(runs) != 1 || runs[0].CommandDefinitionID != secondID {
+		t.Fatalf("subset start status=%d runs=%+v", status, runs)
+	}
+	var failure map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+stack["id"].(string)+"/start", map[string]any{"command_ids": []string{"missing"}}, &failure); status != http.StatusConflict {
+		t.Fatalf("unknown subset status=%d body=%v", status, failure)
+	}
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+stack["id"].(string)+"/start", map[string]any{"command_ids": []string{}}, &failure); status != http.StatusBadRequest {
+		t.Fatalf("empty subset status=%d body=%v", status, failure)
+	}
+}
+
 func TestSummaryAndOriginGuard(t *testing.T) {
 	srv, _ := testServer(t)
 	var summary map[string]int

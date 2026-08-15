@@ -52,7 +52,7 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
   const stack = await stackResponse.json()
 
   try {
-    const started = await request.post(`${liveURL}/api/stacks/${stack.id}/start`, { data: {} })
+	    const started = await request.post(`${liveURL}/api/stacks/${stack.id}/start`, { data: { command_ids: [first.id] } })
     expect(started.ok()).toBeTruthy()
 
     await page.goto(liveURL!)
@@ -73,8 +73,16 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
 
     await page.getByRole('button', { name: 'Stacks' }).click()
     const stackCard = page.locator('article.stack-card').filter({ hasText: `Live Stack ${suffix}` })
-    await expect(stackCard).toContainText('2/2')
-    await expect(page.getByTestId(`stop-stack-${stack.id}`)).toBeVisible()
+	    await expect(stackCard).toContainText('1/2')
+	    await stackCard.click()
+	    const stackDrawer = page.getByTestId('stack-detail-drawer')
+	    await expect(stackDrawer.locator('label').filter({ hasText: firstName }).getByRole('checkbox')).toBeDisabled()
+	    await stackDrawer.locator('label').filter({ hasText: secondName }).getByRole('checkbox').check()
+	    await page.getByTestId(`start-selected-stack-${stack.id}`).click()
+	    await expect.poll(async () => (await (await request.get(`${liveURL}/api/stacks/${stack.id}`)).json()).running_count).toBe(2)
+	    await stackDrawer.getByRole('button', { name: 'Close stack details' }).click()
+	    await expect(stackCard).toContainText('2/2')
+	    await expect(page.getByTestId(`stop-stack-${stack.id}`)).toBeVisible()
 
     await expect.poll(async () => {
       try { return (await request.get(`http://127.0.0.1:${firstPort}/`, { failOnStatusCode: false })).ok() } catch { return false }
@@ -97,6 +105,10 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
     await expect(page.getByRole('link', { name: `Open port ${secondPort}` })).toBeVisible()
   } finally {
     await request.post(`${liveURL}/api/stacks/${stack.id}/stop`, { data: {} })
+		await expect.poll(async () => {
+			const response = await request.get(`${liveURL}/api/stacks/${stack.id}`, { failOnStatusCode: false })
+			return response.ok() ? (await response.json()).status : 'missing'
+		}, { timeout: 10_000 }).toBe('stopped')
     await request.delete(`${liveURL}/api/stacks/${stack.id}`)
     await request.delete(`${liveURL}/api/commands/${first.id}`)
     await request.delete(`${liveURL}/api/commands/${second.id}`)
@@ -107,31 +119,49 @@ test('live daemon renders managed services, stacks, ports, logs and controls', a
 test('live daemon keeps detached start and stop actions on one external launcher', async ({ page, request }) => {
 	test.skip(!liveURL, 'AGENTSHELL_LIVE_URL is required for the live daemon test')
 	const suffix = Date.now().toString(36)
+	const port = await freePort()
+	const pidPath = `/tmp/agentshell-external-${suffix}.pid`
+	const logPath = `/tmp/agentshell-external-${suffix}.log`
+	const detachedStart = `python3 -c 'import subprocess; p=subprocess.Popen(["python3","-u","-m","http.server","${port}","--bind","127.0.0.1"],stdout=open("${logPath}","ab"),stderr=subprocess.STDOUT,start_new_session=True); open("${pidPath}","w").write(str(p.pid))'`
+	const detachedStop = `if test -f "${pidPath}"; then kill "$(cat "${pidPath}")" 2>/dev/null || true; fi; rm -f "${pidPath}" "${logPath}"`
 	const response = await request.post(`${liveURL}/api/commands`, { data: {
 		name: `External lifecycle ${suffix}`,
-		command: "printf 'external started\\n'",
-		stop_command: "printf 'external stopped\\n'",
+		command: detachedStart,
+		stop_command: detachedStop,
 		cwd: process.cwd(),
 		kind: 'service',
 		lifecycle_mode: 'external',
 		concurrency_policy: 'forbid',
+		expected_ports: [{ port, name: 'Detached HTTP', service: 'http' }],
 		tags: ['live-e2e'],
 	} })
 	expect(response.ok()).toBeTruthy()
 	const command = await response.json()
 	try {
 		expect((await request.post(`${liveURL}/api/commands/${command.id}/start`, { data: {} })).ok()).toBeTruthy()
-		await expect.poll(async () => (await (await request.get(`${liveURL}/api/commands/${command.id}`)).json()).status).toBe('external')
+		await expect.poll(async () => {
+			const view = await (await request.get(`${liveURL}/api/commands/${command.id}`)).json()
+			return `${view.status}:${view.port_verifications?.[0]?.status}`
+		}, { timeout: 15_000 }).toBe('external:verified')
+		const ports = await (await request.get(`${liveURL}/api/ports`)).json()
+		expect(ports).toEqual(expect.arrayContaining([expect.objectContaining({ port, status: 'external_verified', attribution: 'external', confidence: 'high' })]))
 		await page.goto(liveURL!)
 		await page.getByRole('button', { name: 'Services' }).click()
 		const card = page.getByTestId(`command-card-${command.id}`)
-		await expect(card).toContainText('external')
+		await expect(card).toContainText('verified')
 		await page.getByTestId(`stop-command-${command.id}`).click()
-		await expect.poll(async () => (await (await request.get(`${liveURL}/api/commands/${command.id}`)).json()).status).toBe('stopped')
+		await expect.poll(async () => {
+			const view = await (await request.get(`${liveURL}/api/commands/${command.id}`)).json()
+			return `${view.status}:${view.port_verifications?.[0]?.status}`
+		}, { timeout: 15_000 }).toBe('stopped:stopped')
+		const afterStopPorts = await (await request.get(`${liveURL}/api/ports`)).json()
+		expect(afterStopPorts.some((item: { port: number }) => item.port === port)).toBeFalsy()
 		await card.click()
 		await page.getByTestId('command-tab-runs').click()
 		await expect(page.getByTestId('command-detail-drawer')).toContainText('stop ·')
 	} finally {
+		const current = await request.get(`${liveURL}/api/commands/${command.id}`, { failOnStatusCode: false })
+		if (current.ok() && (await current.json()).can_stop) await request.post(`${liveURL}/api/commands/${command.id}/stop`, { data: {} })
 		await request.delete(`${liveURL}/api/commands/${command.id}`)
 	}
 })

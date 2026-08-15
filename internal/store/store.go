@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS runs (
  memory_bytes INTEGER NOT NULL DEFAULT 0, stdout_path TEXT NOT NULL DEFAULT '', stderr_path TEXT NOT NULL DEFAULT '',
  combined_path TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '{}', command_definition_id TEXT NOT NULL DEFAULT '',
  stack_run_id TEXT NOT NULL DEFAULT '', restart_of_run_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT '',
- lifecycle_action TEXT NOT NULL DEFAULT ''
+ lifecycle_action TEXT NOT NULL DEFAULT '', port_verifications TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS runs_status_idx ON runs(status);
 CREATE INDEX IF NOT EXISTS runs_command_idx ON runs(command_definition_id);
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS collections (
 		return err
 	}
 	columns := map[string][]string{
-		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''"},
+		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'"},
 		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''"},
 		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''"},
 	}
@@ -158,18 +158,19 @@ func parseTimePtr(v sql.NullString) *time.Time {
 }
 
 func (s *Store) SaveRun(ctx context.Context, r *domain.Run) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO runs (`+runCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs (`+runCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET label=excluded.label,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,
 kind=excluded.kind,source=excluded.source,status=excluded.status,readiness=excluded.readiness,root_pid=excluded.root_pid,
 pgid=excluded.pgid,process_start_token=excluded.process_start_token,exit_code=excluded.exit_code,stop_reason=excluded.stop_reason,
 started_at=excluded.started_at,ended_at=excluded.ended_at,expected_ports=excluded.expected_ports,processes=excluded.processes,
 listeners=excluded.listeners,cpu_percent=excluded.cpu_percent,memory_bytes=excluded.memory_bytes,stdout_path=excluded.stdout_path,
 stderr_path=excluded.stderr_path,combined_path=excluded.combined_path,env=excluded.env,command_definition_id=excluded.command_definition_id,
-stack_run_id=excluded.stack_run_id,restart_of_run_id=excluded.restart_of_run_id,project_id=excluded.project_id,lifecycle_action=excluded.lifecycle_action`,
+stack_run_id=excluded.stack_run_id,restart_of_run_id=excluded.restart_of_run_id,project_id=excluded.project_id,lifecycle_action=excluded.lifecycle_action,
+port_verifications=excluded.port_verifications`,
 		r.ID, r.Label, r.Command, r.Cwd, r.Shell, r.Kind, r.Source, r.Status, r.Readiness, r.RootPID, r.ProcessGroupID,
 		r.ProcessStartToken, nullableInt(r.ExitCode), r.StopReason, ts(r.CreatedAt), tsp(r.StartedAt), tsp(r.EndedAt), js(r.ExpectedPorts),
 		js(r.Processes), js(r.Listeners), r.CPUPercent, r.MemoryBytes, r.StdoutPath, r.StderrPath, r.CombinedPath, js(r.Env),
-		r.CommandDefinitionID, r.StackRunID, r.RestartOfRunID, r.ProjectID, r.LifecycleAction)
+		r.CommandDefinitionID, r.StackRunID, r.RestartOfRunID, r.ProjectID, r.LifecycleAction, js(r.PortVerifications))
 	return err
 }
 
@@ -182,18 +183,18 @@ func nullableInt(v *int) any {
 
 const runCols = `id,label,command,cwd,shell,kind,source,status,readiness,root_pid,pgid,process_start_token,
 exit_code,stop_reason,created_at,started_at,ended_at,expected_ports,processes,listeners,cpu_percent,memory_bytes,
-stdout_path,stderr_path,combined_path,env,command_definition_id,stack_run_id,restart_of_run_id,project_id,lifecycle_action`
+stdout_path,stderr_path,combined_path,env,command_definition_id,stack_run_id,restart_of_run_id,project_id,lifecycle_action,port_verifications`
 
 type scanner interface{ Scan(...any) error }
 
 func scanRun(row scanner) (*domain.Run, error) {
 	var r domain.Run
-	var status, ready, created, ports, procs, listeners, env string
+	var status, ready, created, ports, procs, listeners, env, portVerifications string
 	var started, ended sql.NullString
 	var exit sql.NullInt64
 	err := row.Scan(&r.ID, &r.Label, &r.Command, &r.Cwd, &r.Shell, &r.Kind, &r.Source, &status, &ready, &r.RootPID,
 		&r.ProcessGroupID, &r.ProcessStartToken, &exit, &r.StopReason, &created, &started, &ended, &ports, &procs, &listeners,
-		&r.CPUPercent, &r.MemoryBytes, &r.StdoutPath, &r.StderrPath, &r.CombinedPath, &env, &r.CommandDefinitionID, &r.StackRunID, &r.RestartOfRunID, &r.ProjectID, &r.LifecycleAction)
+		&r.CPUPercent, &r.MemoryBytes, &r.StdoutPath, &r.StderrPath, &r.CombinedPath, &env, &r.CommandDefinitionID, &r.StackRunID, &r.RestartOfRunID, &r.ProjectID, &r.LifecycleAction, &portVerifications)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -210,6 +211,7 @@ func scanRun(row scanner) (*domain.Run, error) {
 	_ = json.Unmarshal([]byte(procs), &r.Processes)
 	_ = json.Unmarshal([]byte(listeners), &r.Listeners)
 	_ = json.Unmarshal([]byte(env), &r.Env)
+	_ = json.Unmarshal([]byte(portVerifications), &r.PortVerifications)
 	return &r, nil
 }
 
@@ -279,6 +281,13 @@ func (s *Store) RunsForCommand(ctx context.Context, id string, limit int) ([]dom
 func (s *Store) UpdateRunObservation(ctx context.Context, r *domain.Run) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE runs SET readiness=?,processes=?,listeners=?,cpu_percent=?,memory_bytes=? WHERE id=?`,
 		r.Readiness, js(r.Processes), js(r.Listeners), r.CPUPercent, r.MemoryBytes, r.ID)
+	return err
+}
+
+// UpdateRunPortVerifications changes only external port evidence. Keeping this
+// separate prevents a verifier from overwriting a concurrent lifecycle update.
+func (s *Store) UpdateRunPortVerifications(ctx context.Context, id string, expected []domain.ExpectedPort, verifications []domain.PortVerification) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET expected_ports=?,port_verifications=?,readiness='unknown' WHERE id=?`, js(expected), js(verifications), id)
 	return err
 }
 
@@ -477,8 +486,45 @@ func (s *Store) CommandByStableKey(ctx context.Context, projectID, key string) (
 	return scanCommand(s.db.QueryRowContext(ctx, `SELECT `+commandCols+` FROM commands WHERE project_id=? AND stable_key=?`, projectID, key))
 }
 func (s *Store) DeleteCommand(ctx context.Context, id string) error {
-	r, e := s.db.ExecContext(ctx, `DELETE FROM commands WHERE id=?`, id)
-	return affected(r, e)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT name,members FROM stacks`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var name, raw string
+		if err = rows.Scan(&name, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var members []domain.StackMember
+		if err = json.Unmarshal([]byte(raw), &members); err != nil {
+			rows.Close()
+			return err
+		}
+		for _, member := range members {
+			if member.CommandID == id {
+				rows.Close()
+				return fmt.Errorf("%w: launcher is used by stack %q", ErrConflict, name)
+			}
+		}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	r, err := tx.ExecContext(ctx, `DELETE FROM commands WHERE id=?`, id)
+	if err = affected(r, err); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SaveStack(ctx context.Context, v *domain.Stack) error {

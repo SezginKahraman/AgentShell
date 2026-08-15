@@ -248,13 +248,13 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 	for _, v := range runs {
 		if v.Active() {
 			running++
-			for _, p := range v.Listeners {
-				portSet[p.Port] = true
-			}
 		}
 		if v.Status == domain.RunFailed && v.CreatedAt.After(cut) {
 			failed++
 		}
+	}
+	for _, p := range currentListeners(runs, cmds) {
+		portSet[p.Port] = true
 	}
 	writeJSON(w, 200, map[string]int{"running": running, "ports": len(portSet), "failed": failed, "commands": len(cmds)})
 }
@@ -352,14 +352,55 @@ func (s *Server) ports(w http.ResponseWriter, r *http.Request) {
 		fail(w, e)
 		return
 	}
-	out := []domain.Listener{}
-	for _, v := range runs {
-		if v.Active() {
-			out = append(out, v.Listeners...)
-		}
+	commands, e := s.store.Commands(r.Context())
+	if e != nil {
+		fail(w, e)
+		return
 	}
+	out := currentListeners(runs, commands)
 	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
 	writeJSON(w, 200, out)
+}
+
+func currentListeners(runs []domain.Run, commands []domain.CommandDefinition) []domain.Listener {
+	out := []domain.Listener{}
+	seen := map[int]bool{}
+	byCommand := map[string][]domain.Run{}
+	for _, run := range runs {
+		if run.Active() {
+			for _, listener := range run.Listeners {
+				listener.Status = "listening"
+				listener.Attribution = "managed"
+				listener.Confidence = "exact"
+				out = append(out, listener)
+				seen[listener.Port] = true
+			}
+		}
+		if run.CommandDefinitionID != "" {
+			byCommand[run.CommandDefinitionID] = append(byCommand[run.CommandDefinitionID], run)
+		}
+	}
+	for _, command := range commands {
+		if command.LifecycleMode != "external" {
+			continue
+		}
+		view := makeCommandView(command, byCommand[command.ID])
+		if !view.CanStop || view.LastRun == nil {
+			continue
+		}
+		for _, verification := range view.PortVerifications {
+			if verification.Status != "verified" || verification.Current == "closed" || seen[verification.Port] {
+				continue
+			}
+			protocol := verification.Service
+			if protocol == "" {
+				protocol = verification.Protocol
+			}
+			out = append(out, domain.Listener{Port: verification.Port, Address: "127.0.0.1", Transport: "tcp", Name: verification.Name, Protocol: protocol, RunID: view.LastRun.ID, RunLabel: command.Name, Status: "external_verified", Attribution: "external", Confidence: verification.Confidence})
+			seen[verification.Port] = true
+		}
+	}
+	return out
 }
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -818,8 +859,8 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request, parts []string
 			respond(w, nil, viewErr)
 			return
 		}
-		if view.LifecycleMode == "external" && view.CanStop {
-			fail(w, fmt.Errorf("%w: stop the external launcher before deleting it", store.ErrConflict))
+		if view.CanStop {
+			fail(w, fmt.Errorf("%w: stop the launcher before deleting it", store.ErrConflict))
 			return
 		}
 		e := s.store.DeleteCommand(ctx, id)
@@ -904,7 +945,15 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 			if !s.accepting(w) {
 				return
 			}
-			v, e := s.manager.StartStack(ctx, id)
+			var input stackStartInput
+			if !decodeOptional(w, r, &input) {
+				return
+			}
+			if input.CommandIDs != nil && len(*input.CommandIDs) == 0 {
+				writeError(w, http.StatusBadRequest, "command_ids must not be empty when provided")
+				return
+			}
+			v, e := s.manager.StartStackMembers(ctx, id, sliceValue(input.CommandIDs))
 			respondAction(w, v, e)
 		case "stop":
 			v, e := s.manager.StopStack(ctx, id)
@@ -949,6 +998,15 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 		}
 		respond(w, v, e)
 	case http.MethodDelete:
+		view, viewErr := s.stackView(ctx, id)
+		if viewErr != nil {
+			respond(w, nil, viewErr)
+			return
+		}
+		if view.RunningCount > 0 {
+			fail(w, fmt.Errorf("%w: stop all stack members before deleting it", store.ErrConflict))
+			return
+		}
 		e := s.store.DeleteStack(ctx, id)
 		if e == nil {
 			s.catalog("stack.deleted", map[string]string{"id": id})
@@ -1002,12 +1060,13 @@ func (s *Server) catalog(action string, data any) {
 
 type commandView struct {
 	domain.CommandDefinition
-	Status      string      `json:"status"`
-	ActiveRunID string      `json:"active_run_id,omitempty"`
-	LastRun     *domain.Run `json:"last_run,omitempty"`
-	CanStop     bool        `json:"can_stop"`
-	StateDetail string      `json:"state_detail,omitempty"`
-	RunCount    int         `json:"run_count"`
+	Status            string                    `json:"status"`
+	ActiveRunID       string                    `json:"active_run_id,omitempty"`
+	LastRun           *domain.Run               `json:"last_run,omitempty"`
+	CanStop           bool                      `json:"can_stop"`
+	StateDetail       string                    `json:"state_detail,omitempty"`
+	RunCount          int                       `json:"run_count"`
+	PortVerifications []domain.PortVerification `json:"port_verifications,omitempty"`
 }
 
 func (s *Server) commandViews(ctx context.Context) ([]commandView, error) {
@@ -1056,9 +1115,11 @@ func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView 
 	if len(runs) > 0 {
 		copy := runs[0]
 		v.LastRun = &copy
+		v.PortVerifications = append([]domain.PortVerification(nil), copy.PortVerifications...)
 	}
 	for _, r := range runs {
 		if r.Active() {
+			v.PortVerifications = append([]domain.PortVerification(nil), r.PortVerifications...)
 			if c.LifecycleMode == "external" && r.LifecycleAction == "stop" {
 				v.Status = "stopping"
 				v.StateDetail = "External stop action is running."
@@ -1078,12 +1139,13 @@ func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView 
 		return v
 	}
 	for _, r := range runs {
+		v.PortVerifications = append([]domain.PortVerification(nil), r.PortVerifications...)
 		switch r.LifecycleAction {
 		case "start", "restart":
 			if r.Status == domain.RunCompleted {
 				v.Status = "external"
 				v.CanStop = true
-				v.StateDetail = "The start action succeeded; external process health is not verified."
+				v.StateDetail = externalStartStateDetail(r.PortVerifications)
 			} else if r.Status == domain.RunFailed {
 				v.Status = "failed"
 				v.CanStop = true
@@ -1095,6 +1157,17 @@ func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView 
 				v.Status = "failed"
 				v.CanStop = true
 				v.StateDetail = "The external stop action failed; resources may still be active."
+			} else if hasPortVerification(r.PortVerifications, "still_listening") {
+				v.Status = "external"
+				v.CanStop = true
+				v.StateDetail = "The stop action completed, but one or more expected ports are still listening."
+			} else if hasPortVerification(r.PortVerifications, "pending") {
+				v.Status = "stopping"
+				v.StateDetail = "The stop action completed; AgentShell is checking whether expected ports close."
+			} else if hasCurrentPortState(r.PortVerifications, "listening") {
+				v.StateDetail = "The stop action closed expected ports, but at least one is currently listening again. It is not attributed to this launcher."
+			} else if len(r.PortVerifications) > 0 {
+				v.StateDetail = "The external stop action completed and expected ports are closed."
 			} else {
 				v.StateDetail = "The external stop action completed."
 			}
@@ -1107,13 +1180,68 @@ func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView 
 	return v
 }
 
+func hasPortVerification(verifications []domain.PortVerification, status string) bool {
+	for _, verification := range verifications {
+		if verification.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCurrentPortState(verifications []domain.PortVerification, state string) bool {
+	for _, verification := range verifications {
+		if verification.Current == state {
+			return true
+		}
+	}
+	return false
+}
+
+func externalStartStateDetail(verifications []domain.PortVerification) string {
+	if len(verifications) == 0 {
+		return "The start action succeeded; external process health is not verified."
+	}
+	verified, preexisting, unavailable, pending := 0, 0, 0, 0
+	for _, verification := range verifications {
+		switch verification.Status {
+		case "verified":
+			verified++
+		case "preexisting":
+			preexisting++
+		case "unavailable":
+			unavailable++
+		case "pending":
+			pending++
+		}
+	}
+	if verified == len(verifications) {
+		for _, verification := range verifications {
+			if verification.Current == "closed" {
+				return "Expected ports opened after start, but at least one verified external port is currently closed. Process ownership is not managed."
+			}
+		}
+		return "All expected ports changed from closed to listening after start. External health is verified; process ownership is not managed."
+	}
+	if pending > 0 {
+		return "The start action succeeded; AgentShell is checking expected external ports."
+	}
+	if preexisting > 0 && verified == 0 && unavailable == 0 {
+		return "Expected ports were already listening before start, so AgentShell cannot attribute them to this launcher."
+	}
+	return fmt.Sprintf("External port check: %d verified, %d pre-existing, %d unavailable. Process ownership is not managed.", verified, preexisting, unavailable)
+}
+
 type stackMemberView struct {
-	CommandID   string `json:"command_id"`
-	Position    int    `json:"position"`
-	Name        string `json:"name"`
-	Status      string `json:"status"`
-	ActiveRunID string `json:"active_run_id,omitempty"`
-	CanStop     bool   `json:"can_stop"`
+	CommandID     string   `json:"command_id"`
+	Position      int      `json:"position"`
+	DependsOn     []string `json:"depends_on,omitempty"`
+	WaitFor       string   `json:"wait_for"`
+	WaitTimeoutMS int      `json:"wait_timeout_ms"`
+	Name          string   `json:"name"`
+	Status        string   `json:"status"`
+	ActiveRunID   string   `json:"active_run_id,omitempty"`
+	CanStop       bool     `json:"can_stop"`
 }
 type stackView struct {
 	ID            string            `json:"id"`
@@ -1174,7 +1302,7 @@ func makeStackView(st domain.Stack, commands map[string]commandView) stackView {
 	v := stackView{ID: st.ID, ProjectID: st.ProjectID, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
 	for _, m := range st.Members {
 		c := commands[m.CommandID]
-		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, Name: c.Name, Status: c.Status, ActiveRunID: c.ActiveRunID, CanStop: c.CanStop}
+		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, DependsOn: m.DependsOn, WaitFor: m.WaitFor, WaitTimeoutMS: m.WaitTimeoutMS, Name: c.Name, Status: c.Status, ActiveRunID: c.ActiveRunID, CanStop: c.CanStop}
 		if c.ActiveRunID != "" || c.CanStop {
 			v.RunningCount++
 		}
@@ -1242,6 +1370,17 @@ type actionOptions struct {
 	WaitTimeoutMS  *int   `json:"wait_timeout_ms,omitempty"`
 	RunTimeoutMS   *int   `json:"run_timeout_ms,omitempty"`
 	GraceTimeoutMS *int   `json:"grace_timeout_ms,omitempty"`
+}
+
+type stackStartInput struct {
+	CommandIDs *[]string `json:"command_ids,omitempty"`
+}
+
+func sliceValue(value *[]string) []string {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func decodeOptional(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -1559,6 +1698,26 @@ func defaultsStack(v *domain.Stack) {
 		v.FailurePolicy = "continue"
 	}
 	sort.SliceStable(v.Members, func(i, j int) bool { return v.Members[i].Position < v.Members[j].Position })
+	referenced := map[string]bool{}
+	for i := range v.Members {
+		for _, dependency := range v.Members[i].DependsOn {
+			referenced[strings.TrimSpace(dependency)] = true
+		}
+	}
+	for i := range v.Members {
+		v.Members[i].CommandID = strings.TrimSpace(v.Members[i].CommandID)
+		v.Members[i].Position = i
+		if v.Members[i].WaitFor == "" {
+			if referenced[v.Members[i].CommandID] {
+				v.Members[i].WaitFor = "ready"
+			} else {
+				v.Members[i].WaitFor = "spawn"
+			}
+		}
+		if v.Members[i].WaitTimeoutMS == 0 {
+			v.Members[i].WaitTimeoutMS = 30000
+		}
+	}
 }
 func validateStack(ctx context.Context, s *store.Store, v *domain.Stack) error {
 	v.Name = strings.TrimSpace(v.Name)
@@ -1577,12 +1736,71 @@ func validateStack(ctx context.Context, s *store.Store, v *domain.Stack) error {
 	}
 	seen := map[string]bool{}
 	for _, m := range v.Members {
+		if m.CommandID == "" {
+			return errors.New("stack member command_id is required")
+		}
 		if seen[m.CommandID] {
 			return errors.New("duplicate stack member")
 		}
 		seen[m.CommandID] = true
-		if _, e := s.Command(ctx, m.CommandID); e != nil {
+		if m.WaitFor != "spawn" && m.WaitFor != "ready" && m.WaitFor != "exit" {
+			return fmt.Errorf("command %s has invalid wait_for", m.CommandID)
+		}
+		if m.WaitTimeoutMS < 100 || m.WaitTimeoutMS > 600000 {
+			return fmt.Errorf("command %s wait_timeout_ms must be between 100 and 600000", m.CommandID)
+		}
+		command, e := s.Command(ctx, m.CommandID)
+		if e != nil {
 			return fmt.Errorf("command %s: %w", m.CommandID, e)
+		}
+		if m.WaitFor == "ready" && command.LifecycleMode == "external" && len(command.ExpectedPorts) == 0 {
+			return fmt.Errorf("command %s uses external lifecycle and requires expected_ports for wait_for=ready", m.CommandID)
+		}
+	}
+	dependencies := make(map[string][]string, len(v.Members))
+	for i := range v.Members {
+		member := &v.Members[i]
+		unique := map[string]bool{}
+		clean := make([]string, 0, len(member.DependsOn))
+		for _, raw := range member.DependsOn {
+			dependency := strings.TrimSpace(raw)
+			if dependency == "" || !seen[dependency] {
+				return fmt.Errorf("command %s depends on unknown stack member %q", member.CommandID, dependency)
+			}
+			if dependency == member.CommandID {
+				return fmt.Errorf("command %s cannot depend on itself", member.CommandID)
+			}
+			if unique[dependency] {
+				return fmt.Errorf("command %s has duplicate dependency %s", member.CommandID, dependency)
+			}
+			unique[dependency] = true
+			clean = append(clean, dependency)
+		}
+		member.DependsOn = clean
+		dependencies[member.CommandID] = clean
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(id string) error {
+		if visiting[id] {
+			return fmt.Errorf("stack dependency cycle includes command %s", id)
+		}
+		if visited[id] {
+			return nil
+		}
+		visiting[id] = true
+		for _, dependency := range dependencies[id] {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		delete(visiting, id)
+		visited[id] = true
+		return nil
+	}
+	for id := range dependencies {
+		if err := visit(id); err != nil {
+			return err
 		}
 	}
 	return nil

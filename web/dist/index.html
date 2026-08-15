@@ -1,12 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b1014" />
+    <meta name="theme-color" content="#f6f8fb" />
     <title>AgentShell</title>
-    <script type="module" crossorigin src="/assets/index-DLu8Tmio.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CtuR0MOz.css">
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('agentshell.theme')
+        document.documentElement.dataset.theme = savedTheme === 'dark' ? 'dark' : 'light'
+      } catch (_) {
+        document.documentElement.dataset.theme = 'light'
+      }
+    </script>
+    <script type="module" crossorigin src="/assets/index-DDdPNuxi.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-i108SGbQ.css">
   </head>
   <body>
     <div id="root"></div>

@@ -6,6 +6,16 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
   await expect(page.getByText('Demo data')).toBeVisible()
   await expect(page.getByText('No MCP clients')).toBeVisible()
   await expect(page.getByText('MCP Connected')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Favorites & Quick launch' })).toBeVisible()
+  await expect(page.getByTestId('quick-command-cmd-global-db')).toBeVisible()
+  await expect(page.getByTestId('quick-stack-stack-internal')).toBeVisible()
+  await page.getByTestId('quick-command-cmd-global-db').getByRole('button', { name: 'View Local PostgreSQL details' }).click()
+  await expect(page.getByTestId('command-detail-drawer')).toBeVisible()
+  await expect(page.getByTestId('command-detail-drawer')).toContainText('not verified')
+  await expect(page.getByTestId('command-detail-drawer')).toContainText('Pre-existing ports are never attributed')
+  await page.getByTestId('command-detail-drawer').getByRole('button', { name: 'Close launcher details' }).click()
+  await page.getByTestId('quick-start-command-cmd-global-db').click()
+  await expect(page.getByTestId('quick-stop-command-cmd-global-db')).toBeVisible()
   await expect(page.getByTestId('run-card-run-api')).toBeVisible()
   const historyPanel = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Command History' }) })
   const portsPanel = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Port Overview' }) })
@@ -13,6 +23,7 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
   const portsBox = await portsPanel.boundingBox()
   expect(Math.abs((historyBox?.width ?? 0) - (portsBox?.width ?? 0))).toBeLessThan(2)
   expect(portsBox?.y ?? 0).toBeGreaterThan((historyBox?.y ?? 0) + (historyBox?.height ?? 0) - 1)
+  await expect.poll(() => historyPanel.locator('.command-link strong').first().evaluate(element => getComputedStyle(element).textOverflow)).toBe('ellipsis')
 
   await page.getByTestId('history-promote-hist-test').click()
   await expect(page.getByTestId('promote-modal')).toBeVisible()
@@ -49,6 +60,9 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
 
   await page.getByRole('button', { name: 'Services' }).click()
   await expect(page.getByRole('heading', { name: 'Saved Services' })).toBeVisible()
+  const workerCommand = page.getByTestId('command-card-cmd-worker').locator(':scope > code')
+  await expect.poll(() => workerCommand.evaluate(element => getComputedStyle(element).webkitLineClamp)).toBe('3')
+  await expect.poll(() => workerCommand.evaluate(element => getComputedStyle(element).overflow)).toBe('hidden')
   await page.getByTestId('command-card-cmd-worker').click()
   await expect(page.getByTestId('command-detail-drawer')).toContainText('./scripts/worker.sh')
   await page.getByTestId('command-tab-script').click()
@@ -65,15 +79,37 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
   await page.getByRole('button', { name: 'Add Notification Worker to favorites' }).click()
   await expect(page.getByRole('button', { name: 'Remove Notification Worker from favorites' })).toBeVisible()
 
+	await page.getByRole('button', { name: 'Tasks' }).click()
+	await page.getByTestId('command-card-cmd-build').click()
+	await page.getByTestId('delete-command-cmd-build').click()
+	await expect(page.getByTestId('delete-saved-dialog')).toContainText('Previous Runs, logs, and History entries are retained')
+	await page.getByTestId('confirm-delete-saved').click()
+	await expect(page.getByTestId('command-card-cmd-build')).toHaveCount(0)
+
   await page.getByRole('button', { name: 'Stacks' }).click()
   await expect(page.getByTestId('stack-card-stack-internal')).toBeVisible()
+	await page.getByTestId('stack-card-stack-internal').click()
+	const stackDrawer = page.getByTestId('stack-detail-drawer')
+	await expect(stackDrawer).toContainText('Choose members to start')
+	await expect(stackDrawer.locator('label').filter({ hasText: 'Backend API' }).getByRole('checkbox')).toBeDisabled()
+	await stackDrawer.locator('label').filter({ hasText: 'Notification Worker' }).getByRole('checkbox').check()
+	await expect(page.getByTestId('start-selected-stack-stack-internal')).toContainText('Start selected (1)')
+	await page.getByTestId('start-selected-stack-stack-internal').click()
+	await expect(page.getByTestId('start-selected-stack-stack-internal')).toContainText('Start selected (0)')
+	await stackDrawer.getByRole('button', { name: 'Close stack details' }).click()
   await page.getByTestId('restart-stack-stack-internal').click()
   await expect(page.getByTestId('stop-stack-stack-internal')).toBeVisible()
+	await page.getByTestId('stop-stack-stack-internal').click()
+	await expect(page.getByTestId('start-stack-stack-internal')).toContainText('Start all')
+	await page.getByTestId('delete-stack-stack-internal').click()
+	await expect(page.getByTestId('delete-saved-dialog')).toContainText('launchers inside this stack are kept')
+	await page.getByTestId('confirm-delete-saved').click()
+	await expect(page.getByTestId('stack-card-stack-internal')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Ports' }).click()
   await expect(page.getByRole('button', { name: 'Copy address for port 5432' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Projects' }).click()
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Projects', exact: true }).click()
   await expect(page.getByTestId('projects-page')).toBeVisible()
   await page.getByTestId('project-project-api').click()
   await expect(page.getByRole('heading', { name: 'Butcembu API' })).toBeVisible()
@@ -108,4 +144,69 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
   await expect(page.locator('.shutdown-impact').getByText('3', { exact: true })).toBeVisible()
   await page.getByTestId('confirm-shutdown').click()
   await expect(page.getByRole('heading', { name: 'Demo runtime stopped' })).toBeVisible()
+})
+
+test('project favorites can be collapsed and sorted', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Projects', exact: true }).click()
+  await page.getByTestId('project-project-api').click()
+
+  const favorites = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Pinned favorites' }) })
+  const toggle = page.getByTestId('toggle-pinned-favorites')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(favorites.getByTestId('command-card-cmd-api')).toBeVisible()
+
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(favorites.getByTestId('command-card-cmd-api')).toHaveCount(0)
+
+  await page.reload()
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Projects', exact: true }).click()
+  await page.getByTestId('project-project-api').click()
+  await expect(page.getByTestId('toggle-pinned-favorites')).toHaveAttribute('aria-expanded', 'false')
+  await page.getByTestId('toggle-pinned-favorites').click()
+
+  await page.getByRole('button', { name: 'Add Backend Tests to favorites' }).click()
+  const firstFavorite = favorites.locator('article.catalog-card, article.stack-card').first()
+  const sort = page.getByLabel('Sort launchers')
+
+  await sort.selectOption('stopped')
+  await expect(firstFavorite).toContainText('Backend Tests')
+  await sort.selectOption('running')
+  await expect(firstFavorite).toContainText('Backend API')
+  await sort.selectOption('port')
+  await expect(firstFavorite).toContainText('Backend API')
+  await sort.selectOption('default')
+  await expect(firstFavorite).toContainText('Backend API')
+})
+
+test('light and dark theme selection persists', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#f6f8fb')
+
+  await page.getByTestId('theme-toggle').click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#090a09')
+  expect(await page.evaluate(() => {
+    const styles = getComputedStyle(document.documentElement)
+    return Object.fromEntries(['--bg', '--surface', '--green', '--purple', '--orange', '--red'].map(token => [
+      token,
+      styles.getPropertyValue(token).trim(),
+    ]))
+  })).toEqual({
+    '--bg': '#090a09',
+    '--surface': '#111211',
+    '--green': '#55d85a',
+    '--purple': '#b56be3',
+    '--orange': '#ff9800',
+    '--red': '#ff453a',
+  })
+  expect(await page.evaluate(() => localStorage.getItem('agentshell.theme'))).toBe('dark')
+
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await page.getByTestId('theme-toggle').click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  expect(await page.evaluate(() => localStorage.getItem('agentshell.theme'))).toBe('light')
 })

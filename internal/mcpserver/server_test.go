@@ -170,6 +170,7 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 			"commands":    []any{map[string]any{"key": "api", "name": "API", "command": "make go", "cwd": "/tmp/internal/api", "kind": "service", "collection_key": "services", "expected_ports": []any{map[string]any{"port": 8080, "service": "http"}}}},
 			"stacks":      []any{map[string]any{"key": "all", "name": "Internal", "command_keys": []any{"api"}}},
 		}},
+		{Name: "start_stack", Arguments: map[string]any{"id": "stack-1", "command_ids": []any{"command-1", "command-2"}}},
 	}
 	for _, call := range calls {
 		result, callErr := session.CallTool(ctx, call)
@@ -186,6 +187,7 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 		{http.MethodDelete, "/api/collections/col-2"},
 		{http.MethodPost, "/api/runs/run-1/promote"},
 		{http.MethodPost, "/api/catalog/apply"},
+		{http.MethodPost, "/api/stacks/stack-1/start"},
 	}
 	if len(requests) != len(wantRequests) {
 		t.Fatalf("requests = %#v", requests)
@@ -213,6 +215,10 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 	command := apply["commands"].([]any)[0].(map[string]any)
 	if command["expected_ports"].([]any)[0].(map[string]any)["service"] != "http" {
 		t.Errorf("apply payload lost service: %#v", apply)
+	}
+	start := requests[7].Body
+	if ids, ok := start["command_ids"].([]any); !ok || len(ids) != 2 || ids[1] != "command-2" {
+		t.Errorf("start_stack subset payload = %#v", start)
 	}
 }
 

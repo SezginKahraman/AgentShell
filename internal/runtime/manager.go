@@ -26,9 +26,10 @@ import (
 var ErrAlreadyRunning = errors.New("command is already running")
 
 type Config struct {
-	DataDir      string
-	StopGrace    time.Duration
-	PollInterval time.Duration
+	DataDir             string
+	StopGrace           time.Duration
+	PollInterval        time.Duration
+	ExternalPortTimeout time.Duration
 }
 
 type Manager struct {
@@ -51,6 +52,9 @@ func NewManager(s *store.Store, b *events.Bus, cfg Config) *Manager {
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 2 * time.Second
+	}
+	if cfg.ExternalPortTimeout <= 0 {
+		cfg.ExternalPortTimeout = 10 * time.Second
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{store: s, bus: b, cfg: cfg, cmds: map[string]*exec.Cmd{}, stopping: map[string]bool{}, forceKilled: map[string]bool{}, ctx: ctx, cancel: cancel}
@@ -572,11 +576,134 @@ func (m *Manager) startLifecycleAction(ctx context.Context, c domain.CommandDefi
 		expected = nil
 	} else if action == "restart" {
 		label += " · Restart"
-		if lifecycleMode(c) == "external" {
-			expected = nil
-		}
+	}
+	if lifecycleMode(c) == "external" {
+		return m.startExternalLifecycleAction(ctx, c, command, action, label, kind, stackRunID)
 	}
 	return m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, ExpectedPorts: expected, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action})
+}
+
+func (m *Manager) startExternalLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, label, kind, stackRunID string) (*domain.Run, error) {
+	verifications := snapshotExternalPorts(c.ExpectedPorts, action)
+	// External lifecycle commands are allowed to encounter pre-existing ports;
+	// those ports are recorded as such rather than rejected or attributed.
+	r, err := m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action})
+	if r == nil {
+		return nil, err
+	}
+	r.ExpectedPorts = append([]domain.ExpectedPort(nil), c.ExpectedPorts...)
+	r.PortVerifications = verifications
+	r.Readiness = domain.ReadinessUnknown
+	m.mu.Lock()
+	updateErr := m.store.UpdateRunPortVerifications(context.Background(), r.ID, r.ExpectedPorts, verifications)
+	m.mu.Unlock()
+	if updateErr != nil && err == nil {
+		return r, updateErr
+	}
+	m.publish(*r)
+	if err == nil && len(verifications) > 0 {
+		go m.verifyExternalPorts(r.ID, action, r.ExpectedPorts, verifications)
+	}
+	return r, err
+}
+
+func snapshotExternalPorts(expected []domain.ExpectedPort, action string) []domain.PortVerification {
+	now := time.Now().UTC()
+	out := make([]domain.PortVerification, 0, len(expected))
+	for _, port := range expected {
+		open := platform.PortListening(port.Port)
+		state := "closed"
+		if open {
+			state = "listening"
+		}
+		verification := domain.PortVerification{Port: port.Port, Name: port.Name, Protocol: port.Protocol, Service: port.Service, Before: state, Current: state, Status: "pending", CheckedAt: now}
+		switch {
+		case action == "stop" && !open:
+			verification.After = "closed"
+			verification.Status = "stopped"
+			verification.Confidence = "high"
+		case action != "stop" && open:
+			verification.After = "listening"
+			verification.Status = "preexisting"
+		}
+		out = append(out, verification)
+	}
+	return out
+}
+
+func (m *Manager) verifyExternalPorts(runID, action string, expected []domain.ExpectedPort, verifications []domain.PortVerification) {
+	deadline := time.Now().Add(m.cfg.ExternalPortTimeout)
+	interval := m.cfg.PollInterval
+	if interval < 50*time.Millisecond {
+		interval = 50 * time.Millisecond
+	}
+	if interval > 250*time.Millisecond {
+		interval = 250 * time.Millisecond
+	}
+	for {
+		pending := false
+		now := time.Now().UTC()
+		for i := range verifications {
+			if verifications[i].Status != "pending" {
+				continue
+			}
+			open := platform.PortListening(verifications[i].Port)
+			if action == "stop" && !open {
+				verifications[i].After = "closed"
+				verifications[i].Current = "closed"
+				verifications[i].Status = "stopped"
+				verifications[i].Confidence = "high"
+				verifications[i].CheckedAt = now
+			} else if action != "stop" && open {
+				verifications[i].After = "listening"
+				verifications[i].Current = "listening"
+				verifications[i].Status = "verified"
+				verifications[i].Confidence = "high"
+				verifications[i].CheckedAt = now
+			} else {
+				pending = true
+			}
+		}
+		if !pending || time.Now().After(deadline) {
+			if pending {
+				for i := range verifications {
+					if verifications[i].Status != "pending" {
+						continue
+					}
+					if action == "stop" {
+						verifications[i].After = "listening"
+						verifications[i].Current = "listening"
+						verifications[i].Status = "still_listening"
+					} else {
+						verifications[i].After = "closed"
+						verifications[i].Current = "closed"
+						verifications[i].Status = "unavailable"
+					}
+					verifications[i].CheckedAt = time.Now().UTC()
+				}
+			}
+			m.saveExternalPortVerifications(runID, expected, verifications)
+			return
+		}
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+
+func (m *Manager) saveExternalPortVerifications(runID string, expected []domain.ExpectedPort, verifications []domain.PortVerification) {
+	ctx := context.Background()
+	m.mu.Lock()
+	err := m.store.UpdateRunPortVerifications(ctx, runID, expected, verifications)
+	m.mu.Unlock()
+	if err != nil {
+		return
+	}
+	if current, err := m.store.Run(ctx, runID); err == nil {
+		m.publish(*current)
+	}
 }
 
 func (m *Manager) externalStarted(ctx context.Context, id string) (bool, *domain.Run, error) {
@@ -591,7 +718,14 @@ func (m *Manager) externalStarted(ctx context.Context, id string) (bool, *domain
 		}
 		switch r.LifecycleAction {
 		case "stop":
-			return r.Status == domain.RunFailed, r, nil
+			stillListening := false
+			for _, verification := range r.PortVerifications {
+				if verification.Status == "still_listening" || verification.Status == "pending" {
+					stillListening = true
+					break
+				}
+			}
+			return r.Status == domain.RunFailed || stillListening, r, nil
 		case "start", "restart":
 			return r.Status == domain.RunCompleted || r.Active(), r, nil
 		}
@@ -641,35 +775,315 @@ func (m *Manager) RestartStack(ctx context.Context, id string) ([]domain.Run, er
 }
 
 func (m *Manager) StartStack(ctx context.Context, id string) ([]domain.Run, error) {
+	return m.StartStackMembers(ctx, id, nil)
+}
+
+// StartStackMembers starts the selected subset and its transitive dependencies.
+// Members in the same dependency wave start together for parallel stacks; a
+// sequential stack starts one member at a time. A member only unlocks its
+// dependents after its configured spawn, ready, or exit condition succeeds.
+func (m *Manager) StartStackMembers(ctx context.Context, id string, commandIDs []string) ([]domain.Run, error) {
 	s, err := m.store.Stack(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	members, err := stackMembersForStart(s, commandIDs)
+	if err != nil {
+		return nil, err
+	}
+	strategy := s.StartStrategy
+	if strategy == "" {
+		strategy = "parallel"
+	}
+	failurePolicy := s.FailurePolicy
+	if failurePolicy == "" {
+		failurePolicy = "continue"
+	}
 	stackRunID := NewID("stackrun")
 	var out []domain.Run
-	for _, member := range s.Members {
-		r, e := m.StartCommand(ctx, member.CommandID, stackRunID)
-		if r != nil {
-			out = append(out, *r)
+	pending := make(map[string]domain.StackMember, len(members))
+	for _, member := range members {
+		pending[member.CommandID] = member
+	}
+	succeeded, failed := map[string]bool{}, map[string]bool{}
+	for len(pending) > 0 {
+		eligible := make([]domain.StackMember, 0, len(pending))
+		for _, member := range members {
+			if _, ok := pending[member.CommandID]; !ok {
+				continue
+			}
+			blocked, ready := false, true
+			for _, dependency := range member.DependsOn {
+				if failed[dependency] {
+					blocked = true
+					break
+				}
+				if !succeeded[dependency] {
+					ready = false
+				}
+			}
+			if blocked {
+				failed[member.CommandID] = true
+				delete(pending, member.CommandID)
+				continue
+			}
+			if ready {
+				eligible = append(eligible, member)
+				if strategy == "sequential" {
+					break
+				}
+			}
 		}
-		if e != nil && !errors.Is(e, ErrAlreadyRunning) && s.FailurePolicy != "continue" {
-			return out, e
+		if len(eligible) == 0 {
+			if len(pending) == 0 {
+				break
+			}
+			return out, fmt.Errorf("%w: stack dependency graph is cyclic or incomplete", store.ErrConflict)
+		}
+
+		type result struct {
+			member domain.StackMember
+			run    *domain.Run
+			err    error
+		}
+		results := make([]result, 0, len(eligible))
+		for _, member := range eligible {
+			r, startErr := m.StartCommand(ctx, member.CommandID, stackRunID)
+			if r != nil {
+				out = append(out, *r)
+			}
+			if errors.Is(startErr, ErrAlreadyRunning) {
+				startErr = nil
+			}
+			results = append(results, result{member: member, run: r, err: startErr})
+		}
+
+		var waitGroup sync.WaitGroup
+		for i := range results {
+			if results[i].err != nil || results[i].run == nil {
+				continue
+			}
+			waitGroup.Add(1)
+			go func(item *result) {
+				defer waitGroup.Done()
+				item.err = m.waitStackMember(ctx, item.member, item.run)
+			}(&results[i])
+		}
+		waitGroup.Wait()
+
+		for _, item := range results {
+			delete(pending, item.member.CommandID)
+			if item.err == nil {
+				succeeded[item.member.CommandID] = true
+				continue
+			}
+			failed[item.member.CommandID] = true
+			if failurePolicy != "continue" {
+				return out, fmt.Errorf("stack member %s: %w", item.member.CommandID, item.err)
+			}
 		}
 	}
 	return out, nil
+}
+
+func stackMembersForStart(s domain.Stack, commandIDs []string) ([]domain.StackMember, error) {
+	byID := make(map[string]domain.StackMember, len(s.Members))
+	for i, member := range s.Members {
+		if member.WaitFor == "" {
+			member.WaitFor = "spawn"
+		}
+		if member.WaitTimeoutMS <= 0 {
+			member.WaitTimeoutMS = 30000
+		}
+		member.Position = i
+		byID[member.CommandID] = member
+	}
+	selected := map[string]bool{}
+	if commandIDs == nil {
+		for id := range byID {
+			selected[id] = true
+		}
+	} else {
+		if len(commandIDs) == 0 {
+			return nil, fmt.Errorf("%w: command_ids must not be empty", store.ErrConflict)
+		}
+		var include func(string) error
+		include = func(commandID string) error {
+			member, ok := byID[commandID]
+			if !ok {
+				return fmt.Errorf("%w: command %s is not a member of stack %s", store.ErrConflict, commandID, s.ID)
+			}
+			if selected[commandID] {
+				return nil
+			}
+			selected[commandID] = true
+			for _, dependency := range member.DependsOn {
+				if err := include(dependency); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		requested := map[string]bool{}
+		for _, commandID := range commandIDs {
+			if requested[commandID] {
+				return nil, fmt.Errorf("%w: duplicate selected stack member %s", store.ErrConflict, commandID)
+			}
+			requested[commandID] = true
+			if err := include(commandID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	out := make([]domain.StackMember, 0, len(selected))
+	for _, member := range s.Members {
+		if selected[member.CommandID] {
+			normalized := byID[member.CommandID]
+			normalized.DependsOn = filterSelectedDependencies(normalized.DependsOn, selected)
+			out = append(out, normalized)
+		}
+	}
+	return out, nil
+}
+
+func filterSelectedDependencies(dependencies []string, selected map[string]bool) []string {
+	out := make([]string, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		if selected[dependency] {
+			out = append(out, dependency)
+		}
+	}
+	return out
+}
+
+func (m *Manager) waitStackMember(ctx context.Context, member domain.StackMember, initial *domain.Run) error {
+	if member.WaitFor == "" || member.WaitFor == "spawn" {
+		return nil
+	}
+	timeout := time.Duration(member.WaitTimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	current := initial
+	for {
+		done, err := stackMemberCondition(current, member.WaitFor)
+		if done || err != nil {
+			return err
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("wait_for=%s timed out after %s", member.WaitFor, timeout)
+		case <-ticker.C:
+			stored, loadErr := m.store.Run(waitCtx, initial.ID)
+			if loadErr != nil {
+				return loadErr
+			}
+			current = stored
+		}
+	}
+}
+
+func stackMemberCondition(run *domain.Run, mode string) (bool, error) {
+	if run == nil {
+		return false, errors.New("member did not create or resolve a run")
+	}
+	if mode == "exit" {
+		if run.Active() {
+			return false, nil
+		}
+		if run.Status == domain.RunCompleted && (run.ExitCode == nil || *run.ExitCode == 0) {
+			return true, nil
+		}
+		return false, fmt.Errorf("run %s exited with status %s", run.ID, run.Status)
+	}
+	if mode != "ready" {
+		return false, fmt.Errorf("unsupported stack wait condition %q", mode)
+	}
+	if run.Readiness == domain.ReadinessReady {
+		return true, nil
+	}
+	if run.LifecycleAction == "start" || run.LifecycleAction == "restart" {
+		if len(run.PortVerifications) == 0 {
+			if !run.Active() && run.Status != domain.RunCompleted {
+				return false, fmt.Errorf("run %s exited before becoming ready", run.ID)
+			}
+			return false, nil
+		}
+		pending := false
+		for _, verification := range run.PortVerifications {
+			switch verification.Status {
+			case "verified", "preexisting":
+			case "pending":
+				pending = true
+			default:
+				return false, fmt.Errorf("expected port %d is %s", verification.Port, verification.Status)
+			}
+		}
+		return !pending, nil
+	}
+	if !run.Active() {
+		return false, fmt.Errorf("run %s exited before becoming ready", run.ID)
+	}
+	return false, nil
 }
 func (m *Manager) StopStack(ctx context.Context, id string) ([]domain.Run, error) {
 	s, err := m.store.Stack(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	ordered, err := stackDependencyOrder(s.Members)
+	if err != nil {
+		return nil, err
+	}
 	var out []domain.Run
-	for i := len(s.Members) - 1; i >= 0; i-- {
-		r, e := m.StopCommand(ctx, s.Members[i].CommandID)
+	for i := len(ordered) - 1; i >= 0; i-- {
+		r, e := m.StopCommand(ctx, ordered[i].CommandID)
 		if e != nil {
 			return out, e
 		}
 		out = append(out, r...)
+	}
+	return out, nil
+}
+
+func stackDependencyOrder(members []domain.StackMember) ([]domain.StackMember, error) {
+	byID := make(map[string]domain.StackMember, len(members))
+	for _, member := range members {
+		byID[member.CommandID] = member
+	}
+	visited, visiting := map[string]bool{}, map[string]bool{}
+	out := make([]domain.StackMember, 0, len(members))
+	var visit func(string) error
+	visit = func(id string) error {
+		if visiting[id] {
+			return fmt.Errorf("%w: stack dependency cycle includes command %s", store.ErrConflict, id)
+		}
+		if visited[id] {
+			return nil
+		}
+		member, ok := byID[id]
+		if !ok {
+			return fmt.Errorf("%w: stack dependency references unknown command %s", store.ErrConflict, id)
+		}
+		visiting[id] = true
+		for _, dependency := range member.DependsOn {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		delete(visiting, id)
+		visited[id] = true
+		out = append(out, member)
+		return nil
+	}
+	for _, member := range members {
+		if err := visit(member.CommandID); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -796,6 +1210,36 @@ func (m *Manager) observe() {
 		}
 		_ = m.store.UpdateRunObservation(ctx, r)
 		m.publish(*r)
+	}
+	m.observeExternalPortHealth(runs)
+}
+
+func (m *Manager) observeExternalPortHealth(runs []domain.Run) {
+	seen := map[string]bool{}
+	for i := range runs {
+		run := &runs[i]
+		if run.CommandDefinitionID == "" || run.LifecycleAction == "" || seen[run.CommandDefinitionID] {
+			continue
+		}
+		seen[run.CommandDefinitionID] = true
+		if len(run.PortVerifications) == 0 {
+			continue
+		}
+		changed := false
+		for j := range run.PortVerifications {
+			current := "closed"
+			if platform.PortListening(run.PortVerifications[j].Port) {
+				current = "listening"
+			}
+			if run.PortVerifications[j].Current != current {
+				run.PortVerifications[j].Current = current
+				run.PortVerifications[j].CheckedAt = time.Now().UTC()
+				changed = true
+			}
+		}
+		if changed {
+			m.saveExternalPortVerifications(run.ID, run.ExpectedPorts, run.PortVerifications)
+		}
 	}
 }
 

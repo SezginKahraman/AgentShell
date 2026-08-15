@@ -20,6 +20,8 @@ func TestRevision3InputValidation(t *testing.T) {
 		{"invalid direct run project", (RunInput{Command: "go test ./...", CWD: "/tmp/p", ProjectID: "bad id"}).validate(), "project_id"},
 		{"external service without stop", (SaveCommandInput{Name: "Infra", Command: "docker compose up -d", CWD: "/tmp/p", Kind: "service", LifecycleMode: "external"}).validate(), "stop_command"},
 		{"external task", (SaveCommandInput{Name: "Task", Command: "true", StopCommand: "true", CWD: "/tmp/p", Kind: "task", LifecycleMode: "external"}).validate(), "kind=service"},
+		{"invalid command collection", (SaveCommandInput{Name: "Task", Command: "true", CWD: "/tmp/p", Kind: "task", CollectionID: "bad id"}).validate(), "collection_id"},
+		{"duplicate stack subset", (StartStackInput{ID: "stack-1", CommandIDs: []string{"command-1", "command-1"}}).validate(), "duplicate"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

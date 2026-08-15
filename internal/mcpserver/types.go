@@ -521,6 +521,7 @@ type SaveCommandInput struct {
 	Shell             string            `json:"shell,omitempty" jsonschema:"Optional shell executable; use the daemon default when omitted"`
 	Kind              string            `json:"kind" jsonschema:"Command kind: service for long-running processes or task for finite jobs"`
 	ProjectID         string            `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
+	CollectionID      string            `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
 	Env               map[string]string `json:"env,omitempty" jsonschema:"Environment variable overrides"`
 	ExpectedPorts     []ExpectedPort    `json:"expected_ports,omitempty" jsonschema:"Ports expected when the saved command runs"`
 	Tags              []string          `json:"tags,omitempty" jsonschema:"Search and grouping tags"`
@@ -544,6 +545,13 @@ func (in SaveCommandInput) validate() error {
 	if !strings.HasPrefix(in.CWD, "/") {
 		return fmt.Errorf("cwd must be an absolute path")
 	}
+	for field, value := range map[string]string{"project_id": in.ProjectID, "collection_id": in.CollectionID} {
+		if value != "" {
+			if err := identifier(field, value); err != nil {
+				return err
+			}
+		}
+	}
 	if err := oneOf("kind", in.Kind, "service", "task"); err != nil {
 		return err
 	}
@@ -564,6 +572,7 @@ type UpdateCommandInput struct {
 	Shell             *string            `json:"shell,omitempty" jsonschema:"New shell executable"`
 	Kind              *string            `json:"kind,omitempty" jsonschema:"New kind: service or task"`
 	ProjectID         *string            `json:"project_id,omitempty" jsonschema:"New project identifier"`
+	CollectionID      *string            `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the launcher to the project root"`
 	Env               *map[string]string `json:"env,omitempty" jsonschema:"Replacement environment overrides"`
 	ExpectedPorts     *[]ExpectedPort    `json:"expected_ports,omitempty" jsonschema:"Replacement expected-port list"`
 	Tags              *[]string          `json:"tags,omitempty" jsonschema:"Replacement tag list"`
@@ -590,6 +599,13 @@ func (in UpdateCommandInput) validate() error {
 	}
 	if in.CWD != nil && !strings.HasPrefix(*in.CWD, "/") {
 		return fmt.Errorf("cwd must be an absolute path")
+	}
+	for field, value := range map[string]*string{"project_id": in.ProjectID, "collection_id": in.CollectionID} {
+		if value != nil && *value != "" {
+			if err := identifier(field, *value); err != nil {
+				return err
+			}
+		}
 	}
 	if in.Kind != nil {
 		if err := oneOf("kind", *in.Kind, "service", "task"); err != nil {
@@ -685,6 +701,8 @@ func (in RestartCommandInput) validate() error {
 type SaveStackInput struct {
 	Name          string   `json:"name" jsonschema:"Human-readable stack name"`
 	Description   string   `json:"description,omitempty" jsonschema:"Purpose of this collection of saved commands"`
+	ProjectID     string   `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
+	CollectionID  string   `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
 	CommandIDs    []string `json:"command_ids" jsonschema:"Ordered saved command identifiers included in the stack"`
 	StartStrategy string   `json:"start_strategy,omitempty" jsonschema:"Start strategy: parallel or sequential"`
 	FailurePolicy string   `json:"failure_policy,omitempty" jsonschema:"Behavior after a member fails: continue or stop"`
@@ -697,6 +715,13 @@ func (in SaveStackInput) validate() error {
 	}
 	if len(in.CommandIDs) == 0 {
 		return fmt.Errorf("command_ids must contain at least one command")
+	}
+	for field, value := range map[string]string{"project_id": in.ProjectID, "collection_id": in.CollectionID} {
+		if value != "" {
+			if err := identifier(field, value); err != nil {
+				return err
+			}
+		}
 	}
 	if err := uniqueNonEmpty("command_ids", in.CommandIDs); err != nil {
 		return err
@@ -711,6 +736,8 @@ type UpdateStackInput struct {
 	ID            string    `json:"id" jsonschema:"Stack identifier"`
 	Name          *string   `json:"name,omitempty" jsonschema:"New stack name"`
 	Description   *string   `json:"description,omitempty" jsonschema:"New description"`
+	ProjectID     *string   `json:"project_id,omitempty" jsonschema:"New owning project identifier; empty makes the stack global"`
+	CollectionID  *string   `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the stack to the project root"`
 	CommandIDs    *[]string `json:"command_ids,omitempty" jsonschema:"Replacement ordered command identifiers"`
 	StartStrategy *string   `json:"start_strategy,omitempty" jsonschema:"New start strategy: parallel or sequential"`
 	FailurePolicy *string   `json:"failure_policy,omitempty" jsonschema:"New failure policy: continue or stop"`
@@ -724,6 +751,13 @@ func (in UpdateStackInput) validate() error {
 	if in.Name != nil {
 		if err := required("name", *in.Name); err != nil {
 			return err
+		}
+	}
+	for field, value := range map[string]*string{"project_id": in.ProjectID, "collection_id": in.CollectionID} {
+		if value != nil && *value != "" {
+			if err := identifier(field, *value); err != nil {
+				return err
+			}
 		}
 	}
 	if in.CommandIDs != nil {
@@ -748,11 +782,18 @@ func (in UpdateStackInput) validate() error {
 }
 
 type StartStackInput struct {
-	ID string `json:"id" jsonschema:"Stack identifier"`
+	ID         string   `json:"id" jsonschema:"Stack identifier"`
+	CommandIDs []string `json:"command_ids,omitempty" jsonschema:"Optional non-empty subset of this stack's command identifiers to start; omitted starts all non-running members"`
 }
 
 func (in StartStackInput) validate() error {
-	return identifier("id", in.ID)
+	if err := identifier("id", in.ID); err != nil {
+		return err
+	}
+	if len(in.CommandIDs) > 0 {
+		return uniqueNonEmpty("command_ids", in.CommandIDs)
+	}
+	return nil
 }
 
 type StopStackInput struct {

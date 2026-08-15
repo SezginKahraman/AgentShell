@@ -4,15 +4,18 @@ import {
   ExternalLink, FileTerminal, Gauge, History, LayoutDashboard, ListChecks, Menu, Moon,
   Network, Play, Plus, RefreshCw, RotateCcw, Search, Server, Settings, Sparkles, Square,
   Power, Star, Terminal, Unplug, X, Zap, FolderKanban, FolderOpen, BookmarkPlus, ScrollText,
-  Layers3, Check, Tag, Save, ArrowRight, Globe2,
+  Layers3, Check, Tag, Save, ArrowRight, Globe2, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Sun,
 } from 'lucide-react'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
-import type { Collection, CollectionInput, Listener, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from './types'
+import type { Collection, CollectionInput, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack } from './types'
 
 type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details'
 type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script'
+type DeleteTarget = { type: 'command'; item: SavedCommand } | { type: 'stack'; item: Stack }
+type CatalogSort = 'default' | 'running' | 'stopped' | 'port'
+type Theme = 'light' | 'dark'
 
 const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [] }
 const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
@@ -32,8 +35,8 @@ function Status({ value = 'unknown' }: { value?: string }) {
   return <span className={`status status-${value}`}><i />{value.replace('_', ' ')}</span>
 }
 
-function IconButton({ label, children, onClick, danger, disabled, testId }: { label: string; children: React.ReactNode; onClick?: () => void; danger?: boolean; disabled?: boolean; testId?: string }) {
-  return <button data-testid={testId} className={`icon-button ${danger ? 'danger' : ''}`} aria-label={label} title={label} onClick={onClick} disabled={disabled}>{children}</button>
+function IconButton({ label, children, onClick, danger, disabled, testId, pressed }: { label: string; children: React.ReactNode; onClick?: () => void; danger?: boolean; disabled?: boolean; testId?: string; pressed?: boolean }) {
+  return <button data-testid={testId} className={`icon-button ${danger ? 'danger' : ''}`} aria-label={label} aria-pressed={pressed} title={label} onClick={onClick} disabled={disabled}>{children}</button>
 }
 
 function Sidebar({ page, setPage, open, close, runtime, mode }: { page: Page; setPage: (p: Page) => void; open: boolean; close: () => void; runtime?: RuntimeInfo; mode: AgentShellApi['mode'] }) {
@@ -100,20 +103,67 @@ function RunCard({ run, select, act, busy, accepting = true }: { run: Run; selec
 function HistoryTable({ runs, onSelect, onRunAgain, onPromote, full = false, accepting = true }: { runs: Run[]; onSelect: (r: Run, tab?: DetailTab) => void; onRunAgain?: (r: Run) => void; onPromote?: (r: Run) => void; full?: boolean; accepting?: boolean }) {
   const shown = full ? runs : runs.slice(0, 5)
   const showActions = full || !!onPromote
-  return <div className="table-wrap history-table"><table><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at, run.ended_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
+  return <div className="table-wrap history-table"><table className={full ? 'history-full' : ''}><colgroup><col className="history-time" /><col className="history-command" /><col className="history-status" /><col className="history-duration" /><col className="history-source" />{showActions && <col className="history-action-column" />}</colgroup><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" title={run.command} onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at, run.ended_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
 }
 
 function PortsTable({ ports, full = false }: { ports: Listener[]; full?: boolean }) {
   const shown = full ? ports : ports.slice(0, 5)
-  return <div className="table-wrap"><table><thead><tr><th>Port</th><th>Service</th><th>Run</th><th>PID</th><th>Status</th><th /></tr></thead><tbody>{shown.map((port, index) => <tr key={`${port.port}-${index}`}><td><strong>{port.port}</strong></td><td>{port.name ?? port.protocol ?? 'Unknown'}</td><td>{port.run_label ?? '—'}</td><td>{port.pid ?? '—'}</td><td><Status value={port.status ?? 'listening'} /></td><td><PortAction port={port} /></td></tr>)}</tbody></table></div>
+  return <div className="table-wrap"><table><thead><tr><th>Port</th><th>Service</th><th>Run</th><th>PID</th><th>Status</th><th /></tr></thead><tbody>{shown.map((port, index) => <tr key={`${port.port}-${index}`}><td><strong>{port.port}</strong></td><td>{port.name ?? port.protocol ?? 'Unknown'}</td><td>{port.run_label ?? '—'}</td><td>{port.pid || '—'}</td><td><Status value={port.status ?? 'listening'} />{port.attribution === 'external' && <small className="port-attribution">External transition · {port.confidence ?? 'inferred'} confidence</small>}</td><td><PortAction port={port} /></td></tr>)}</tbody></table></div>
 }
 
 function Panel({ title, action, children, className = '' }: { title: string; action?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return <section className={`panel ${className}`}><header><h2>{title}</h2>{action}</header>{children}</section>
 }
 
-function Dashboard({ data, select, runAction, busy, navigate, promote, accepting }: { data: Snapshot; select: (r: Run, tab?: DetailTab) => void; runAction: (r: Run, a: 'stop' | 'restart') => void; busy: string; navigate: (p: Page) => void; promote: (r: Run) => void; accepting: boolean }) {
+function QuickLaunchPanel({ data, busy, accepting, commandAction, stackAction, openCommand, openStack, manage }: { data: Snapshot; busy: string; accepting: boolean; commandAction: (command: SavedCommand, action: 'start' | 'stop' | 'restart') => void; stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart') => void; openCommand: (command: SavedCommand) => void; openStack: (stack: Stack) => void; manage: () => void }) {
+  const commands = data.commands.filter(command => command.favorite)
+  const stacks = data.stacks.filter(stack => stack.favorite)
+  const scope = (projectID?: string, collectionID?: string) => {
+    const project = data.projects.find(item => item.id === projectID)?.name ?? (projectID ? 'Unknown project' : 'Global catalog')
+    const collection = data.collections.find(item => item.id === collectionID)?.name
+    return collection ? `${project} · ${collection}` : project
+  }
+
+  return <Panel className="quick-launch-panel" title="Favorites & Quick launch" action={<button className="text-button" onClick={manage}>Manage library <ChevronRight /></button>}>
+    {!commands.length && !stacks.length ? <Empty title="No favorites yet" detail="Star a saved launcher or stack to keep it ready here." /> : <div className="quick-launch-grid">
+      {commands.map(command => {
+        const canStop = command.can_stop ?? running(command.status)
+        return <article className="quick-launch-card" key={command.id} data-testid={`quick-command-${command.id}`}>
+          <button className="quick-launch-main" onClick={() => openCommand(command)} aria-label={`View ${command.name} details`}>
+            <span className="quick-launch-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span>
+            <span className="quick-launch-copy"><span><strong>{command.name}</strong><small>{command.kind}</small></span><Status value={command.status} /><code>{command.command}</code><em>{scope(command.project_id, command.collection_id)}</em></span>
+          </button>
+          <footer>
+            {command.status === 'stopping' ? <button className="button small danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <>
+              <button data-testid={`quick-stop-command-${command.id}`} className="button small danger" onClick={() => commandAction(command, 'stop')} disabled={busy === command.id}><Square /> Stop</button>
+              <IconButton testId={`quick-restart-command-${command.id}`} label={`Restart ${command.name}`} onClick={() => commandAction(command, 'restart')} disabled={busy === command.id || !accepting}><RotateCcw /></IconButton>
+            </> : <button data-testid={`quick-start-command-${command.id}`} className="button small primary" onClick={() => commandAction(command, 'start')} disabled={busy === command.id || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}
+          </footer>
+        </article>
+      })}
+      {stacks.map(stack => {
+        const members = stack.members ?? stack.commands ?? []
+        const total = stack.total_count ?? members.length
+        const active = stack.running_count ?? members.filter(member => running(member.status)).length
+        const isActive = running(stack.status) || stack.status === 'partial' || active > 0
+        return <article className="quick-launch-card quick-launch-stack" key={stack.id} data-testid={`quick-stack-${stack.id}`}>
+          <button className="quick-launch-main" onClick={() => openStack(stack)} aria-label={`View ${stack.name} details`}>
+            <span className="quick-launch-icon"><Boxes /></span>
+            <span className="quick-launch-copy"><span><strong>{stack.name}</strong><small>stack · {active}/{total} running</small></span><Status value={stack.status} /><em>{scope(stack.project_id, stack.collection_id)}</em></span>
+          </button>
+          <footer>
+            {isActive && <button data-testid={`quick-stop-stack-${stack.id}`} className="button small danger" onClick={() => stackAction(stack, 'stop')} disabled={busy === stack.id}><Square /> Stop all</button>}
+            {(!isActive || active < total) && <button data-testid={`quick-start-stack-${stack.id}`} className="button small primary" onClick={() => stackAction(stack, 'start')} disabled={busy === stack.id || !accepting}><Play /> {isActive ? 'Start missing' : 'Start all'}</button>}
+          </footer>
+        </article>
+      })}
+    </div>}
+  </Panel>
+}
+
+function Dashboard({ data, select, runAction, busy, navigate, promote, accepting, commandAction, stackAction, openCommand, openStack }: { data: Snapshot; select: (r: Run, tab?: DetailTab) => void; runAction: (r: Run, a: 'stop' | 'restart') => void; busy: string; navigate: (p: Page) => void; promote: (r: Run) => void; accepting: boolean; commandAction: (command: SavedCommand, action: 'start' | 'stop' | 'restart') => void; stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart') => void; openCommand: (command: SavedCommand) => void; openStack: (stack: Stack) => void }) {
   return <><SummaryCards snapshot={data} />
+    <QuickLaunchPanel data={data} busy={busy} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={openCommand} openStack={openStack} manage={() => navigate('projects')} />
     <Panel title="Active Runs" action={<button className="text-button" onClick={() => navigate('runs')}>View all <ChevronRight /></button>}>
       <div className="run-list">{data.runs.filter(r => running(r.status)).slice(0, 3).map(run => <RunCard key={run.id} run={run} select={tab => select(run, tab)} act={a => runAction(run, a)} busy={busy === run.id} accepting={accepting} />)}{!data.runs.length && <Empty title="Nothing is running" detail="Start a saved service to see it here." />}</div>
     </Panel>
@@ -217,30 +267,60 @@ function provenance(command: SavedCommand) {
   return parts.join(' · ')
 }
 
+const portVerificationLabels: Record<PortVerification['status'], string> = {
+  pending: 'checking', verified: 'verified', preexisting: 'pre-existing', unavailable: 'unavailable', stopped: 'closed', still_listening: 'still listening',
+}
+
+function ExpectedPortChip({ port, verification, external }: { port: ExpectedPort; verification?: PortVerification; external: boolean }) {
+  const verifiedClosed = verification?.status === 'verified' && verification.current === 'closed'
+  const stoppedReopened = verification?.status === 'stopped' && verification.current === 'listening'
+  const unavailableNowListening = verification?.status === 'unavailable' && verification.current === 'listening'
+  const status = verifiedClosed ? 'verified-closed' : stoppedReopened ? 'stopped-reopened' : unavailableNowListening ? 'unattributed-open' : verification?.status ?? (external ? 'unverified' : 'managed')
+  const label = verifiedClosed ? 'verified · now closed' : stoppedReopened ? 'closed · now listening' : unavailableNowListening ? 'now listening · unattributed' : verification ? portVerificationLabels[verification.status] : external ? 'not verified' : ''
+  const title = verification
+    ? `Before: ${verification.before}; after: ${verification.after ?? 'checking'}; current: ${verification.current ?? verification.after ?? 'unknown'}. ${verification.confidence ? `${verification.confidence} confidence.` : 'Not attributed to this launcher.'}`
+    : external ? 'No external port transition has been observed yet.' : 'Verified through the managed process tree when running.'
+  return <span className={`expected-port-chip port-verification-${status}`} title={title}>:{port.port} {port.name}{label && <small>{label}</small>}</span>
+}
+
 function CommandCard({ command, action, favorite, open, busy, accepting }: { command: SavedCommand; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; open: () => void; busy: boolean; accepting: boolean }) {
   const isRunning = running(command.status)
   const canStop = command.can_stop ?? isRunning
   const activate = (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open() } }
-  return <article className="catalog-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`command-card-${command.id}`}><div className="catalog-top"><span className="catalog-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span><div><h3>{command.name}</h3><Status value={command.status} /></div><span onClick={event => event.stopPropagation()}><IconButton label={`${command.favorite ? 'Remove' : 'Add'} ${command.name} ${command.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={command.favorite ? 'favorite' : ''} fill={command.favorite ? 'currentColor' : 'none'} /></IconButton></span></div>{command.description && <p className="catalog-description">{command.description}</p>}<code>{command.command}</code><p>{command.cwd}</p><div className="chips">{command.lifecycle_mode === 'external' && <span>external lifecycle</span>}{command.expected_ports?.map(p => <span key={p.port}>:{p.port} {p.name}</span>)}{command.tags?.map(t => <span key={t}>{t}</span>)}</div>{command.state_detail && <small className="state-detail">{command.state_detail}</small>}{provenance(command) && <small className="provenance">{provenance(command)}</small>}<footer onClick={event => event.stopPropagation()}>{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button data-testid={`stop-command-${command.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button data-testid={`restart-command-${command.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button data-testid={`start-command-${command.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></article>
+  return <article className="catalog-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`command-card-${command.id}`}><div className="catalog-top"><span className="catalog-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span><div><h3>{command.name}</h3><Status value={command.status} /></div><span onClick={event => event.stopPropagation()}><IconButton label={`${command.favorite ? 'Remove' : 'Add'} ${command.name} ${command.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={command.favorite ? 'favorite' : ''} fill={command.favorite ? 'currentColor' : 'none'} /></IconButton></span></div>{command.description && <p className="catalog-description">{command.description}</p>}<code title={command.command}>{command.command}</code><p title={command.cwd}>{command.cwd}</p><div className="chips">{command.lifecycle_mode === 'external' && <span>external lifecycle</span>}{command.expected_ports?.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}{command.tags?.map(t => <span key={t}>{t}</span>)}</div>{command.state_detail && <small className="state-detail">{command.state_detail}</small>}{provenance(command) && <small className="provenance">{provenance(command)}</small>}<footer onClick={event => event.stopPropagation()}>{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button data-testid={`stop-command-${command.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button data-testid={`restart-command-${command.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button data-testid={`start-command-${command.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></article>
 }
 
-function StackCard({ stack, action, favorite, busy, accepting }: { stack: Stack; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; busy: boolean; accepting: boolean }) {
+function StackCard({ stack, action, favorite, remove, open, busy, accepting }: { stack: Stack; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; remove: () => void; open: () => void; busy: boolean; accepting: boolean }) {
   const members = stack.members ?? stack.commands ?? []
   const isRunning = running(stack.status) || stack.status === 'partial'
-  return <article className="stack-card" data-testid={`stack-card-${stack.id}`}><header><div><span className="eyebrow">STACK</span><h3>{stack.name}</h3><p>{stack.description}</p>{stack.created_by && <small className="provenance">Added by {stack.created_by}</small>}</div><div className="stack-summary"><IconButton label={`${stack.favorite ? 'Remove' : 'Add'} ${stack.name} ${stack.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={stack.favorite ? 'favorite' : ''} fill={stack.favorite ? 'currentColor' : 'none'} /></IconButton><div className="stack-count"><strong>{stack.running_count ?? members.filter(m => running(m.status)).length}/{stack.total_count ?? members.length}</strong><span>Running</span></div></div></header><div className="stack-members">{members.map(m => <div key={m.command_id}><Status value={m.status} /><span>{m.name ?? m.command?.name ?? m.command_id}</span></div>)}</div><footer>{isRunning && <><button data-testid={`stop-stack-${stack.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop all</button><button data-testid={`restart-stack-${stack.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button data-testid={`start-stack-${stack.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {isRunning ? 'Start missing' : 'Start all'}</button></footer></article>
+  const activate = (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open() } }
+  return <article className="stack-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`stack-card-${stack.id}`}><header><div><span className="eyebrow">STACK</span><h3>{stack.name}</h3><p>{stack.description}</p>{stack.created_by && <small className="provenance">Added by {stack.created_by}</small>}</div><div className="stack-summary" onClick={event => event.stopPropagation()}><IconButton label={`${stack.favorite ? 'Remove' : 'Add'} ${stack.name} ${stack.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={stack.favorite ? 'favorite' : ''} fill={stack.favorite ? 'currentColor' : 'none'} /></IconButton><div className="stack-count"><strong>{stack.running_count ?? members.filter(m => running(m.status)).length}/{stack.total_count ?? members.length}</strong><span>Running</span></div></div></header><div className="stack-members">{members.map(m => <div key={m.command_id}><Status value={m.status} /><span>{m.name ?? m.command?.name ?? m.command_id}</span></div>)}</div><footer onClick={event => event.stopPropagation()}><button data-testid={`delete-stack-${stack.id}`} className="button danger subtle" onClick={remove} disabled={busy || isRunning} title={isRunning ? 'Stop all stack members before deleting it' : `Delete ${stack.name}`}><Trash2 /> Delete</button>{isRunning && <><button data-testid={`stop-stack-${stack.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop all</button><button data-testid={`restart-stack-${stack.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button data-testid={`start-stack-${stack.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {isRunning ? 'Start missing' : 'Start all'}</button></footer></article>
 }
 
 interface CatalogHandlers {
   commandAction: (command: SavedCommand, action: 'start' | 'stop' | 'restart') => void
-  stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart') => void
+  stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) => void
   favoriteCommand: (command: SavedCommand) => void
-  favoriteStack: (stack: Stack) => void
+	favoriteStack: (stack: Stack) => void
 	openCommand: (command: SavedCommand) => void
+	openStack: (stack: Stack) => void
+	deleteStack: (stack: Stack) => void
 }
 
 function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accepting, handlers, selectRun, runAgain, promote, addCollection }: { data: Snapshot; selectedProject: string; setSelectedProject: (id: string) => void; busy: string; accepting: boolean; handlers: CatalogHandlers; selectRun: (run: Run, tab?: DetailTab) => void; runAgain: (run: Run) => void; promote: (run: Run) => void; addCollection: () => void }) {
   const [selectedCollection, setSelectedCollection] = useState('all')
+  const [favoritesOpen, setFavoritesOpen] = useState(() => {
+    try { return window.localStorage.getItem('agentshell.projects.favorites-open') !== 'false' } catch { return true }
+  })
+  const [catalogSort, setCatalogSort] = useState<CatalogSort>(() => {
+    try {
+      const saved = window.localStorage.getItem('agentshell.projects.sort')
+      return saved === 'running' || saved === 'stopped' || saved === 'port' ? saved : 'default'
+    } catch { return 'default' }
+  })
   useEffect(() => setSelectedCollection('all'), [selectedProject])
+  useEffect(() => { try { window.localStorage.setItem('agentshell.projects.favorites-open', String(favoritesOpen)) } catch { /* storage may be unavailable */ } }, [favoritesOpen])
+  useEffect(() => { try { window.localStorage.setItem('agentshell.projects.sort', catalogSort) } catch { /* storage may be unavailable */ } }, [catalogSort])
   const project = data.projects.find(item => item.id === selectedProject)
   const inScope = <T extends { project_id?: string }>(items: T[]) => items.filter(item => selectedProject === 'global' ? !item.project_id : item.project_id === selectedProject)
   const scopedCommands = inScope(data.commands)
@@ -249,11 +329,41 @@ function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accep
   const scopedCollections = inScope(data.collections).filter(item => !item.parent_id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
   const visibleCommands = selectedCollection === 'all' ? scopedCommands : scopedCommands.filter(item => item.collection_id === selectedCollection)
   const visibleStacks = selectedCollection === 'all' ? scopedStacks : scopedStacks.filter(item => item.collection_id === selectedCollection)
-  const favorites = [...scopedCommands.filter(item => item.favorite), ...scopedStacks.filter(item => item.favorite)]
+  const favoriteCommands = scopedCommands.filter(item => item.favorite)
+  const favoriteStacks = scopedStacks.filter(item => item.favorite)
+  const favoriteCount = favoriteCommands.length + favoriteStacks.length
   const scopeName = selectedProject === 'global' ? 'Global catalog' : project?.name ?? 'Project'
+  const commandsByID = new Map(data.commands.map(command => [command.id, command]))
+
+  type CatalogEntry = { type: 'command'; item: SavedCommand; originalIndex: number } | { type: 'stack'; item: Stack; originalIndex: number }
+  const isActive = (entry: CatalogEntry) => entry.type === 'command'
+    ? (entry.item.can_stop ?? running(entry.item.status))
+    : running(entry.item.status) || entry.item.status === 'partial' || (entry.item.running_count ?? 0) > 0
+  const lowestPort = (entry: CatalogEntry) => {
+    if (entry.type === 'command') return Math.min(...(entry.item.expected_ports ?? []).map(port => port.port), Number.POSITIVE_INFINITY)
+    const members = entry.item.members ?? entry.item.commands ?? []
+    return Math.min(...members.flatMap(member => (member.command ?? commandsByID.get(member.command_id))?.expected_ports?.map(port => port.port) ?? []), Number.POSITIVE_INFINITY)
+  }
+  const sortedEntries = (commands: SavedCommand[], stacks: Stack[]) => {
+    const entries: CatalogEntry[] = [
+      ...commands.map((item, originalIndex) => ({ type: 'command' as const, item, originalIndex })),
+      ...stacks.map((item, index) => ({ type: 'stack' as const, item, originalIndex: commands.length + index })),
+    ]
+    if (catalogSort === 'default') return entries
+    return entries.slice().sort((left, right) => {
+      if (catalogSort === 'port') {
+        const byPort = lowestPort(left) - lowestPort(right)
+        return Number.isNaN(byPort) || byPort === 0 ? left.originalIndex - right.originalIndex : byPort
+      }
+      const leftRank = isActive(left) === (catalogSort === 'running') ? 0 : 1
+      const rightRank = isActive(right) === (catalogSort === 'running') ? 0 : 1
+      return leftRank - rightRank || left.originalIndex - right.originalIndex
+    })
+  }
 
   const commandCard = (command: SavedCommand) => <CommandCard key={command.id} command={command} busy={busy === command.id} accepting={accepting} action={action => handlers.commandAction(command, action)} favorite={() => handlers.favoriteCommand(command)} open={() => handlers.openCommand(command)} />
-  const stackCard = (stack: Stack) => <StackCard key={stack.id} stack={stack} busy={busy === stack.id} accepting={accepting} action={action => handlers.stackAction(stack, action)} favorite={() => handlers.favoriteStack(stack)} />
+  const stackCard = (stack: Stack) => <StackCard key={stack.id} stack={stack} busy={busy === stack.id} accepting={accepting} action={action => handlers.stackAction(stack, action)} favorite={() => handlers.favoriteStack(stack)} remove={() => handlers.deleteStack(stack)} open={() => handlers.openStack(stack)} />
+  const catalogCards = (commands: SavedCommand[], stacks: Stack[]) => sortedEntries(commands, stacks).map(entry => entry.type === 'command' ? commandCard(entry.item) : stackCard(entry.item))
 
   return <div className="projects-layout" data-testid="projects-page">
     <aside className="project-rail" aria-label="Project scope">
@@ -263,18 +373,21 @@ function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accep
     </aside>
     <div className="project-content">
       <div className="project-heading"><div><div className="breadcrumbs"><span>Projects</span><ChevronRight /><strong>{scopeName}</strong>{selectedCollection !== 'all' && <><ChevronRight /><span>{scopedCollections.find(item => item.id === selectedCollection)?.name}</span></>}</div><h2>{scopeName}</h2><p>{project?.description ?? (selectedProject === 'global' ? 'Reusable launchers available across every workspace.' : project?.root_path)}</p></div><button className="button" data-testid="add-collection" onClick={addCollection}><Plus /> Collection</button></div>
-      <div className="collection-filter" role="group" aria-label="Filter by collection"><button className={selectedCollection === 'all' ? 'active' : ''} onClick={() => setSelectedCollection('all')}>All</button>{scopedCollections.map(item => <button className={selectedCollection === item.id ? 'active' : ''} onClick={() => setSelectedCollection(item.id)} key={item.id}>{item.name}</button>)}</div>
+      <div className="project-catalog-toolbar">
+        <div className="collection-filter" role="group" aria-label="Filter by collection"><button className={selectedCollection === 'all' ? 'active' : ''} onClick={() => setSelectedCollection('all')}>All</button>{scopedCollections.map(item => <button className={selectedCollection === item.id ? 'active' : ''} onClick={() => setSelectedCollection(item.id)} key={item.id}>{item.name}</button>)}</div>
+        <label className="catalog-sort"><ArrowUpDown /><span>Sort</span><select aria-label="Sort launchers" value={catalogSort} onChange={event => setCatalogSort(event.target.value as CatalogSort)}><option value="default">Default</option><option value="running">Running first</option><option value="stopped">Stopped first</option><option value="port">Port (low to high)</option></select></label>
+      </div>
 
-      {!!favorites.length && selectedCollection === 'all' && <Panel title="Pinned favorites" className="project-section"><div className="catalog-grid compact">{favorites.map(item => 'kind' in item ? commandCard(item as SavedCommand) : stackCard(item as Stack))}</div></Panel>}
+      {!!favoriteCount && selectedCollection === 'all' && <Panel title="Pinned favorites" className={`project-section favorites-section ${favoritesOpen ? '' : 'collapsed'}`} action={<button className="favorites-toggle" data-testid="toggle-pinned-favorites" aria-expanded={favoritesOpen} onClick={() => setFavoritesOpen(open => !open)}><span>{favoritesOpen ? 'Hide' : `Show ${favoriteCount}`}</span>{favoritesOpen ? <ChevronUp /> : <ChevronDown />}</button>}>{favoritesOpen ? <div className="catalog-grid compact">{catalogCards(favoriteCommands, favoriteStacks)}</div> : <span className="sr-only">{favoriteCount} pinned favorites hidden</span>}</Panel>}
 
       {scopedCollections.filter(collection => selectedCollection === 'all' || collection.id === selectedCollection).map(collection => {
         const collectionCommands = visibleCommands.filter(item => item.collection_id === collection.id)
         const collectionStacks = visibleStacks.filter(item => item.collection_id === collection.id)
         if (!collectionCommands.length && !collectionStacks.length) return <Panel key={collection.id} title={collection.name} className="project-section"><Empty title="Empty collection" detail="AI or you can add saved commands here." /></Panel>
-        return <Panel key={collection.id} title={collection.name} className="project-section"><div className="catalog-grid compact">{collectionCommands.map(commandCard)}{collectionStacks.map(stackCard)}</div></Panel>
+        return <Panel key={collection.id} title={collection.name} className="project-section"><div className="catalog-grid compact">{catalogCards(collectionCommands, collectionStacks)}</div></Panel>
       })}
 
-      {(() => { const looseCommands = visibleCommands.filter(item => !item.collection_id); const looseStacks = visibleStacks.filter(item => !item.collection_id); return (looseCommands.length || looseStacks.length) ? <Panel title={selectedProject === 'global' ? 'Global launchers' : 'Project launchers'} className="project-section"><div className="catalog-grid compact">{looseCommands.map(commandCard)}{looseStacks.map(stackCard)}</div></Panel> : null })()}
+      {(() => { const looseCommands = visibleCommands.filter(item => !item.collection_id); const looseStacks = visibleStacks.filter(item => !item.collection_id); return (looseCommands.length || looseStacks.length) ? <Panel title={selectedProject === 'global' ? 'Global launchers' : 'Project launchers'} className="project-section"><div className="catalog-grid compact">{catalogCards(looseCommands, looseStacks)}</div></Panel> : null })()}
 
       {!visibleCommands.length && !visibleStacks.length && !scopedCollections.length && <Empty title="No launchers in this scope" detail="Save one from History or let an AI add it through MCP." />}
       <Panel title="Project history" action={<span className="collection-description">{scopedHistory.length} runs</span>} className="project-section"><HistoryTable runs={scopedHistory.slice(0, 8)} onSelect={selectRun} onRunAgain={runAgain} onPromote={promote} accepting={accepting} full /></Panel>
@@ -348,7 +461,7 @@ function PromotionReceipt({ result, project, onView, close }: { result: PromoteR
   return <div className="receipt" role="status" data-testid="promotion-receipt"><span className="receipt-icon"><Check /></span><div><strong>{result.action === 'reused' ? 'Existing launcher reused' : 'Launcher saved'}</strong><p>{result.command.name}{project ? ` · ${project.name}` : ' · Global catalog'}</p></div><button className="button small" onClick={onView}>View {project ? 'project' : 'global'} <ArrowRight /></button><IconButton label="Dismiss receipt" onClick={close}><X /></IconButton></div>
 }
 
-function CommandDrawer({ command, project, collection, api, close, action, busy, accepting }: { command: SavedCommand; project?: Project; collection?: Collection; api: AgentShellApi; close: () => void; action: (a: 'start' | 'stop' | 'restart') => void; busy: boolean; accepting: boolean }) {
+function CommandDrawer({ command, project, collection, api, close, action, remove, busy, accepting }: { command: SavedCommand; project?: Project; collection?: Collection; api: AgentShellApi; close: () => void; action: (a: 'start' | 'stop' | 'restart') => void; remove: () => void; busy: boolean; accepting: boolean }) {
   const [tab, setTab] = useState<CommandDetailTab>('Overview')
   const [runs, setRuns] = useState<Run[]>(command.last_run ? [command.last_run] : [])
   const [source, setSource] = useState<{ available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }>({ available: false })
@@ -379,11 +492,33 @@ function CommandDrawer({ command, project, collection, api, close, action, busy,
   if (command.lifecycle_mode === 'external') overviewRows.push(['Stop command', command.stop_command ?? '—'], ['Restart command', command.restart_command || 'Stop, then start'])
   overviewRows.push(['Directory', command.cwd], ['Project', project?.name ?? 'Global catalog'], ['Collection', collection?.name ?? 'Project root'], ['Kind', command.kind], ['Lifecycle', command.lifecycle_mode ?? 'managed'], ['Shell', command.shell || '/bin/sh'], ['Concurrency', command.concurrency_policy ?? 'forbid'], ['Previous Runs', String(command.run_count ?? runs.length)])
   return <><button className="drawer-scrim" aria-label="Close launcher details" onClick={close} /><aside className="drawer command-drawer" data-testid="command-detail-drawer" aria-label={`${command.name} launcher details`}><header className="drawer-head"><div><h2>{command.name}</h2><Status value={command.status} /></div><IconButton label="Close launcher details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`command-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
-    {tab === 'Overview' && <><Definition rows={overviewRows} />{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <span key={port.port}>:{port.port} {port.name}</span>)}</div></>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
+    {tab === 'Overview' && <><Definition rows={overviewRows} />{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
     {tab === 'Runs' && (loading ? <Empty title="Loading Runs" detail="Reading launcher history." /> : runs.length ? <div className="command-runs">{runs.map(run => <button key={run.id} onClick={() => { setRunID(run.id); setTab('Logs') }}><div><strong>{run.lifecycle_action ? `${run.lifecycle_action} · ` : ''}{run.command}</strong><small>{run.started_at ? new Date(run.started_at).toLocaleString() : 'Not started'} · {duration(run.started_at, run.ended_at)}</small></div><Status value={run.status} /><ScrollText /></button>)}</div> : <Empty title="No previous Runs" detail="This launcher has not been started through AgentShell yet." />)}
     {tab === 'Logs' && <><label className="run-log-select">Run<select value={runID} onChange={event => setRunID(event.target.value)}><option value="">Select a Run</option>{runs.map(run => <option key={run.id} value={run.id}>{new Date(run.created_at ?? run.started_at ?? Date.now()).toLocaleString()} · {run.lifecycle_action ?? 'run'} · {run.status}</option>)}</select></label><pre className="log-view" data-testid="command-log-panel">{logs}</pre></>}
     {tab === 'Script' && <><div className="script-heading"><div><strong>{source.path}</strong><small>Read-only · loaded from the launcher working directory</small></div>{source.truncated && <span>First 512 KiB</span>}</div><pre className="script-view" data-testid="command-script-panel">{source.content || '# Empty script'}</pre></>}
-  </div><footer className="drawer-actions">{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></aside></>
+	  </div><footer className="drawer-actions command-drawer-actions"><button className="button danger subtle" data-testid={`delete-command-${command.id}`} onClick={remove} disabled={busy || canStop} title={canStop ? 'Stop the launcher before deleting it' : `Delete ${command.name}`}><Trash2 /> Delete</button><span />{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></aside></>
+}
+
+function StackDrawer({ stack, commands, project, collection, close, action, remove, busy, accepting }: { stack: Stack; commands: SavedCommand[]; project?: Project; collection?: Collection; close: () => void; action: (a: 'start' | 'stop' | 'restart', commandIDs?: string[]) => void; remove: () => void; busy: boolean; accepting: boolean }) {
+	const members = stack.members ?? stack.commands ?? []
+	const [selectedIDs, setSelectedIDs] = useState<string[]>([])
+	useEffect(() => setSelectedIDs([]), [stack.id])
+	const isActive = (member: (typeof members)[number]) => member.can_stop ?? running(member.status)
+	const available = members.filter(member => !isActive(member))
+	const allSelected = available.length > 0 && available.every(member => selectedIDs.includes(member.command_id))
+	const toggle = (id: string) => setSelectedIDs(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id])
+	const toggleAll = () => setSelectedIDs(allSelected ? [] : available.map(member => member.command_id))
+	const hasActive = members.some(isActive)
+	return <><button className="drawer-scrim" aria-label="Close stack details" onClick={close} /><aside className="drawer stack-drawer" data-testid="stack-detail-drawer" aria-label={`${stack.name} stack details`}><header className="drawer-head"><div><h2>{stack.name}</h2><Status value={stack.status} /></div><IconButton label="Close stack details" onClick={close}><X /></IconButton></header><div className="drawer-body">
+		{stack.description && <p className="stack-detail-description">{stack.description}</p>}
+		<Definition rows={[["Project", project?.name ?? "Global catalog"], ["Collection", collection?.name ?? "Project root"], ["Start strategy", stack.start_strategy ?? "parallel"], ["Failure policy", stack.failure_policy ?? "continue"], ["Members", `${stack.running_count ?? members.filter(isActive).length}/${stack.total_count ?? members.length} running`]]} />
+		<div className="stack-member-heading"><div><h3>Choose members to start</h3><small>Running members stay untouched.</small></div><button className="text-button" onClick={toggleAll} disabled={!available.length}>{allSelected ? "Clear" : "Select available"}</button></div>
+		<div className="stack-member-picker">{members.map(member => {
+			const command = commands.find(item => item.id === member.command_id) ?? member.command
+			const active = isActive(member)
+			return <label className={active ? "active" : ""} key={member.command_id}><input type="checkbox" checked={selectedIDs.includes(member.command_id)} disabled={active || busy} onChange={() => toggle(member.command_id)} /><span><strong>{member.name ?? command?.name ?? member.command_id}</strong><code>{command?.command ?? member.command_id}</code><small>{command?.cwd ?? "Saved stack member"}</small></span><Status value={member.status ?? "stopped"} /></label>
+		})}</div>
+	</div><footer className="drawer-actions stack-drawer-actions"><button className="button danger subtle" data-testid={`drawer-delete-stack-${stack.id}`} onClick={remove} disabled={busy || hasActive}><Trash2 /> Delete</button>{hasActive && <><button className="button danger" onClick={() => action("stop")} disabled={busy}><Square /> Stop all</button><button className="button" onClick={() => action("restart")} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button className="button primary" data-testid={`start-selected-stack-${stack.id}`} onClick={() => { action("start", selectedIDs); setSelectedIDs([]) }} disabled={busy || !accepting || selectedIDs.length === 0}><Play /> Start selected ({selectedIDs.length})</button></footer></aside></>
 }
 
 function DetailDrawer({ run, tab, setTab, close, api, action, busy, accepting }: { run: Run; tab: DetailTab; setTab: (t: DetailTab) => void; close: () => void; api: AgentShellApi; action: (a: 'stop' | 'restart') => void; busy: boolean; accepting: boolean }) {
@@ -421,11 +556,17 @@ function ShutdownDialog({ data, close, confirm, busy, mode }: { data: Snapshot; 
   return <><button className="modal-scrim" aria-label="Cancel shutdown" onClick={close} /><section className="modal" role="dialog" aria-modal="true" aria-labelledby="shutdown-title"><span className="modal-icon"><Power /></span><h2 id="shutdown-title">Stop AgentShell?</h2><p>{mode === 'demo' ? 'This stops only the isolated browser demo.' : 'The runtime will gracefully stop every process group it manages, then close the dashboard API.'}</p><div className="shutdown-impact"><div><strong>{activeRuns.length}</strong><span>active runs</span></div><div><strong>{data.ports.length}</strong><span>listening ports</span></div></div>{activeRuns.length > 0 && <ul>{activeRuns.slice(0, 5).map(run => <li key={run.id}><span>{run.label}{run.listeners?.length ? <em>{run.listeners.map(listener => `:${listener.port}`).join(' ')}</em> : null}</span><code>{run.command}</code></li>)}</ul>}<footer><button className="button" onClick={close} disabled={busy}>Cancel</button><button className="button danger" data-testid="confirm-shutdown" onClick={confirm} disabled={busy}><Power />{busy ? 'Stopping…' : 'Stop runtime and runs'}</button></footer></section></>
 }
 
+function DeleteSavedDialog({ target, close, confirm, busy }: { target: DeleteTarget; close: () => void; confirm: () => void; busy: boolean }) {
+	const command = target.type === 'command'
+	return <><button className="modal-scrim" aria-label="Cancel delete" onClick={close} /><section className="modal delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" data-testid="delete-saved-dialog"><span className="modal-icon"><Trash2 /></span><h2 id="delete-title">Delete {command ? 'launcher' : 'stack'}?</h2><p><strong>{target.item.name}</strong> will be removed from the saved catalog.</p><div className="delete-note">{command ? 'Previous Runs, logs, and History entries are retained. A launcher used by a stack cannot be deleted until it is removed from that stack.' : 'The launchers inside this stack are kept. Only the saved grouping is deleted.'}</div><footer><button className="button" onClick={close} disabled={busy}>Cancel</button><button className="button danger" data-testid="confirm-delete-saved" onClick={confirm} disabled={busy}><Trash2 />{busy ? 'Deleting…' : `Delete ${command ? 'launcher' : 'stack'}`}</button></footer></section></>
+}
+
 function StoppedScreen({ mode }: { mode: AgentShellApi['mode'] }) {
   return <main className="stopped-screen" role="status"><div className="stopped-mark"><Unplug /></div><h1>{mode === 'demo' ? 'Demo runtime stopped' : 'AgentShell stopped'}</h1><p>{mode === 'demo' ? 'Reload the page to reset the isolated demo adapter.' : 'The Runtime and all AgentShell-managed processes have stopped. This page no longer reports a live connection.'}</p>{mode === 'live' && <code>./start.sh</code>}</main>
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<Theme>(() => document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light')
   const [api, setApi] = useState<AgentShellApi | null>(null)
   const [fallback, setFallback] = useState<string>()
   const [data, setData] = useState(empty)
@@ -434,6 +575,8 @@ export default function App() {
   const [sidebar, setSidebar] = useState(false)
   const [selected, setSelected] = useState<Run | null>(null)
 	const [selectedCommandID, setSelectedCommandID] = useState('')
+	const [selectedStackID, setSelectedStackID] = useState('')
+	const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [tab, setTab] = useState<DetailTab>('Overview')
   const [busy, setBusy] = useState('')
   const [query, setQuery] = useState('')
@@ -446,6 +589,12 @@ export default function App() {
   const [collectionOpen, setCollectionOpen] = useState(false)
   const shutdownPollFailures = useRef(0)
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try { window.localStorage.setItem('agentshell.theme', theme) } catch { /* storage may be unavailable */ }
+    const background = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()
+    if (background) document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background)
+  }, [theme])
   useEffect(() => { resolveApi().then(result => { setApi(result.api); setFallback(result.fallbackReason) }) }, [])
   const reload = useCallback(async () => { if (!api) return; try { const [snapshot, runtimeInfo] = await Promise.all([api.getSnapshot(), api.getRuntime()]); setData(snapshot); setRuntime(runtimeInfo); setError(undefined) } catch (e) { if (!shutdownRequested) setError(e instanceof Error ? e.message : 'Unable to load data') } }, [api, shutdownRequested])
   useEffect(() => { if (!api || runtime?.status === 'stopped') return; reload(); return api.subscribe(reload) }, [api, reload, runtime?.status])
@@ -462,8 +611,24 @@ export default function App() {
   const favoriteCommand = (command: SavedCommand) => api && perform(command.id, () => api.updateCommand(command.id, { favorite: !command.favorite }).then(() => undefined))
   const favoriteStack = (stack: Stack) => api && perform(stack.id, () => api.updateStack(stack.id, { favorite: !stack.favorite }).then(() => undefined))
   const commandAction = (command: SavedCommand, action: 'start' | 'stop' | 'restart') => api && (action === 'stop' || accepting) && perform(command.id, () => api.commandAction(command.id, action))
-  const stackAction = (stack: Stack, action: 'start' | 'stop' | 'restart') => api && (action === 'stop' || accepting) && perform(stack.id, () => api.stackAction(stack.id, action))
-  const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => setSelectedCommandID(command.id) }
+  const stackAction = (stack: Stack, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) => api && (action === 'stop' || accepting) && perform(stack.id, () => api.stackAction(stack.id, action, commandIDs))
+	const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => setSelectedCommandID(command.id), openStack: stack => setSelectedStackID(stack.id), deleteStack: stack => setDeleteTarget({ type: 'stack', item: stack }) }
+	const deleteSaved = async () => {
+		if (!api || !deleteTarget) return
+		const target = deleteTarget
+		setBusy(target.item.id)
+		try {
+			if (target.type === 'command') await api.deleteCommand(target.item.id)
+			else await api.deleteStack(target.item.id)
+			if (target.type === 'command' && selectedCommandID === target.item.id) setSelectedCommandID('')
+			if (target.type === 'stack' && selectedStackID === target.item.id) setSelectedStackID('')
+			setDeleteTarget(null)
+			await reload()
+		} catch (e) {
+			setDeleteTarget(null)
+			setError(e instanceof Error ? e.message : 'Unable to delete saved item')
+		} finally { setBusy('') }
+	}
   const savePromotion = async (input: PromoteRunInput) => {
     if (!api || !promoteRun) return
     setBusy(`promote-${promoteRun.id}`)
@@ -501,18 +666,19 @@ export default function App() {
   const filter = <T extends { name?: string; label?: string; command?: string }>(items: T[]) => items.filter(i => `${i.name} ${i.label} ${i.command}`.toLowerCase().includes(query.toLowerCase()))
   const commands = filter(data.commands)
 	const selectedCommand = data.commands.find(command => command.id === selectedCommandID)
+	const selectedStack = data.stacks.find(stack => stack.id === selectedStackID)
 
   if (runtime?.status === 'stopped') return <StoppedScreen mode={api?.mode ?? 'live'} />
 
   return <div className={`app-shell runtime-${runtime?.status ?? 'loading'}`}>
     <Sidebar page={page} setPage={setPage} open={sidebar} close={() => setSidebar(false)} runtime={runtime} mode={api?.mode ?? 'live'} />
     <main className="main">
-      <header className="topbar"><div className="page-title"><IconButton label="Open navigation" onClick={() => setSidebar(true)}><Menu /></IconButton><div><h1>{titles[page][0]}</h1><p>{titles[page][1]}</p></div></div><div className="top-actions"><label className="search"><Search /><input aria-label="Search" placeholder="Search…" value={query} onChange={e => setQuery(e.target.value)} /></label><button className="button" aria-label="Choose a saved service to run" onClick={() => setPage('services')} disabled={!accepting}><Plus /> New Run</button><IconButton label="Theme settings coming soon" disabled><Moon /></IconButton><IconButton label="Open settings" onClick={() => setPage('settings')}><Settings /></IconButton></div></header>
+      <header className="topbar"><div className="page-title"><IconButton label="Open navigation" onClick={() => setSidebar(true)}><Menu /></IconButton><div><h1>{titles[page][0]}</h1><p>{titles[page][1]}</p></div></div><div className="top-actions"><label className="search"><Search /><input aria-label="Search" placeholder="Search…" value={query} onChange={e => setQuery(e.target.value)} /></label><button className="button primary new-run" aria-label="Choose a saved service to run" onClick={() => setPage('services')} disabled={!accepting}><Plus /> New Run</button><IconButton testId="theme-toggle" label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} pressed={theme === 'dark'} onClick={() => setTheme(current => current === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <Sun /> : <Moon />}</IconButton><IconButton label="Open settings" onClick={() => setPage('settings')}><Settings /></IconButton></div></header>
       {runtime?.status === 'stopping' && <div className="stopping-banner" role="status"><RefreshCw /><span><strong>AgentShell is stopping.</strong> New starts are disabled while managed processes shut down.</span></div>}
       {fallback && <div className="demo-banner" role="status"><Sparkles /><span><strong>Demo data</strong> — no live Runtime data is shown ({fallback}). Actions stay inside the isolated browser demo adapter.</span></div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={reload}>Try again</button></div>}
       <div className="content">
-        {page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} />}
+        {page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={command => setSelectedCommandID(command.id)} openStack={stack => setSelectedStackID(stack.id)} />}
         {page === 'runs' && <Panel title={`${filter(data.runs).filter(r => running(r.status)).length} active runs`}><div className="run-list">{filter(data.runs).filter(r => running(r.status)).map(r => <RunCard key={r.id} run={r} select={tab => select(r, tab)} act={a => runAction(r, a)} busy={busy === r.id} accepting={accepting} />)}</div></Panel>}
         {page === 'ports' && <Panel title={`${data.ports.length} listening ports`}><PortsTable ports={data.ports} full /></Panel>}
         {page === 'logs' && api && <LogsPage data={data} api={api} />}
@@ -520,15 +686,17 @@ export default function App() {
         {page === 'projects' && <ProjectCatalog data={data} selectedProject={selectedProject} setSelectedProject={setSelectedProject} busy={busy} accepting={accepting} handlers={catalogHandlers} selectRun={select} runAgain={runAgain} promote={setPromoteRun} addCollection={() => setCollectionOpen(true)} />}
         {page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => setSelectedCommandID(c.id)} />)}</div>}
         {page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => setSelectedCommandID(c.id)} />)}</div>}
-        {page === 'stacks' && <div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} />)}</div>}
+		{page === 'stacks' && <div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} remove={() => setDeleteTarget({ type: 'stack', item: s })} open={() => setSelectedStackID(s.id)} />)}</div>}
         {page === 'settings' && api && <SettingsPage runtime={runtime} mode={api.mode} onShutdown={() => setShutdownOpen(true)} />}
       </div>
     </main>
     {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} api={api} action={a => runAction(selected, a)} busy={busy === selected.id} accepting={accepting} />}
-	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} api={api} close={() => setSelectedCommandID('')} action={action => commandAction(selectedCommand, action)} busy={busy === selectedCommand.id} accepting={accepting} />}
+	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} api={api} close={() => setSelectedCommandID('')} action={action => commandAction(selectedCommand, action)} remove={() => setDeleteTarget({ type: 'command', item: selectedCommand })} busy={busy === selectedCommand.id} accepting={accepting} />}
+	{selectedStack && <StackDrawer stack={selectedStack} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} close={() => setSelectedStackID('')} action={(action, commandIDs) => stackAction(selectedStack, action, commandIDs)} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} accepting={accepting} />}
     {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}
     {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === selectedProject)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
     {promotionReceipt && <PromotionReceipt result={promotionReceipt} project={data.projects.find(item => item.id === promotionReceipt.command.project_id)} onView={() => { setPage('projects'); setSelectedProject(promotionReceipt.command.project_id ?? 'global'); setPromotionReceipt(null) }} close={() => setPromotionReceipt(null)} />}
-    {shutdownOpen && api && <ShutdownDialog data={data} close={() => setShutdownOpen(false)} confirm={shutdown} busy={busy === 'runtime-shutdown'} mode={api.mode} />}
+	{shutdownOpen && api && <ShutdownDialog data={data} close={() => setShutdownOpen(false)} confirm={shutdown} busy={busy === 'runtime-shutdown'} mode={api.mode} />}
+	{deleteTarget && <DeleteSavedDialog target={deleteTarget} close={() => setDeleteTarget(null)} confirm={deleteSaved} busy={busy === deleteTarget.item.id} />}
   </div>
 }
