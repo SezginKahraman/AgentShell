@@ -15,6 +15,7 @@ export interface Run {
   shell?: string
   kind?: 'service' | 'task'
   source?: string
+	output_preview?: string
   status: RunStatus
   readiness?: Readiness
   root_pid?: number
@@ -33,6 +34,9 @@ export interface Run {
   stack_run_id?: string
 	project_id?: string
 	lifecycle_action?: 'start' | 'stop' | 'restart'
+	check_definition_id?: string
+	check_owner_type?: 'stack' | 'command' | 'run'
+	check_owner_id?: string
 }
 
 export interface Summary { running: number; ports: number; failed: number; commands: number }
@@ -64,16 +68,42 @@ export interface SavedCommand {
 	parameters?: CommandParameter[]
 	can_stop?: boolean
 	state_detail?: string
+	observed_state?: 'running' | 'stopped' | 'checking' | 'unknown'
+	state_confidence?: 'high' | 'observed' | 'action' | 'unknown'
 	port_verifications?: PortVerification[]
 	run_count?: number
 }
 
 export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
-export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; status?: RunStatus; active_run_id?: string; can_stop?: boolean }
-export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
+export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; status?: RunStatus; lifecycle_mode?: 'managed' | 'external'; observed_state?: 'running' | 'stopped' | 'checking' | 'unknown'; state_confidence?: 'high' | 'observed' | 'action' | 'unknown'; state_detail?: string; port_verifications?: PortVerification[]; active_run_id?: string; can_stop?: boolean }
+export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; unknown_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
 export interface StackInput { name: string; description?: string; project_id?: string; collection_id?: string; members: StackMember[]; favorite?: boolean; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
 export interface LogResponse { run_id: string; stream: string; content: string }
+
+export interface CheckDefinition {
+	id: string
+	owner_type: 'stack' | 'command' | 'run'
+	owner_id: string
+	name: string
+	description?: string
+	kind: 'http' | 'command'
+	command_id?: string
+	http_method?: 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
+	http_url?: string
+	http_scope?: 'local' | 'remote'
+	http_headers?: Record<string, string>
+	http_body?: string
+	expected_status?: number[]
+	body_contains?: string
+	timeout_ms?: number
+	trigger?: 'manual' | 'after_ready'
+	tags?: string[]
+	created_by?: string
+	last_run?: Run
+	run_count?: number
+}
+export type CheckInput = Omit<CheckDefinition, 'id' | 'last_run' | 'run_count'>
 
 export interface Project { id: string; name: string; root_path: string; description?: string; created_at?: string; updated_at?: string }
 export interface ProjectInput { name: string; root_path: string }
@@ -112,4 +142,5 @@ export interface Snapshot {
   stacks: Stack[]
   projects: Project[]
   collections: Collection[]
+	checks: CheckDefinition[]
 }

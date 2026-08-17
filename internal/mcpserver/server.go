@@ -28,7 +28,7 @@ func RunStdio(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	client := &daemonClient{config: normalized}
+	client := newDaemonClient(normalized)
 	if _, err = client.do(ctx, http.MethodGet, "/api/runtime", nil, nil); err != nil {
 		return fmt.Errorf("connect MCP bridge to AgentShell Runtime: %w", err)
 	}
@@ -47,8 +47,10 @@ func NewServer(cfg Config) (*mcp.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	client := &daemonClient{config: normalized}
-	return newServer(normalized, client, nil), nil
+	client := newDaemonClient(normalized)
+	return newServer(normalized, client, func(_ context.Context, request *mcp.InitializedRequest) {
+		client.setSource(initializedClientName(request, normalized.clientName))
+	}), nil
 }
 
 func newServer(normalized normalizedConfig, client *daemonClient, initialized func(context.Context, *mcp.InitializedRequest)) *mcp.Server {
@@ -57,7 +59,7 @@ func newServer(normalized normalizedConfig, client *daemonClient, initialized fu
 		Title:   "AgentShell local runtime manager",
 		Version: normalized.version,
 	}, &mcp.ServerOptions{
-		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When a launcher needs runtime input, define parameters on the saved command. Use type=secret with binding=stdin for credentials; never place real secrets in command, env, defaults, catalog metadata, descriptions, logs, or chat. Prefer asking the user to enter secrets in the AgentShell dashboard; only pass parameters to a start tool when the user explicitly supplied the values, and never repeat them. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime.",
+		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When a launcher needs runtime input, define parameters on the saved command. Use type=secret with binding=stdin for credentials; never place real secrets in command, env, defaults, catalog metadata, descriptions, logs, or chat. Prefer asking the user to enter secrets in the AgentShell dashboard; only pass parameters to a start tool when the user explicitly supplied the values, and never repeat them. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. Attach reusable verifications with save_check: native HTTP checks default to http_scope=local; set http_scope=remote explicitly for a remote test environment and describe the target clearly. For bash or .sh verification, first save a managed task and reference it with kind=command. A check owner may be a stack, command, or Run. after_ready is stack-only and must not require interactive parameters. Never store credentials in HTTP check URLs, headers, or bodies, and do not aim remote checks at infrastructure metadata or control-plane endpoints. Every check execution is a normal Run with inspectable logs. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime.",
 		InitializedHandler: initialized,
 	})
 	registerRuntimeTools(server, client)
@@ -83,6 +85,7 @@ func (b *bridgeLeasing) Connect(ctx context.Context, name string) {
 	if err != nil {
 		return
 	}
+	b.client.setSource(name)
 	heartbeatCtx, cancel := context.WithCancel(b.ctx)
 	b.lease = lease
 	b.cancel = cancel
@@ -138,6 +141,33 @@ func keepMCPLease(ctx context.Context, client *daemonClient, lease runtimeLease)
 
 type validator[T any] func(T) error
 type toolHandler[T any] func(context.Context, T) (map[string]any, error)
+type toolClientSourceContextKey struct{}
+
+func withToolClientSource(ctx context.Context, request *mcp.CallToolRequest) context.Context {
+	if request == nil {
+		return ctx
+	}
+	info := request.ClientInfo()
+	if info == nil {
+		return ctx
+	}
+	name := strings.TrimSpace(info.Title)
+	if name == "" {
+		name = strings.TrimSpace(info.Name)
+	}
+	if name == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolClientSourceContextKey{}, name)
+}
+
+func toolClientSource(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	source, _ := ctx.Value(toolClientSourceContextKey{}).(string)
+	return source
+}
 
 func addTool[T any](server *mcp.Server, name, title, description string, annotations *mcp.ToolAnnotations, validate validator[T], handler toolHandler[T]) {
 	if annotations != nil && annotations.Title == "" {
@@ -147,7 +177,8 @@ func addTool[T any](server *mcp.Server, name, title, description string, annotat
 		Name:        name,
 		Description: description,
 		Annotations: annotations,
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input T) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, request *mcp.CallToolRequest, input T) (*mcp.CallToolResult, any, error) {
+		ctx = withToolClientSource(ctx, request)
 		if validate != nil {
 			if err := validate(input); err != nil {
 				return nil, nil, fmt.Errorf("invalid %s arguments: %w", name, err)
@@ -191,7 +222,6 @@ func registerRuntimeTools(server *mcp.Server, client *daemonClient) {
 			if err != nil {
 				return nil, err
 			}
-			payload["source"] = "ai"
 			result, err := client.do(ctx, http.MethodPost, "/api/runs", nil, payload)
 			if err != nil {
 				return nil, err
@@ -443,12 +473,66 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			}
 			return client.do(ctx, http.MethodPost, stackPath(input.ID)+"/restart", nil, payload)
 		})
+
+	addTool(server, "list_checks", "List checks and tests", toolIntent+"List HTTP and command-backed checks, optionally filtered by a stack, command, or Run owner. Results include the last durable Run and log identity.", readOnly("List checks and tests"), ListChecksInput.validate,
+		func(ctx context.Context, input ListChecksInput) (map[string]any, error) {
+			query := make(url.Values)
+			setQuery(query, "owner_type", input.OwnerType)
+			setQuery(query, "owner_id", input.OwnerID)
+			return client.do(ctx, http.MethodGet, "/api/checks", query, nil)
+		})
+
+	addTool(server, "save_check", "Save check or test", toolIntent+"Attach a verification to a stack, saved command, or Run without executing it. Native HTTP defaults to http_scope=local; set http_scope=remote explicitly for a remote test environment. For bash or .sh tests, first save a managed kind=task launcher and reference its ID with kind=command. Never put secrets in an HTTP URL, headers, body, assertions, or metadata.", mutating("Save check or test", false, false), SaveCheckInput.validate,
+		func(ctx context.Context, input SaveCheckInput) (map[string]any, error) {
+			payload, err := objectPayload(input)
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPost, "/api/checks", nil, payload)
+		})
+
+	addTool(server, "update_check", "Update check or test", toolIntent+"Update selected fields of an attached check without executing it. Keep http_scope aligned with whether the target is local or remote and preserve the no-stored-secrets policy.", mutating("Update check or test", false, false), UpdateCheckInput.validate,
+		func(ctx context.Context, input UpdateCheckInput) (map[string]any, error) {
+			payload, err := objectPayload(input, "id")
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPut, checkPath(input.ID), nil, payload)
+		})
+
+	addTool(server, "delete_check", "Delete check or test", toolIntent+"Delete an attached check definition. Historical Runs and their logs remain available.", mutating("Delete check or test", true, true), EntityIDInput.validate,
+		func(ctx context.Context, input EntityIDInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodDelete, checkPath(input.ID), nil, nil)
+		})
+
+	addTool(server, "run_check", "Run check or test", toolIntent+"Execute one attached HTTP or command-backed check as a durable Run. Running a remote HTTP check immediately sends the stored request to that environment; do not send a mutating production request without explicit user intent. For a parameterized task check, provide transient values; never repeat secret values in the response or logs.", mutating("Run check or test", false, false), RunCheckInput.validate,
+		func(ctx context.Context, input RunCheckInput) (map[string]any, error) {
+			payload, err := objectPayload(input, "id", "wait_for", "wait_timeout_ms")
+			if err != nil {
+				return nil, err
+			}
+			result, err := client.do(ctx, http.MethodPost, checkPath(input.ID)+"/run", nil, payload)
+			if err != nil {
+				return nil, err
+			}
+			return client.waitForRun(ctx, result, input.WaitFor, input.WaitTimeoutMS)
+		})
+
+	addTool(server, "run_checks", "Run owner checks and tests", toolIntent+"Run all checks attached to one stack, command, or Run, or an explicit check_ids subset. This may send stored remote HTTP requests; inspect the selected checks before running them against production. Parameter maps are keyed by check ID. Each result is an independent durable Run with normal logs.", mutating("Run owner checks and tests", false, false), RunChecksInput.validate,
+		func(ctx context.Context, input RunChecksInput) (map[string]any, error) {
+			payload, err := objectPayload(input)
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPost, "/api/checks/run", nil, payload)
+		})
 }
 
 func runPath(id string) string     { return "/api/runs/" + url.PathEscape(strings.TrimSpace(id)) }
 func projectPath(id string) string { return "/api/projects/" + url.PathEscape(strings.TrimSpace(id)) }
 func commandPath(id string) string { return "/api/commands/" + url.PathEscape(strings.TrimSpace(id)) }
 func stackPath(id string) string   { return "/api/stacks/" + url.PathEscape(strings.TrimSpace(id)) }
+func checkPath(id string) string   { return "/api/checks/" + url.PathEscape(strings.TrimSpace(id)) }
 func collectionPath(id string) string {
 	return "/api/collections/" + url.PathEscape(strings.TrimSpace(id))
 }

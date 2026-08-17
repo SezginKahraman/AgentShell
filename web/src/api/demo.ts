@@ -1,29 +1,31 @@
 import type { AgentShellApi } from './client'
-import type { Collection, CollectionInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
 
 const now = Date.now()
 const iso = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
 
 const runs: Run[] = [
-  { id: 'run-api', label: 'Backend API', command: 'make go', cwd: '~/projects/butcembu-api', project_id: 'project-api', kind: 'service', source: 'AI', status: 'running', readiness: 'ready', root_pid: 18467, process_group_id: 18467, started_at: iso(12), cpu_percent: 2.4, memory_bytes: 142_000_000, expected_ports: [{ port: 8080, name: 'HTTP API', protocol: 'http' }, { port: 9090, name: 'Metrics', protocol: 'http' }], listeners: [{ port: 8080, name: 'HTTP API', protocol: 'http', pid: 18467, status: 'listening' }, { port: 9090, name: 'Metrics', protocol: 'http', pid: 18467, status: 'listening' }], processes: [{ pid: 18467, ppid: 792, command: './bin/api', cpu_percent: 2.4, memory_bytes: 142_000_000 }] },
+  { id: 'run-api', label: 'Backend API', command: 'make go', cwd: '~/projects/butcembu-api', project_id: 'project-api', kind: 'service', source: 'Claude Code', output_preview: '[19:42:12] connected to database\n[19:42:12] server listening and ready', status: 'running', readiness: 'ready', root_pid: 18467, process_group_id: 18467, started_at: iso(12), cpu_percent: 2.4, memory_bytes: 142_000_000, expected_ports: [{ port: 8080, name: 'HTTP API', protocol: 'http' }, { port: 9090, name: 'Metrics', protocol: 'http' }], listeners: [{ port: 8080, name: 'HTTP API', protocol: 'http', pid: 18467, status: 'listening' }, { port: 9090, name: 'Metrics', protocol: 'http', pid: 18467, status: 'listening' }], processes: [{ pid: 18467, ppid: 792, command: './bin/api', cpu_percent: 2.4, memory_bytes: 142_000_000 }] },
   { id: 'run-web', label: 'Frontend', command: 'npm run dev', cwd: '~/projects/butcembu-web', project_id: 'project-web', kind: 'service', source: 'User', status: 'running', readiness: 'ready', root_pid: 18321, started_at: iso(16), cpu_percent: 1.1, memory_bytes: 198_000_000, listeners: [{ port: 3000, name: 'Web', protocol: 'http', pid: 18321, status: 'listening' }], processes: [{ pid: 18321, command: 'vite', cpu_percent: 1.1, memory_bytes: 198_000_000 }] },
   { id: 'run-db', label: 'PostgreSQL', command: 'docker compose up postgres', cwd: '~/projects/butcembu-api', kind: 'service', source: 'User', status: 'running', readiness: 'ready', root_pid: 18111, started_at: iso(24), cpu_percent: 0.6, memory_bytes: 156_000_000, listeners: [{ port: 5432, name: 'PostgreSQL', protocol: 'tcp', pid: 18111, status: 'listening' }], processes: [{ pid: 18111, command: 'postgres', cpu_percent: 0.6, memory_bytes: 156_000_000 }] },
 ]
 
 const history: Run[] = [
   ...runs,
-  { id: 'hist-test', label: 'Go tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', kind: 'task', source: 'AI', status: 'completed', exit_code: 0, started_at: iso(29), ended_at: iso(28.95) },
-  { id: 'hist-build', label: 'Web build', command: 'npm run build', cwd: '~/projects/butcembu-web', kind: 'task', source: 'AI', status: 'failed', exit_code: 1, command_definition_id: 'cmd-build', started_at: iso(36), ended_at: iso(35.75) },
+	{ id: 'run-external-infra', label: 'Detached infrastructure', command: 'docker compose up -d mysql redis', cwd: '~/projects/shared', kind: 'service', source: 'catalog', status: 'completed', exit_code: 0, command_definition_id: 'cmd-external-infra', lifecycle_action: 'start', started_at: iso(20), ended_at: iso(19.9), expected_ports: [{ port: 3306, name: 'MySQL' }], port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }] },
+  { id: 'hist-test', label: 'Go tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', kind: 'task', source: 'Cursor', output_preview: 'ok github.com/agentshell/runtime\nok github.com/agentshell/store', status: 'completed', exit_code: 0, started_at: iso(29), ended_at: iso(28.95) },
+  { id: 'hist-build', label: 'Web build', command: 'npm run build', cwd: '~/projects/butcembu-web', kind: 'task', source: 'Claude Code', output_preview: 'building application\nERROR build failed: module not found', status: 'failed', exit_code: 1, command_definition_id: 'cmd-build', started_at: iso(36), ended_at: iso(35.75) },
 ]
 
 const commands: SavedCommand[] = [
   { id: 'cmd-api', name: 'Backend API', command: 'make go', cwd: '~/projects/butcembu-api', project_id: 'project-api', collection_id: 'collection-core', kind: 'service', description: 'Primary internal HTTP API', expected_ports: [{ port: 8080, name: 'HTTP API', protocol: 'http' }], tags: ['internal', 'backend'], favorite: true, status: 'running', active_run_id: 'run-api', created_by: 'Claude Code', discovery_source: 'Makefile', fingerprint: 'demo-api' },
   { id: 'cmd-web', name: 'Frontend', command: 'npm run dev', cwd: '~/projects/butcembu-web', project_id: 'project-web', collection_id: 'collection-web-dev', kind: 'service', expected_ports: [{ port: 3000, name: 'Web', protocol: 'http' }], tags: ['web'], favorite: true, status: 'running', active_run_id: 'run-web', created_by: 'User' },
   { id: 'cmd-worker', name: 'Notification Worker', command: './scripts/worker.sh', cwd: '~/projects/notification', project_id: 'project-api', collection_id: 'collection-workers', kind: 'service', tags: ['internal', 'worker'], status: 'stopped', created_by: 'AI', discovery_source: 'scripts/worker.sh' },
-  { id: 'cmd-test', name: 'Backend Tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', project_id: 'project-api', collection_id: 'collection-quality', kind: 'task', tags: ['test'], status: 'completed', last_run: history[3], created_from_run_id: 'hist-test', created_by: 'User' },
-  { id: 'cmd-build', name: 'Frontend Build', command: 'npm run build', cwd: '~/projects/butcembu-web', project_id: 'project-web', collection_id: 'collection-web-dev', kind: 'task', tags: ['build'], status: 'failed', last_run: history[4], created_by: 'Cursor', discovery_source: 'package.json' },
+  { id: 'cmd-test', name: 'Backend Tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', project_id: 'project-api', collection_id: 'collection-quality', kind: 'task', tags: ['test'], status: 'completed', last_run: history[4], created_from_run_id: 'hist-test', created_by: 'User' },
+  { id: 'cmd-build', name: 'Frontend Build', command: 'npm run build', cwd: '~/projects/butcembu-web', project_id: 'project-web', collection_id: 'collection-web-dev', kind: 'task', tags: ['build'], status: 'failed', last_run: history[5], created_by: 'Cursor', discovery_source: 'package.json' },
   { id: 'cmd-vault-unseal', name: 'Vault unseal', command: 'docker exec -i hotel-vault vault operator unseal -', cwd: '~/projects/shared', kind: 'task', tags: ['vault', 'security'], status: 'stopped', created_by: 'Claude Code', parameters: [{ key: 'unseal_key', label: 'Vault unseal key', description: 'Used once through stdin for this Run.', type: 'secret', required: true, binding: 'stdin', placeholder: 'Enter the unseal key' }] },
   { id: 'cmd-global-db', name: 'Local PostgreSQL', command: 'docker compose up -d postgres', stop_command: 'docker compose stop postgres', lifecycle_mode: 'external', expected_ports: [{ port: 5432, name: 'PostgreSQL', service: 'postgresql' }], cwd: '~/projects/shared', kind: 'service', tags: ['global', 'database'], status: 'stopped', favorite: true, created_by: 'User' },
+	{ id: 'cmd-external-infra', name: 'Detached infrastructure', command: 'docker compose up -d mysql redis', stop_command: 'docker compose stop mysql redis', restart_command: 'docker compose restart mysql redis', lifecycle_mode: 'external', expected_ports: [{ port: 3306, name: 'MySQL', service: 'mysql' }], port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], cwd: '~/projects/shared', kind: 'service', tags: ['infra', 'external'], status: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'All expected ports changed from closed to listening after start. External health is verified; process ownership is not managed.', can_stop: true, last_run: history[3], run_count: 1, created_by: 'AI' },
 ]
 
 const projects: Project[] = [
@@ -38,7 +40,17 @@ const collections: Collection[] = [
   { id: 'collection-web-dev', project_id: 'project-web', name: 'Development', sort_order: 0 },
 ]
 
-const stacks: Stack[] = [{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 2, members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] }]
+const stacks: Stack[] = [
+	{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 2, members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] },
+	{ id: 'stack-external', name: 'External infrastructure', description: 'Detached resources with port-based observed state.', status: 'running', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 1, members: [{ command_id: 'cmd-external-infra', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Detached infrastructure', status: 'external', lifecycle_mode: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'Expected MySQL port is listening; process ownership remains external.', port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], can_stop: true }] },
+]
+
+const checks: CheckDefinition[] = [
+	{ id: 'check-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'API health', description: 'Verify the stack API is accepting requests.', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], timeout_ms: 5000, trigger: 'after_ready' },
+	{ id: 'check-staging-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'Staging health', description: 'Verify the deployed test environment.', kind: 'http', http_method: 'GET', http_url: 'https://staging.example.com/health', http_scope: 'remote', expected_status: [200], timeout_ms: 10000, trigger: 'manual' },
+	{ id: 'check-smoke', owner_type: 'command', owner_id: 'cmd-api', name: 'Backend smoke test', description: 'Run the saved project test task.', kind: 'command', command_id: 'cmd-test', trigger: 'manual' },
+	{ id: 'check-run-health', owner_type: 'run', owner_id: 'run-api', name: 'Current Run health', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], trigger: 'manual' },
+]
 
 export class DemoApi implements AgentShellApi {
   mode = 'demo' as const
@@ -47,24 +59,76 @@ export class DemoApi implements AgentShellApi {
   private emit() { this.listeners.forEach(fn => fn()) }
   async getSnapshot(): Promise<Snapshot> {
     const ports = runs.flatMap(run => (run.listeners ?? []).map(port => ({ ...port, run_id: run.id, run_label: run.label })))
-    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections) }
+    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks) }
   }
   async getRuntime(): Promise<RuntimeInfo> {
     return { status: this.runtimeStatus, instance_id: 'demo-browser-runtime', pid: 0, api_url: 'browser demo adapter', started_at: new Date(now).toISOString(), uptime_seconds: Math.max(0, Math.round((Date.now() - now) / 1000)), managed_runs: runs.filter(run => runningStatus(run.status)).length, database: { path: 'No database (browser demo)' }, mcp: { count: 0, clients: [] } }
   }
   async shutdownRuntime() { this.runtimeStatus = 'stopped' as const; this.emit(); return { status: 'shutting_down' as const } }
   async getRun(id: string) { const run = runs.find(r => r.id === id) ?? history.find(r => r.id === id); if (!run) throw new Error('Run not found'); return structuredClone(run) }
-  async getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined') {
+  async getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined', tail = 300) {
     const run = runs.find(item => item.id === id) ?? history.find(item => item.id === id)
     const stdout = `[19:42:11] starting ${run?.command ?? 'command'}\n[19:42:12] connected to database\n[19:42:12] server listening and ready\n[19:42:13] GET /health 200 1.8ms\n`
     const stderr = id === 'hist-build' ? '[19:42:14] ERROR build failed: module not found\n' : ''
-    return { run_id: id, stream, content: stream === 'stderr' ? stderr : stream === 'stdout' ? stdout : stdout + stderr }
+    const content = stream === 'stderr' ? stderr : stream === 'stdout' ? stdout : stdout + stderr
+    const lines = content.split('\n')
+    if (lines.at(-1) === '') lines.pop()
+    return { run_id: id, stream, content: lines.slice(-tail).join('\n') + (lines.length ? '\n' : '') }
   }
 	async getCommandRuns(id: string) { return structuredClone(history.filter(run => commands.find(command => command.id === id)?.active_run_id === run.id || run.command_definition_id === id)) }
 	async getCommandSource(id: string) { const command = commands.find(item => item.id === id); return command?.command.endsWith('.sh') ? { available: true, path: command.command.replace(/^exec\s+/, ''), content: '#!/usr/bin/env bash\nset -euo pipefail\n\necho "Demo script source"\n' } : { available: false, reason: 'This launcher does not directly reference a .sh file.' } }
+	async getCheckRuns(id: string) { return structuredClone(history.filter(run => run.check_definition_id === id)) }
+	async runCheck(id: string, _parameters?: Record<string, string>, draft?: Partial<CheckInput>) {
+		const saved = checks.find(item => item.id === id)
+		if (!saved) throw new Error('Check not found')
+		const check = { ...saved, ...structuredClone(draft ?? {}), id: saved.id }
+		const referenced = commands.find(command => command.id === check.command_id)
+		const started = new Date().toISOString()
+		const run: Run = { id: `check-run-${Date.now()}`, label: check.name, command: check.kind === 'http' ? `HTTP ${check.http_method ?? 'GET'} ${check.http_url}` : referenced?.command ?? 'check task', cwd: referenced?.cwd ?? '~/projects/butcembu-api', kind: 'task', source: 'check', status: 'completed', exit_code: 0, started_at: started, ended_at: new Date().toISOString(), command_definition_id: referenced?.id, check_definition_id: check.id, check_owner_type: check.owner_type, check_owner_id: check.owner_id }
+		history.unshift(run); saved.last_run = run; saved.run_count = (saved.run_count ?? 0) + 1; this.emit(); return structuredClone(run)
+	}
+	async createCheck(input: CheckInput) {
+		const check: CheckDefinition = { ...structuredClone(input), id: `check-${Date.now()}`, run_count: 0 }
+		checks.push(check); this.emit(); return structuredClone(check)
+	}
+	async updateCheck(id: string, input: Partial<CheckInput>) {
+		const check = checks.find(item => item.id === id)
+		if (!check) throw new Error('Check not found')
+		Object.assign(check, structuredClone(input)); this.emit(); return structuredClone(check)
+	}
+	async deleteCheck(id: string) {
+		const index = checks.findIndex(item => item.id === id)
+		if (index < 0) throw new Error('Check not found')
+		checks.splice(index, 1); this.emit()
+	}
   async stopRun(id: string) { const run = runs.find(r => r.id === id); if (run) run.status = 'stopped'; commands.filter(c => c.active_run_id === id).forEach(c => { c.status = 'stopped'; c.active_run_id = undefined }); this.emit() }
   async restartRun(id: string) { const run = runs.find(r => r.id === id); if (run) { run.status = 'running'; run.started_at = new Date().toISOString() } this.emit() }
-  async commandAction(id: string, action: 'start' | 'stop' | 'restart', _parameters?: Record<string, string>) { const item = commands.find(c => c.id === id); if (!item) return; item.status = action === 'stop' ? 'stopped' : 'running'; if (action !== 'stop') item.active_run_id = item.active_run_id ?? `demo-${id}`; else item.active_run_id = undefined; this.emit() }
+  async commandAction(id: string, action: 'start' | 'stop' | 'restart', _parameters?: Record<string, string>) {
+		const item = commands.find(command => command.id === id)
+		if (!item) return
+		const external = item.lifecycle_mode === 'external'
+		item.status = action === 'stop' ? 'stopped' : external ? 'external' : 'running'
+		item.can_stop = action !== 'stop'
+		item.active_run_id = action === 'stop' || external ? undefined : item.active_run_id ?? `demo-${id}`
+		if (external) {
+			item.observed_state = action === 'stop' ? 'stopped' : 'unknown'
+			item.state_confidence = 'action'
+			item.state_detail = action === 'stop' ? 'The external stop action completed.' : 'The start action succeeded; external process health is not verified.'
+		}
+		stacks.forEach(stack => {
+			const member = stack.members?.find(candidate => candidate.command_id === id)
+			if (!member) return
+			member.status = item.status
+			member.active_run_id = item.active_run_id
+			member.can_stop = item.can_stop
+			member.observed_state = item.observed_state
+			member.state_confidence = item.state_confidence
+			member.state_detail = item.state_detail
+			stack.running_count = stack.members?.filter(candidate => candidate.can_stop ?? runningStatus(candidate.status)).length ?? 0
+			stack.status = stack.running_count === 0 ? 'stopped' : stack.running_count === (stack.total_count ?? stack.members?.length ?? 0) ? 'running' : 'partial'
+		})
+		this.emit()
+	}
   async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], _parameters?: Record<string, Record<string, string>>) {
 		const stack = stacks.find(s => s.id === id); if (!stack) return
 		const selected = action === 'start' && commandIDs ? new Set(commandIDs) : undefined

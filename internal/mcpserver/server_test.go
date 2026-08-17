@@ -16,6 +16,7 @@ import (
 func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 	var runBody map[string]any
 	var projectBody map[string]any
+	var runSource string
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api/projects" && r.Method == http.MethodGet {
@@ -31,6 +32,7 @@ func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/runs" && r.Method == http.MethodPost {
+			runSource = r.Header.Get("X-AgentShell-MCP-Client")
 			if err := json.NewDecoder(r.Body).Decode(&runBody); err != nil {
 				t.Errorf("decode run: %v", err)
 			}
@@ -71,10 +73,10 @@ func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 			t.Errorf("tool %s does not communicate AgentShell intent", tool.Name)
 		}
 	}
-	if len(names) != 35 {
+	if len(names) != 41 {
 		t.Fatalf("published %d tools: %v", len(names), names)
 	}
-	for _, name := range []string{"get_runtime", "list_ports", "shutdown_runtime", "run", "list_runs", "inspect_run", "get_logs", "stop_run", "restart_run", "get_workspace_context", "inspect_project", "list_projects", "save_project", "update_project", "delete_project", "list_collections", "save_collection", "update_collection", "delete_collection", "promote_run", "apply_catalog", "save_command", "start_command", "save_stack", "restart_stack"} {
+	for _, name := range []string{"get_runtime", "list_ports", "shutdown_runtime", "run", "list_runs", "inspect_run", "get_logs", "stop_run", "restart_run", "get_workspace_context", "inspect_project", "list_projects", "save_project", "update_project", "delete_project", "list_collections", "save_collection", "update_collection", "delete_collection", "promote_run", "apply_catalog", "save_command", "start_command", "save_stack", "restart_stack", "list_checks", "save_check", "update_check", "delete_check", "run_check", "run_checks"} {
 		if !names[name] {
 			t.Errorf("missing tool %q", name)
 		}
@@ -97,8 +99,14 @@ func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("tool error: %#v", result.Content)
 	}
-	if runBody["source"] != "ai" || runBody["command"] != "make go" || runBody["kind"] != "task" || runBody["project_id"] != "project-1" {
+	if runBody["command"] != "make go" || runBody["kind"] != "task" || runBody["project_id"] != "project-1" {
 		t.Fatalf("run payload = %#v", runBody)
+	}
+	if _, exists := runBody["source"]; exists {
+		t.Fatalf("run payload contains misleading source: %#v", runBody)
+	}
+	if runSource != "test-client" {
+		t.Fatalf("run source header = %q, want test-client", runSource)
 	}
 	if _, exists := runBody["wait_for"]; exists {
 		t.Fatalf("strict daemon payload contains wait_for: %#v", runBody)

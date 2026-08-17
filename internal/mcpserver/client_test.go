@@ -69,11 +69,13 @@ func TestNormalizeConfigCanonicalizesOnlyExplicitWorkspace(t *testing.T) {
 
 func TestDaemonClientForwardsAndPreservesResults(t *testing.T) {
 	var received map[string]any
+	var receivedSource string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/runs" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		defer r.Body.Close()
+		receivedSource = r.Header.Get("X-AgentShell-MCP-Client")
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
@@ -87,7 +89,7 @@ func TestDaemonClientForwardsAndPreservesResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &daemonClient{config: cfg}
+	client := newDaemonClient(cfg)
 	payload, err := runtimePayload(RunInput{
 		Command:       "make go",
 		CWD:           "/tmp/project",
@@ -99,7 +101,6 @@ func TestDaemonClientForwardsAndPreservesResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload["source"] = "ai"
 	got, err := client.do(context.Background(), http.MethodPost, "/api/runs", nil, payload)
 	if err != nil {
 		t.Fatal(err)
@@ -115,8 +116,11 @@ func TestDaemonClientForwardsAndPreservesResults(t *testing.T) {
 	if received["run_timeout_ms"] != float64(60_000) {
 		t.Errorf("run_timeout_ms = %#v", received["run_timeout_ms"])
 	}
-	if received["source"] != "ai" {
-		t.Errorf("source = %#v", received["source"])
+	if _, exists := received["source"]; exists {
+		t.Errorf("payload contains source = %#v", received["source"])
+	}
+	if receivedSource != "MCP Bridge" {
+		t.Errorf("source header = %q", receivedSource)
 	}
 	ports := received["expected_ports"].([]any)
 	if ports[0].(map[string]any)["service"] != "http" {

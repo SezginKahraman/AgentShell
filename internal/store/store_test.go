@@ -18,7 +18,10 @@ func TestAdditiveMigrationFromRevisionTwoDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`CREATE TABLE commands (id TEXT PRIMARY KEY,project_id TEXT NOT NULL DEFAULT '',name TEXT NOT NULL,command TEXT NOT NULL,cwd TEXT NOT NULL,shell TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL,concurrency_policy TEXT NOT NULL,env TEXT NOT NULL DEFAULT '{}',expected_ports TEXT NOT NULL DEFAULT '[]',tags TEXT NOT NULL DEFAULT '[]',favorite INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);INSERT INTO commands VALUES('old','','Old','true','/tmp','','task','allow','{}','[]','[]',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+	_, err = db.Exec(`CREATE TABLE commands (id TEXT PRIMARY KEY,project_id TEXT NOT NULL DEFAULT '',name TEXT NOT NULL,command TEXT NOT NULL,cwd TEXT NOT NULL,shell TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL,concurrency_policy TEXT NOT NULL,env TEXT NOT NULL DEFAULT '{}',expected_ports TEXT NOT NULL DEFAULT '[]',tags TEXT NOT NULL DEFAULT '[]',favorite INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+INSERT INTO commands VALUES('old','','Old','true','/tmp','','task','allow','{}','[]','[]',0,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z');
+CREATE TABLE checks (id TEXT PRIMARY KEY,owner_type TEXT NOT NULL,owner_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL,command_id TEXT NOT NULL DEFAULT '',http_method TEXT NOT NULL DEFAULT '',http_url TEXT NOT NULL DEFAULT '',http_headers TEXT NOT NULL DEFAULT '{}',http_body TEXT NOT NULL DEFAULT '',expected_status TEXT NOT NULL DEFAULT '[]',body_contains TEXT NOT NULL DEFAULT '',timeout_ms INTEGER NOT NULL DEFAULT 10000,trigger TEXT NOT NULL DEFAULT 'manual',tags TEXT NOT NULL DEFAULT '[]',created_by TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+INSERT INTO checks VALUES('old-check','command','old','Local health','','http','','GET','http://127.0.0.1:8080/health','{}','','[200]','',10000,'manual','[]','user','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,6 +37,10 @@ func TestAdditiveMigrationFromRevisionTwoDatabase(t *testing.T) {
 	}
 	if c.CollectionID != "" || c.Fingerprint != "" || c.Description != "" || c.LifecycleMode != "managed" || c.StopCommand != "" {
 		t.Fatalf("unexpected migrated values: %+v", c)
+	}
+	check, err := s.Check(context.Background(), "old-check")
+	if err != nil || check.HTTPScope != "local" {
+		t.Fatalf("migrated check=%+v err=%v", check, err)
 	}
 	now := time.Now().UTC()
 	c.CollectionID = "global"
@@ -75,6 +82,10 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 	collections, err := s.Collections(ctx, nil)
 	if err != nil || collections == nil {
 		t.Fatalf("collections=%#v err=%v", collections, err)
+	}
+	checks, err := s.Checks(ctx, nil, nil)
+	if err != nil || checks == nil {
+		t.Fatalf("checks=%#v err=%v", checks, err)
 	}
 }
 
@@ -131,6 +142,14 @@ func TestStoreCatalogAndRunRoundTrip(t *testing.T) {
 	stack := domain.Stack{ID: "s1", ProjectID: p.ID, CollectionID: collection.ID, StableKey: "dev", Name: "dev", StartStrategy: "parallel", FailurePolicy: "continue", Members: []domain.StackMember{{CommandID: c.ID}}, CreatedAt: now, UpdatedAt: now}
 	if err = s.SaveStack(ctx, &stack); err != nil {
 		t.Fatal(err)
+	}
+	check := domain.CheckDefinition{ID: "check1", OwnerType: "stack", OwnerID: stack.ID, Name: "Remote health", Kind: "http", HTTPMethod: "GET", HTTPURL: "https://staging.example.com/health", HTTPScope: "remote", ExpectedStatus: []int{200}, TimeoutMS: 10000, Trigger: "manual", CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveCheck(ctx, &check); err != nil {
+		t.Fatal(err)
+	}
+	storedCheck, err := s.Check(ctx, check.ID)
+	if err != nil || storedCheck.HTTPScope != "remote" || storedCheck.HTTPURL != check.HTTPURL {
+		t.Fatalf("stored check=%+v err=%v", storedCheck, err)
 	}
 	r := domain.Run{ID: "r1", ProjectID: p.ID, Label: "serve", Command: c.Command, Cwd: c.Cwd, Shell: "/bin/sh", Kind: "service", Source: "test", Status: domain.RunRunning, Readiness: domain.ReadinessWaiting, CreatedAt: now, ExpectedPorts: c.ExpectedPorts, PortVerifications: []domain.PortVerification{{Port: 8080, Before: "closed", After: "listening", Status: "verified", Confidence: "high", CheckedAt: now}}, Env: map[string]string{"HELLO": "world"}, CommandDefinitionID: c.ID}
 	if err = s.SaveRun(ctx, &r); err != nil {

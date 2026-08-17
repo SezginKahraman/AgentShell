@@ -10,13 +10,38 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 const maxResponseBytes = 8 << 20
 
 type daemonClient struct {
-	config normalizedConfig
+	config   normalizedConfig
+	sourceMu sync.RWMutex
+	source   string
+}
+
+func newDaemonClient(config normalizedConfig) *daemonClient {
+	client := &daemonClient{config: config}
+	client.setSource(config.clientName)
+	return client
+}
+
+func (c *daemonClient) setSource(source string) {
+	source = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(source, "\r", " "), "\n", " "))
+	if len(source) > 200 {
+		source = source[:200]
+	}
+	c.sourceMu.Lock()
+	c.source = source
+	c.sourceMu.Unlock()
+}
+
+func (c *daemonClient) sourceName() string {
+	c.sourceMu.RLock()
+	defer c.sourceMu.RUnlock()
+	return c.source
 }
 
 type runtimeLease struct {
@@ -218,6 +243,15 @@ func (c *daemonClient) do(ctx context.Context, method, path string, query url.Va
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("User-Agent", "AgentShell-MCP/"+c.config.version)
+	source := c.sourceName()
+	if source == "MCP Bridge" {
+		if requestSource := toolClientSource(ctx); requestSource != "" {
+			source = requestSource
+		}
+	}
+	if source != "" {
+		req.Header.Set("X-AgentShell-MCP-Client", source)
+	}
 
 	resp, err := c.config.httpClient.Do(req)
 	if err != nil {

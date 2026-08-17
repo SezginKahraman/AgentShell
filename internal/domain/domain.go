@@ -79,6 +79,15 @@ type PortVerification struct {
 	CheckedAt  time.Time `json:"checked_at"`
 }
 
+// ExternalObservation describes what AgentShell can currently infer about a
+// detached resource without claiming process ownership. State is one of
+// running, stopped, checking, or unknown. Confidence explains whether the
+// state came from current port evidence or only a completed lifecycle action.
+type ExternalObservation struct {
+	State      string
+	Confidence string
+}
+
 type Run struct {
 	ID                  string             `json:"id"`
 	Label               string             `json:"label"`
@@ -112,10 +121,77 @@ type Run struct {
 	RestartOfRunID      string             `json:"restart_of_run_id,omitempty"`
 	ProjectID           string             `json:"project_id,omitempty"`
 	LifecycleAction     string             `json:"lifecycle_action,omitempty"`
+	CheckDefinitionID   string             `json:"check_definition_id,omitempty"`
+	CheckOwnerType      string             `json:"check_owner_type,omitempty"`
+	CheckOwnerID        string             `json:"check_owner_id,omitempty"`
 }
 
 func (r Run) Active() bool {
 	return r.Status == RunStarting || r.Status == RunRunning || r.Status == RunStopping
+}
+
+// ObserveExternalRun converts lifecycle action and expected-port evidence into
+// a user-facing current state. Pre-existing listeners prove availability but
+// are never attributed to the launcher.
+func ObserveExternalRun(run Run) ExternalObservation {
+	if run.Active() {
+		return ExternalObservation{State: "checking", Confidence: "action"}
+	}
+	if run.LifecycleAction != "start" && run.LifecycleAction != "restart" && run.LifecycleAction != "stop" {
+		return ExternalObservation{State: "unknown", Confidence: "unknown"}
+	}
+	listening, closed, pending := 0, 0, 0
+	for _, verification := range run.PortVerifications {
+		switch verification.Current {
+		case "listening":
+			listening++
+			continue
+		case "closed":
+			closed++
+			continue
+		}
+		switch verification.Status {
+		case "verified", "preexisting", "still_listening":
+			listening++
+		case "stopped", "unavailable":
+			closed++
+		case "pending":
+			pending++
+		}
+	}
+	if pending > 0 {
+		return ExternalObservation{State: "checking", Confidence: "observed"}
+	}
+	if run.LifecycleAction == "stop" {
+		if listening > 0 {
+			return ExternalObservation{State: "running", Confidence: "observed"}
+		}
+		if run.Status == RunCompleted && (len(run.PortVerifications) == 0 || closed == len(run.PortVerifications)) {
+			confidence := "high"
+			if len(run.PortVerifications) == 0 {
+				confidence = "action"
+			}
+			return ExternalObservation{State: "stopped", Confidence: confidence}
+		}
+		return ExternalObservation{State: "unknown", Confidence: "unknown"}
+	}
+	if len(run.PortVerifications) == 0 {
+		return ExternalObservation{State: "unknown", Confidence: "action"}
+	}
+	if listening == len(run.PortVerifications) {
+		confidence := "high"
+		for _, verification := range run.PortVerifications {
+			if verification.Status != "verified" {
+				confidence = "observed"
+				break
+			}
+		}
+		return ExternalObservation{State: "running", Confidence: confidence}
+	}
+	if closed == len(run.PortVerifications) {
+		return ExternalObservation{State: "stopped", Confidence: "high"}
+	}
+	return ExternalObservation{State: "unknown", Confidence: "observed"}
 }
 
 type Project struct {
@@ -204,6 +280,33 @@ type Stack struct {
 	UpdatedAt     time.Time     `json:"updated_at"`
 }
 
+// CheckDefinition is an executable verification attached to a saved stack,
+// command, or an individual historical Run. Native HTTP checks declare an
+// explicit local or remote network scope. Command checks reference an existing
+// task launcher so shell scripts keep the normal process and log lifecycle.
+type CheckDefinition struct {
+	ID             string            `json:"id"`
+	OwnerType      string            `json:"owner_type"`
+	OwnerID        string            `json:"owner_id"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description,omitempty"`
+	Kind           string            `json:"kind"`
+	CommandID      string            `json:"command_id,omitempty"`
+	HTTPMethod     string            `json:"http_method,omitempty"`
+	HTTPURL        string            `json:"http_url,omitempty"`
+	HTTPScope      string            `json:"http_scope,omitempty"`
+	HTTPHeaders    map[string]string `json:"http_headers,omitempty"`
+	HTTPBody       string            `json:"http_body,omitempty"`
+	ExpectedStatus []int             `json:"expected_status,omitempty"`
+	BodyContains   string            `json:"body_contains,omitempty"`
+	TimeoutMS      int               `json:"timeout_ms,omitempty"`
+	Trigger        string            `json:"trigger"`
+	Tags           []string          `json:"tags,omitempty"`
+	CreatedBy      string            `json:"created_by,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
 type StartSpec struct {
 	Command             string            `json:"command"`
 	Cwd                 string            `json:"cwd"`
@@ -220,6 +323,9 @@ type StartSpec struct {
 	RunTimeoutMS        *int              `json:"run_timeout_ms,omitempty"`
 	ProjectID           string            `json:"project_id,omitempty"`
 	LifecycleAction     string            `json:"lifecycle_action,omitempty"`
+	CheckDefinitionID   string            `json:"check_definition_id,omitempty"`
+	CheckOwnerType      string            `json:"check_owner_type,omitempty"`
+	CheckOwnerID        string            `json:"check_owner_id,omitempty"`
 	TransientEnv        map[string]string `json:"-"`
 	Stdin               []byte            `json:"-"`
 }

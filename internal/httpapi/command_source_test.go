@@ -41,12 +41,12 @@ func TestExternalCommandViewUsesLifecycleHistoryWithoutClaimingVerifiedHealth(t 
 	c := domain.CommandDefinition{ID: "external", Name: "Infra", Command: "docker compose up -d", StopCommand: "docker compose down", LifecycleMode: "external", Kind: "service"}
 	r := domain.Run{ID: "start", CommandDefinitionID: c.ID, LifecycleAction: "start", Status: domain.RunCompleted, CreatedAt: now}
 	v := makeCommandView(c, []domain.Run{r})
-	if v.Status != "external" || !v.CanStop || !strings.Contains(v.StateDetail, "not verified") {
+	if v.Status != "external" || v.ObservedState != "unknown" || v.StateConfidence != "action" || !v.CanStop || !strings.Contains(v.StateDetail, "not verified") {
 		t.Fatalf("view=%+v", v)
 	}
 	r = domain.Run{ID: "stop", CommandDefinitionID: c.ID, LifecycleAction: "stop", Status: domain.RunCompleted, CreatedAt: now.Add(time.Second)}
 	v = makeCommandView(c, []domain.Run{r})
-	if v.Status != "stopped" || v.CanStop {
+	if v.Status != "stopped" || v.ObservedState != "stopped" || v.StateConfidence != "action" || v.CanStop {
 		t.Fatalf("stopped view=%+v", v)
 	}
 }
@@ -56,7 +56,7 @@ func TestExternalCommandViewAndPortsExposeOnlyTransitionVerifiedListeners(t *tes
 	c := domain.CommandDefinition{ID: "external", Name: "Infra", LifecycleMode: "external", Kind: "service"}
 	verified := domain.Run{ID: "verified-start", CommandDefinitionID: c.ID, LifecycleAction: "start", Status: domain.RunCompleted, CreatedAt: now, PortVerifications: []domain.PortVerification{{Port: 3307, Name: "MySQL", Service: "mysql", Before: "closed", After: "listening", Status: "verified", Confidence: "high", CheckedAt: now}}}
 	v := makeCommandView(c, []domain.Run{verified})
-	if v.Status != "external" || !v.CanStop || !strings.Contains(v.StateDetail, "verified") || len(v.PortVerifications) != 1 {
+	if v.Status != "external" || v.ObservedState != "running" || v.StateConfidence != "high" || !v.CanStop || !strings.Contains(v.StateDetail, "verified") || len(v.PortVerifications) != 1 {
 		t.Fatalf("verified view=%+v", v)
 	}
 	ports := currentListeners([]domain.Run{verified}, []domain.CommandDefinition{c})
@@ -68,5 +68,16 @@ func TestExternalCommandViewAndPortsExposeOnlyTransitionVerifiedListeners(t *tes
 	preexisting.PortVerifications = []domain.PortVerification{{Port: 3307, Before: "listening", After: "listening", Status: "preexisting", CheckedAt: now}}
 	if ports = currentListeners([]domain.Run{preexisting}, []domain.CommandDefinition{c}); len(ports) != 0 {
 		t.Fatalf("pre-existing port was attributed: %+v", ports)
+	}
+	closed := verified
+	closed.ID = "closed-start"
+	closed.PortVerifications[0].Current = "closed"
+	closedView := makeCommandView(c, []domain.Run{closed})
+	if closedView.ObservedState != "stopped" || closedView.CanStop {
+		t.Fatalf("closed external view=%+v", closedView)
+	}
+	stack := makeStackView(domain.Stack{ID: "stack", Name: "Infra", Members: []domain.StackMember{{CommandID: c.ID}}}, map[string]commandView{c.ID: v})
+	if len(stack.Members) != 1 || stack.Members[0].LifecycleMode != "external" || stack.Members[0].ObservedState != "running" || stack.RunningCount != 1 {
+		t.Fatalf("stack external state=%+v", stack)
 	}
 }

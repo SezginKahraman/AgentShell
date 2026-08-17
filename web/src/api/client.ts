@@ -1,4 +1,4 @@
-import type { Collection, CollectionInput, CommandSource, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -6,9 +6,14 @@ export interface AgentShellApi {
   getRuntime(): Promise<RuntimeInfo>
   shutdownRuntime(): Promise<ShutdownResult>
   getRun(id: string): Promise<Run>
-  getLogs(id: string, stream?: 'combined' | 'stdout' | 'stderr'): Promise<LogResponse>
+  getLogs(id: string, stream?: 'combined' | 'stdout' | 'stderr', tail?: number): Promise<LogResponse>
 	getCommandRuns(id: string): Promise<Run[]>
 	getCommandSource(id: string): Promise<CommandSource>
+	getCheckRuns(id: string): Promise<Run[]>
+	runCheck(id: string, parameters?: Record<string, string>, draft?: Partial<CheckInput>): Promise<Run>
+	createCheck(input: CheckInput): Promise<CheckDefinition>
+	updateCheck(id: string, input: Partial<CheckInput>): Promise<CheckDefinition>
+	deleteCheck(id: string): Promise<void>
   stopRun(id: string): Promise<void>
   restartRun(id: string): Promise<void>
   commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>): Promise<void>
@@ -34,7 +39,9 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   if (!response.ok) {
 	let detail = ''
 	try { detail = (await response.json() as { error?: string }).error ?? '' } catch { /* non-JSON error */ }
-	throw new Error(detail || `${response.status} ${response.statusText}`)
+	const error = new Error(detail || `${response.status} ${response.statusText}`) as Error & { status?: number }
+	error.status = response.status
+	throw error
 	}
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
@@ -43,27 +50,33 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
 const array = <T>(value: T[] | { items?: T[]; data?: T[] } | null | undefined): T[] => Array.isArray(value) ? value : value?.items ?? value?.data ?? []
 const optionalArrayRequest = async <T>(path: string): Promise<T[]> => {
   try { return array(await request<T[] | { items?: T[] } | null>(path)) }
-  catch (error) { if (error instanceof Error && error.message.startsWith('404 ')) return []; throw error }
+  catch (error) { if (error instanceof Error && ((error as Error & { status?: number }).status === 404 || error.message.startsWith('404 '))) return []; throw error }
 }
 
 export class HttpApi implements AgentShellApi {
   mode = 'live' as const
   async health() { return request<{ status: string }>('/api/health') }
   async getSnapshot(): Promise<Snapshot> {
-    const [summary, runs, ports, history, commands, stacks, projects, collections] = await Promise.all([
+    const [summary, runs, ports, history, commands, stacks, projects, collections, checks] = await Promise.all([
       request<Summary>('/api/summary'), request<Run[] | { items?: Run[] } | null>('/api/runs'),
       request<Listener[] | { items?: Listener[] } | null>('/api/ports'), request<Run[] | { items?: Run[] } | null>('/api/history'),
       request<SavedCommand[] | { items?: SavedCommand[] } | null>('/api/commands'), request<Stack[] | { items?: Stack[] } | null>('/api/stacks'),
       request<Project[] | { items?: Project[] } | null>('/api/projects'), optionalArrayRequest<Collection>('/api/collections'),
+		optionalArrayRequest<CheckDefinition>('/api/checks'),
     ])
-    return { summary, runs: array(runs), ports: array(ports), history: array(history), commands: array(commands), stacks: array(stacks), projects: array(projects), collections: array(collections) }
+    return { summary, runs: array(runs), ports: array(ports), history: array(history), commands: array(commands), stacks: array(stacks), projects: array(projects), collections: array(collections), checks: array(checks) }
   }
   getRuntime() { return request<RuntimeInfo>('/api/runtime') }
   shutdownRuntime() { return request<ShutdownResult>('/api/runtime/shutdown', { method: 'POST', body: JSON.stringify({ confirm: true }) }) }
   getRun(id: string) { return request<Run>(`/api/runs/${id}`) }
-  getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined') { return request<LogResponse>(`/api/runs/${id}/logs?stream=${stream}&tail=300`) }
+  getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined', tail = 300) { return request<LogResponse>(`/api/runs/${id}/logs?stream=${stream}&tail=${tail}`) }
 	async getCommandRuns(id: string) { return array(await request<Run[] | { items?: Run[] } | null>(`/api/commands/${id}/runs`)) }
 	getCommandSource(id: string) { return request<CommandSource>(`/api/commands/${id}/source`) }
+	async getCheckRuns(id: string) { return array(await request<Run[] | { items?: Run[] } | null>(`/api/checks/${id}/runs`)) }
+	runCheck(id: string, parameters?: Record<string, string>, draft?: Partial<CheckInput>) { return request<Run>(`/api/checks/${id}/run`, { method: 'POST', body: parameters || draft ? JSON.stringify({ parameters, draft }) : undefined }) }
+	createCheck(input: CheckInput) { return request<CheckDefinition>('/api/checks', { method: 'POST', body: JSON.stringify(input) }) }
+	updateCheck(id: string, input: Partial<CheckInput>) { return request<CheckDefinition>(`/api/checks/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+	async deleteCheck(id: string) { await request(`/api/checks/${id}`, { method: 'DELETE' }) }
   async stopRun(id: string) { await request(`/api/runs/${id}/stop`, { method: 'POST' }) }
   async restartRun(id: string) { await request(`/api/runs/${id}/restart`, { method: 'POST' }) }
   async commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>) { await request(`/api/commands/${id}/${action}`, { method: 'POST', body: parameters ? JSON.stringify({ parameters }) : undefined }) }

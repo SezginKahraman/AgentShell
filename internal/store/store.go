@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS runs (
  memory_bytes INTEGER NOT NULL DEFAULT 0, stdout_path TEXT NOT NULL DEFAULT '', stderr_path TEXT NOT NULL DEFAULT '',
  combined_path TEXT NOT NULL DEFAULT '', env TEXT NOT NULL DEFAULT '{}', command_definition_id TEXT NOT NULL DEFAULT '',
  stack_run_id TEXT NOT NULL DEFAULT '', restart_of_run_id TEXT NOT NULL DEFAULT '', project_id TEXT NOT NULL DEFAULT '',
- lifecycle_action TEXT NOT NULL DEFAULT '', port_verifications TEXT NOT NULL DEFAULT '[]'
+	 lifecycle_action TEXT NOT NULL DEFAULT '', port_verifications TEXT NOT NULL DEFAULT '[]',
+	 check_definition_id TEXT NOT NULL DEFAULT '', check_owner_type TEXT NOT NULL DEFAULT '', check_owner_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_status_idx ON runs(status);
 CREATE INDEX IF NOT EXISTS runs_command_idx ON runs(command_definition_id);
@@ -81,14 +82,23 @@ CREATE TABLE IF NOT EXISTS stacks (
 CREATE TABLE IF NOT EXISTS collections (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, parent_id TEXT NOT NULL DEFAULT '',
  sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS checks (
+ id TEXT PRIMARY KEY, owner_type TEXT NOT NULL, owner_id TEXT NOT NULL, name TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, command_id TEXT NOT NULL DEFAULT '',
+ http_method TEXT NOT NULL DEFAULT '', http_url TEXT NOT NULL DEFAULT '', http_headers TEXT NOT NULL DEFAULT '{}',
+ http_body TEXT NOT NULL DEFAULT '', expected_status TEXT NOT NULL DEFAULT '[]', body_contains TEXT NOT NULL DEFAULT '',
+ timeout_ms INTEGER NOT NULL DEFAULT 10000, trigger TEXT NOT NULL DEFAULT 'manual', tags TEXT NOT NULL DEFAULT '[]',
+	 created_by TEXT NOT NULL DEFAULT '', http_scope TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );`)
 	if err != nil {
 		return err
 	}
 	columns := map[string][]string{
-		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'"},
+		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'", "check_definition_id TEXT NOT NULL DEFAULT ''", "check_owner_type TEXT NOT NULL DEFAULT ''", "check_owner_id TEXT NOT NULL DEFAULT ''"},
 		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
 		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''"},
+		"checks":   {"http_scope TEXT NOT NULL DEFAULT 'local'"},
 	}
 	for table, defs := range columns {
 		for _, def := range defs {
@@ -102,7 +112,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS commands_stable_key_idx ON commands(project_id
 CREATE UNIQUE INDEX IF NOT EXISTS stacks_stable_key_idx ON stacks(project_id,stable_key) WHERE stable_key <> '';
 CREATE INDEX IF NOT EXISTS collections_project_idx ON collections(project_id,sort_order,name);
 CREATE INDEX IF NOT EXISTS commands_collection_idx ON commands(collection_id);
-CREATE INDEX IF NOT EXISTS stacks_collection_idx ON stacks(collection_id);`)
+CREATE INDEX IF NOT EXISTS stacks_collection_idx ON stacks(collection_id);
+CREATE INDEX IF NOT EXISTS checks_owner_idx ON checks(owner_type,owner_id,name);
+CREATE INDEX IF NOT EXISTS checks_command_idx ON checks(command_id);
+CREATE INDEX IF NOT EXISTS runs_check_idx ON runs(check_definition_id,created_at);`)
 	return err
 }
 
@@ -159,7 +172,7 @@ func parseTimePtr(v sql.NullString) *time.Time {
 }
 
 func (s *Store) SaveRun(ctx context.Context, r *domain.Run) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO runs (`+runCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO runs (`+runCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET label=excluded.label,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,
 kind=excluded.kind,source=excluded.source,status=excluded.status,readiness=excluded.readiness,root_pid=excluded.root_pid,
 pgid=excluded.pgid,process_start_token=excluded.process_start_token,exit_code=excluded.exit_code,stop_reason=excluded.stop_reason,
@@ -167,11 +180,13 @@ started_at=excluded.started_at,ended_at=excluded.ended_at,expected_ports=exclude
 listeners=excluded.listeners,cpu_percent=excluded.cpu_percent,memory_bytes=excluded.memory_bytes,stdout_path=excluded.stdout_path,
 stderr_path=excluded.stderr_path,combined_path=excluded.combined_path,env=excluded.env,command_definition_id=excluded.command_definition_id,
 stack_run_id=excluded.stack_run_id,restart_of_run_id=excluded.restart_of_run_id,project_id=excluded.project_id,lifecycle_action=excluded.lifecycle_action,
-port_verifications=excluded.port_verifications`,
+port_verifications=excluded.port_verifications,check_definition_id=excluded.check_definition_id,check_owner_type=excluded.check_owner_type,
+check_owner_id=excluded.check_owner_id`,
 		r.ID, r.Label, r.Command, r.Cwd, r.Shell, r.Kind, r.Source, r.Status, r.Readiness, r.RootPID, r.ProcessGroupID,
 		r.ProcessStartToken, nullableInt(r.ExitCode), r.StopReason, ts(r.CreatedAt), tsp(r.StartedAt), tsp(r.EndedAt), js(r.ExpectedPorts),
 		js(r.Processes), js(r.Listeners), r.CPUPercent, r.MemoryBytes, r.StdoutPath, r.StderrPath, r.CombinedPath, js(r.Env),
-		r.CommandDefinitionID, r.StackRunID, r.RestartOfRunID, r.ProjectID, r.LifecycleAction, js(r.PortVerifications))
+		r.CommandDefinitionID, r.StackRunID, r.RestartOfRunID, r.ProjectID, r.LifecycleAction, js(r.PortVerifications),
+		r.CheckDefinitionID, r.CheckOwnerType, r.CheckOwnerID)
 	return err
 }
 
@@ -184,7 +199,8 @@ func nullableInt(v *int) any {
 
 const runCols = `id,label,command,cwd,shell,kind,source,status,readiness,root_pid,pgid,process_start_token,
 exit_code,stop_reason,created_at,started_at,ended_at,expected_ports,processes,listeners,cpu_percent,memory_bytes,
-stdout_path,stderr_path,combined_path,env,command_definition_id,stack_run_id,restart_of_run_id,project_id,lifecycle_action,port_verifications`
+stdout_path,stderr_path,combined_path,env,command_definition_id,stack_run_id,restart_of_run_id,project_id,lifecycle_action,port_verifications,
+check_definition_id,check_owner_type,check_owner_id`
 
 type scanner interface{ Scan(...any) error }
 
@@ -195,7 +211,8 @@ func scanRun(row scanner) (*domain.Run, error) {
 	var exit sql.NullInt64
 	err := row.Scan(&r.ID, &r.Label, &r.Command, &r.Cwd, &r.Shell, &r.Kind, &r.Source, &status, &ready, &r.RootPID,
 		&r.ProcessGroupID, &r.ProcessStartToken, &exit, &r.StopReason, &created, &started, &ended, &ports, &procs, &listeners,
-		&r.CPUPercent, &r.MemoryBytes, &r.StdoutPath, &r.StderrPath, &r.CombinedPath, &env, &r.CommandDefinitionID, &r.StackRunID, &r.RestartOfRunID, &r.ProjectID, &r.LifecycleAction, &portVerifications)
+		&r.CPUPercent, &r.MemoryBytes, &r.StdoutPath, &r.StderrPath, &r.CombinedPath, &env, &r.CommandDefinitionID, &r.StackRunID, &r.RestartOfRunID, &r.ProjectID, &r.LifecycleAction, &portVerifications,
+		&r.CheckDefinitionID, &r.CheckOwnerType, &r.CheckOwnerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -271,6 +288,26 @@ func (s *Store) RunsForCommand(ctx context.Context, id string, limit int) ([]dom
 		r, e := scanRun(rows)
 		if e != nil {
 			return nil, e
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) RunsForCheck(ctx context.Context, id string, limit int) ([]domain.Run, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+runCols+` FROM runs WHERE check_definition_id=? ORDER BY created_at DESC LIMIT ?`, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.Run, 0)
+	for rows.Next() {
+		r, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		out = append(out, *r)
 	}
@@ -493,6 +530,14 @@ func (s *Store) DeleteCommand(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
+	var checkName string
+	err = tx.QueryRowContext(ctx, `SELECT name FROM checks WHERE (owner_type='command' AND owner_id=?) OR command_id=? LIMIT 1`, id, id).Scan(&checkName)
+	if err == nil {
+		return fmt.Errorf("%w: launcher is used by check %q", ErrConflict, checkName)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT name,members FROM stacks`)
 	if err != nil {
 		return err
@@ -597,8 +642,97 @@ func (s *Store) StackByStableKey(ctx context.Context, projectID, key string) (do
 	return scanStack(s.db.QueryRowContext(ctx, `SELECT `+stackCols+` FROM stacks WHERE project_id=? AND stable_key=?`, projectID, key))
 }
 func (s *Store) DeleteStack(ctx context.Context, id string) error {
+	var refs int
+	if e := s.db.QueryRowContext(ctx, `SELECT count(*) FROM checks WHERE owner_type='stack' AND owner_id=?`, id).Scan(&refs); e != nil {
+		return e
+	}
+	if refs > 0 {
+		return fmt.Errorf("%w: stack has %d attached checks", ErrConflict, refs)
+	}
 	r, e := s.db.ExecContext(ctx, `DELETE FROM stacks WHERE id=?`, id)
 	return affected(r, e)
+}
+
+const checkCols = `id,owner_type,owner_id,name,description,kind,command_id,http_method,http_url,http_scope,http_headers,http_body,expected_status,body_contains,timeout_ms,trigger,tags,created_by,created_at,updated_at`
+
+func (s *Store) SaveCheck(ctx context.Context, v *domain.CheckDefinition) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO checks(`+checkCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET owner_type=excluded.owner_type,owner_id=excluded.owner_id,name=excluded.name,
+description=excluded.description,kind=excluded.kind,command_id=excluded.command_id,http_method=excluded.http_method,
+http_url=excluded.http_url,http_scope=excluded.http_scope,http_headers=excluded.http_headers,http_body=excluded.http_body,expected_status=excluded.expected_status,
+body_contains=excluded.body_contains,timeout_ms=excluded.timeout_ms,trigger=excluded.trigger,tags=excluded.tags,
+created_by=excluded.created_by,updated_at=excluded.updated_at`, v.ID, v.OwnerType, v.OwnerID, v.Name, v.Description,
+		v.Kind, v.CommandID, v.HTTPMethod, v.HTTPURL, v.HTTPScope, js(v.HTTPHeaders), v.HTTPBody, js(v.ExpectedStatus), v.BodyContains,
+		v.TimeoutMS, v.Trigger, js(v.Tags), v.CreatedBy, ts(v.CreatedAt), ts(v.UpdatedAt))
+	return err
+}
+
+func scanCheck(row scanner) (domain.CheckDefinition, error) {
+	var v domain.CheckDefinition
+	var headers, statuses, tags, created, updated string
+	err := row.Scan(&v.ID, &v.OwnerType, &v.OwnerID, &v.Name, &v.Description, &v.Kind, &v.CommandID,
+		&v.HTTPMethod, &v.HTTPURL, &v.HTTPScope, &headers, &v.HTTPBody, &statuses, &v.BodyContains, &v.TimeoutMS,
+		&v.Trigger, &tags, &v.CreatedBy, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return v, ErrNotFound
+	}
+	if err != nil {
+		return v, err
+	}
+	v.CreatedAt = parseTime(created)
+	v.UpdatedAt = parseTime(updated)
+	_ = json.Unmarshal([]byte(headers), &v.HTTPHeaders)
+	_ = json.Unmarshal([]byte(statuses), &v.ExpectedStatus)
+	_ = json.Unmarshal([]byte(tags), &v.Tags)
+	return v, nil
+}
+
+func (s *Store) Check(ctx context.Context, id string) (domain.CheckDefinition, error) {
+	return scanCheck(s.db.QueryRowContext(ctx, `SELECT `+checkCols+` FROM checks WHERE id=?`, id))
+}
+
+func (s *Store) Checks(ctx context.Context, ownerType, ownerID *string) ([]domain.CheckDefinition, error) {
+	query := `SELECT ` + checkCols + ` FROM checks`
+	where := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if ownerType != nil {
+		where = append(where, `owner_type=?`)
+		args = append(args, *ownerType)
+	}
+	if ownerID != nil {
+		where = append(where, `owner_id=?`)
+		args = append(args, *ownerID)
+	}
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY name,id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.CheckDefinition, 0)
+	for rows.Next() {
+		v, scanErr := scanCheck(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteCheck(ctx context.Context, id string) error {
+	var active int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM runs WHERE check_definition_id=? AND status IN ('starting','running','stopping')`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return fmt.Errorf("%w: check has %d active Runs", ErrConflict, active)
+	}
+	r, err := s.db.ExecContext(ctx, `DELETE FROM checks WHERE id=?`, id)
+	return affected(r, err)
 }
 
 func affected(r sql.Result, e error) error {

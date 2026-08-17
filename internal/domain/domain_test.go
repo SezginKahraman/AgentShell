@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestCommandFingerprintIgnoresMetadataAndNormalizesDefaults(t *testing.T) {
 	base := CommandDefinition{ProjectID: "project", Command: "  make   go ", Cwd: "/workspace", Kind: "service"}
@@ -48,5 +51,31 @@ func TestCommandParametersAllowOnlyOneStdinBinding(t *testing.T) {
 	}
 	if err := ValidateCommandParameters(parameters); err == nil {
 		t.Fatal("multiple stdin parameters must be rejected")
+	}
+}
+
+func TestObserveExternalRunSeparatesLifecycleFromCurrentState(t *testing.T) {
+	now := time.Now().UTC()
+	tests := []struct {
+		name       string
+		run        Run
+		state      string
+		confidence string
+	}{
+		{name: "start without evidence is unknown", run: Run{LifecycleAction: "start", Status: RunCompleted}, state: "unknown", confidence: "action"},
+		{name: "verified listener is running", run: Run{LifecycleAction: "start", Status: RunCompleted, PortVerifications: []PortVerification{{Port: 8080, Status: "verified", Current: "listening", CheckedAt: now}}}, state: "running", confidence: "high"},
+		{name: "preexisting listener is available but unattributed", run: Run{LifecycleAction: "start", Status: RunCompleted, PortVerifications: []PortVerification{{Port: 8080, Status: "preexisting", Current: "listening", CheckedAt: now}}}, state: "running", confidence: "observed"},
+		{name: "verified listener later closed is stopped", run: Run{LifecycleAction: "start", Status: RunCompleted, PortVerifications: []PortVerification{{Port: 8080, Status: "verified", Current: "closed", CheckedAt: now}}}, state: "stopped", confidence: "high"},
+		{name: "completed stop is stopped", run: Run{LifecycleAction: "stop", Status: RunCompleted, PortVerifications: []PortVerification{{Port: 8080, Status: "stopped", Current: "closed", CheckedAt: now}}}, state: "stopped", confidence: "high"},
+		{name: "failed stop with listening port remains running", run: Run{LifecycleAction: "stop", Status: RunFailed, PortVerifications: []PortVerification{{Port: 8080, Status: "still_listening", Current: "listening", CheckedAt: now}}}, state: "running", confidence: "observed"},
+		{name: "active lifecycle is checking", run: Run{LifecycleAction: "start", Status: RunRunning}, state: "checking", confidence: "action"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := ObserveExternalRun(test.run)
+			if got.State != test.state || got.Confidence != test.confidence {
+				t.Fatalf("observation=%+v want state=%s confidence=%s", got, test.state, test.confidence)
+			}
+		})
 	}
 }

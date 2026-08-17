@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,12 +275,97 @@ func TestSummaryAndOriginGuard(t *testing.T) {
 
 func TestEmptyListEndpointsEncodeArrays(t *testing.T) {
 	srv, _ := testServer(t)
-	for _, endpoint := range []string{"projects", "collections", "commands", "stacks", "runs", "history"} {
+	for _, endpoint := range []string{"projects", "collections", "commands", "stacks", "checks", "runs", "history"} {
 		var raw json.RawMessage
 		status := request(t, srv.Client(), http.MethodGet, srv.URL+"/api/"+endpoint, nil, &raw)
 		if status != http.StatusOK || string(raw) != "[]" {
 			t.Fatalf("endpoint=%s status=%d body=%s", endpoint, status, raw)
 		}
+	}
+}
+
+func TestMCPClientSourceAndHistoryOutputPreviewArePersisted(t *testing.T) {
+	srv, manager := testServer(t)
+	body, err := json.Marshal(map[string]any{
+		"command": "printf 'first line\\nsecond line\\nthird line\\n'",
+		"cwd":     t.TempDir(),
+		"kind":    "task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/runs", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentShell-MCP-Client", "Cursor")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var started domain.Run
+	if err = json.NewDecoder(resp.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated || started.Source != "Cursor" {
+		t.Fatalf("start status=%d source=%q", resp.StatusCode, started.Source)
+	}
+	if _, err = manager.Wait(context.Background(), started.ID, "exit", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	var history []struct {
+		domain.Run
+		OutputPreview string `json:"output_preview"`
+	}
+	if status := request(t, srv.Client(), http.MethodGet, srv.URL+"/api/history", nil, &history); status != http.StatusOK {
+		t.Fatalf("history status=%d", status)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history=%+v", history)
+	}
+	if history[0].Source != "Cursor" {
+		t.Fatalf("history source=%q", history[0].Source)
+	}
+	if history[0].OutputPreview != "second line\nthird line" {
+		t.Fatalf("history output preview=%q", history[0].OutputPreview)
+	}
+	var filtered []domain.Run
+	if status := request(t, srv.Client(), http.MethodGet, srv.URL+"/api/runs?source=cursor&limit=10", nil, &filtered); status != http.StatusOK || len(filtered) != 1 || filtered[0].ID != started.ID {
+		t.Fatalf("source-filtered runs status=%d runs=%+v", status, filtered)
+	}
+}
+
+func TestMCPClientSourceAppliesToSavedLauncherRuns(t *testing.T) {
+	srv, manager := testServer(t)
+	var command map[string]any
+	if status := request(t, srv.Client(), http.MethodPost, srv.URL+"/api/commands", map[string]any{
+		"name": "Client-attributed task", "command": "printf done", "cwd": t.TempDir(), "kind": "task", "concurrency_policy": "allow",
+	}, &command); status != http.StatusCreated {
+		t.Fatalf("create status=%d command=%v", status, command)
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/commands/"+command["id"].(string)+"/start", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentShell-MCP-Client", "Claude Code")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var run domain.Run
+	if err = json.NewDecoder(resp.Body).Decode(&run); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated || run.Source != "Claude Code" {
+		t.Fatalf("start status=%d run=%+v", resp.StatusCode, run)
+	}
+	if _, err = manager.Wait(context.Background(), run.ID, "exit", 2*time.Second); err != nil {
+		t.Fatal(err)
 	}
 }
 

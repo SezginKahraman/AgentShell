@@ -114,13 +114,13 @@ func (in RunInput) validate() error {
 
 type ListRunsInput struct {
 	Status string `json:"status,omitempty" jsonschema:"Optional lifecycle status filter"`
-	Source string `json:"source,omitempty" jsonschema:"Optional source filter: ai, user, or system"`
+	Source string `json:"source,omitempty" jsonschema:"Optional exact persisted source filter, such as Cursor, Claude Code, user, catalog, or check"`
 	Limit  *int   `json:"limit,omitempty" jsonschema:"Maximum number of runs to return, from 1 through 500"`
 }
 
 func (in ListRunsInput) validate() error {
-	if err := oneOf("source", in.Source, "", "ai", "user", "system"); err != nil {
-		return err
+	if len(in.Source) > 200 || strings.ContainsAny(in.Source, "\r\n") {
+		return fmt.Errorf("source must be at most 200 characters and contain no line breaks")
 	}
 	return bounded("limit", in.Limit, 1, 500)
 }
@@ -1052,6 +1052,219 @@ type StopStackInput struct {
 
 func (in StopStackInput) validate() error {
 	return identifier("id", in.ID)
+}
+
+type ListChecksInput struct {
+	OwnerType string `json:"owner_type,omitempty" jsonschema:"Optional owner type: stack, command, or run"`
+	OwnerID   string `json:"owner_id,omitempty" jsonschema:"Optional owner identifier; use with owner_type"`
+}
+
+func (in ListChecksInput) validate() error {
+	if (in.OwnerType == "") != (in.OwnerID == "") {
+		return fmt.Errorf("owner_type and owner_id must be provided together")
+	}
+	if in.OwnerType != "" {
+		if err := oneOf("owner_type", in.OwnerType, "stack", "command", "run"); err != nil {
+			return err
+		}
+		return identifier("owner_id", in.OwnerID)
+	}
+	return nil
+}
+
+type SaveCheckInput struct {
+	OwnerType      string            `json:"owner_type" jsonschema:"Owner type: stack, command, or run"`
+	OwnerID        string            `json:"owner_id" jsonschema:"Identifier of the owning stack, saved command, or Run"`
+	Name           string            `json:"name" jsonschema:"Concise check name shown in Checks & Tests"`
+	Description    string            `json:"description,omitempty" jsonschema:"Purpose and expected behavior without credentials"`
+	Kind           string            `json:"kind" jsonschema:"Check kind: http for a native local or remote request, or command for a saved task launcher"`
+	CommandID      string            `json:"command_id,omitempty" jsonschema:"Managed saved task identifier required by kind=command; a bash or .sh test belongs in that task"`
+	HTTPMethod     string            `json:"http_method,omitempty" jsonschema:"HTTP method for kind=http; defaults to GET"`
+	HTTPURL        string            `json:"http_url,omitempty" jsonschema:"Absolute HTTP(S) URL without credentials"`
+	HTTPScope      string            `json:"http_scope,omitempty" jsonschema:"HTTP target scope: local for localhost/loopback (default), or explicit remote for a remote test environment"`
+	HTTPHeaders    map[string]string `json:"http_headers,omitempty" jsonschema:"Non-sensitive static HTTP headers only; never store tokens, cookies, or credentials"`
+	HTTPBody       string            `json:"http_body,omitempty" jsonschema:"Optional non-sensitive request body"`
+	ExpectedStatus []int             `json:"expected_status,omitempty" jsonschema:"Accepted HTTP status codes; omitted means any 2xx"`
+	BodyContains   string            `json:"body_contains,omitempty" jsonschema:"Optional literal response substring assertion"`
+	TimeoutMS      int               `json:"timeout_ms,omitempty" jsonschema:"Execution timeout; HTTP allows 100..120000 ms (default 10000), command allows up to 1800000 ms (default 300000)"`
+	Trigger        string            `json:"trigger,omitempty" jsonschema:"manual or stack-only after_ready; defaults to manual"`
+	Tags           []string          `json:"tags,omitempty" jsonschema:"Searchable check labels"`
+	CreatedBy      string            `json:"created_by,omitempty" jsonschema:"Source label such as ai"`
+}
+
+func (in SaveCheckInput) validate() error {
+	if err := oneOf("owner_type", in.OwnerType, "stack", "command", "run"); err != nil {
+		return err
+	}
+	if err := identifier("owner_id", in.OwnerID); err != nil {
+		return err
+	}
+	if err := required("name", in.Name); err != nil {
+		return err
+	}
+	if len(in.Name) > 200 || len(in.Description) > 2000 || len(in.HTTPBody) > 256<<10 || len(in.BodyContains) > 4096 {
+		return fmt.Errorf("check text field is too long")
+	}
+	if err := oneOf("kind", in.Kind, "http", "command"); err != nil {
+		return err
+	}
+	if err := oneOf("trigger", in.Trigger, "", "manual", "after_ready"); err != nil {
+		return err
+	}
+	if in.Trigger == "after_ready" && in.OwnerType != "stack" {
+		return fmt.Errorf("after_ready is stack-only")
+	}
+	if in.TimeoutMS != 0 && (in.TimeoutMS < 100 || in.TimeoutMS > 1800000) {
+		return fmt.Errorf("timeout_ms must be between 100 and 1800000")
+	}
+	if err := validateStrings("tags", in.Tags, 50, 100); err != nil {
+		return err
+	}
+	if in.Kind == "command" {
+		if err := identifier("command_id", in.CommandID); err != nil {
+			return err
+		}
+		if in.HTTPURL != "" || in.HTTPScope != "" || in.HTTPBody != "" || len(in.HTTPHeaders) > 0 {
+			return fmt.Errorf("command checks cannot define HTTP fields")
+		}
+	} else {
+		if in.TimeoutMS > 120000 {
+			return fmt.Errorf("HTTP timeout_ms must not exceed 120000")
+		}
+		if strings.TrimSpace(in.HTTPURL) == "" {
+			return fmt.Errorf("http_url is required for HTTP checks")
+		}
+		if in.CommandID != "" {
+			return fmt.Errorf("HTTP checks cannot define command_id")
+		}
+		if err := oneOf("http_scope", in.HTTPScope, "", "local", "remote"); err != nil {
+			return err
+		}
+		if err := oneOf("http_method", in.HTTPMethod, "", "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"); err != nil {
+			return err
+		}
+		for _, status := range in.ExpectedStatus {
+			if status < 100 || status > 599 {
+				return fmt.Errorf("expected_status values must be 100..599")
+			}
+		}
+	}
+	return nil
+}
+
+type UpdateCheckInput struct {
+	ID             string             `json:"id" jsonschema:"Check identifier"`
+	OwnerType      *string            `json:"owner_type,omitempty" jsonschema:"New owner type: stack, command, or run"`
+	OwnerID        *string            `json:"owner_id,omitempty" jsonschema:"New owner identifier"`
+	Name           *string            `json:"name,omitempty" jsonschema:"New check name"`
+	Description    *string            `json:"description,omitempty" jsonschema:"New non-sensitive description"`
+	Kind           *string            `json:"kind,omitempty" jsonschema:"New kind: http or command"`
+	CommandID      *string            `json:"command_id,omitempty" jsonschema:"Saved managed task identifier"`
+	HTTPMethod     *string            `json:"http_method,omitempty" jsonschema:"HTTP method"`
+	HTTPURL        *string            `json:"http_url,omitempty" jsonschema:"Absolute HTTP(S) URL without credentials"`
+	HTTPScope      *string            `json:"http_scope,omitempty" jsonschema:"local or remote HTTP target scope"`
+	HTTPHeaders    *map[string]string `json:"http_headers,omitempty" jsonschema:"Non-sensitive static headers"`
+	HTTPBody       *string            `json:"http_body,omitempty" jsonschema:"Non-sensitive request body"`
+	ExpectedStatus *[]int             `json:"expected_status,omitempty" jsonschema:"Accepted status codes; empty means any 2xx"`
+	BodyContains   *string            `json:"body_contains,omitempty" jsonschema:"Literal response substring assertion"`
+	TimeoutMS      *int               `json:"timeout_ms,omitempty" jsonschema:"Timeout from 100 through 1800000 milliseconds; HTTP is limited to 120000"`
+	Trigger        *string            `json:"trigger,omitempty" jsonschema:"manual or stack-only after_ready"`
+	Tags           *[]string          `json:"tags,omitempty" jsonschema:"Replacement tags"`
+}
+
+func (in UpdateCheckInput) validate() error {
+	if err := identifier("id", in.ID); err != nil {
+		return err
+	}
+	if in.OwnerType != nil {
+		if err := oneOf("owner_type", *in.OwnerType, "stack", "command", "run"); err != nil {
+			return err
+		}
+	}
+	if in.OwnerID != nil {
+		if err := identifier("owner_id", *in.OwnerID); err != nil {
+			return err
+		}
+	}
+	if in.Name != nil {
+		if err := required("name", *in.Name); err != nil {
+			return err
+		}
+	}
+	if in.Kind != nil {
+		if err := oneOf("kind", *in.Kind, "http", "command"); err != nil {
+			return err
+		}
+	}
+	if in.Trigger != nil {
+		if err := oneOf("trigger", *in.Trigger, "manual", "after_ready"); err != nil {
+			return err
+		}
+	}
+	if in.HTTPScope != nil {
+		if err := oneOf("http_scope", *in.HTTPScope, "local", "remote"); err != nil {
+			return err
+		}
+	}
+	if in.TimeoutMS != nil && (*in.TimeoutMS < 100 || *in.TimeoutMS > 1800000) {
+		return fmt.Errorf("timeout_ms must be between 100 and 1800000")
+	}
+	if in.Tags != nil {
+		if err := validateStrings("tags", *in.Tags, 50, 100); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type RunCheckInput struct {
+	ID            string            `json:"id" jsonschema:"Check identifier"`
+	Parameters    map[string]string `json:"parameters,omitempty" jsonschema:"Transient parameter values for a command-backed task check; never repeat secrets"`
+	WaitFor       string            `json:"wait_for,omitempty" jsonschema:"MCP response policy: spawn or exit"`
+	WaitTimeoutMS *int              `json:"wait_timeout_ms,omitempty" jsonschema:"Maximum time this call waits; does not change the check timeout"`
+}
+
+func (in RunCheckInput) validate() error {
+	if err := identifier("id", in.ID); err != nil {
+		return err
+	}
+	if err := oneOf("wait_for", in.WaitFor, "", "spawn", "exit"); err != nil {
+		return err
+	}
+	if err := nonNegative("wait_timeout_ms", in.WaitTimeoutMS); err != nil {
+		return err
+	}
+	return validateParameterValues("parameters", in.Parameters)
+}
+
+type RunChecksInput struct {
+	OwnerType  string                       `json:"owner_type" jsonschema:"Owner type: stack, command, or run"`
+	OwnerID    string                       `json:"owner_id" jsonschema:"Owner identifier"`
+	CheckIDs   []string                     `json:"check_ids,omitempty" jsonschema:"Optional subset of attached check identifiers"`
+	Parameters map[string]map[string]string `json:"parameters,omitempty" jsonschema:"Transient task parameter values keyed by check ID"`
+}
+
+func (in RunChecksInput) validate() error {
+	if err := oneOf("owner_type", in.OwnerType, "stack", "command", "run"); err != nil {
+		return err
+	}
+	if err := identifier("owner_id", in.OwnerID); err != nil {
+		return err
+	}
+	if len(in.CheckIDs) > 0 {
+		if err := uniqueNonEmpty("check_ids", in.CheckIDs); err != nil {
+			return err
+		}
+	}
+	for id, values := range in.Parameters {
+		if err := identifier("parameters check id", id); err != nil {
+			return err
+		}
+		if err := validateParameterValues("parameters."+id, values); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func required(field, value string) error {

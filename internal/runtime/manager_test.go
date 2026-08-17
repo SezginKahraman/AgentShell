@@ -27,6 +27,22 @@ func testManager(t *testing.T, grace time.Duration) (*Manager, *store.Store) {
 	t.Cleanup(func() { m.Close(); s.Close() })
 	return m, s
 }
+
+func TestTailFileReadsOnlyTheRequestedFinalLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.log")
+	content := strings.Repeat("older output that should not be returned\n", 5000) + "penultimate\nlast\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tailFile(path, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "penultimate\nlast" {
+		t.Fatalf("tail=%q", got)
+	}
+}
+
 func waitInactive(t *testing.T, s *store.Store, id string) domain.Run {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -225,6 +241,10 @@ func TestExternalExpectedPortBecomesUnavailableAfterTimeout(t *testing.T) {
 	run := waitPortVerification(t, s, started.ID, "unavailable")
 	if got := run.PortVerifications[0]; got.Before != "closed" || got.After != "closed" || got.Current != "closed" || got.Confidence != "" {
 		t.Fatalf("unavailable verification=%+v", got)
+	}
+	retried, err := m.StartCommand(context.Background(), c.ID, "")
+	if err != nil || retried == nil || retried.ID == started.ID {
+		t.Fatalf("stopped external launcher was not startable again: run=%+v err=%v", retried, err)
 	}
 }
 

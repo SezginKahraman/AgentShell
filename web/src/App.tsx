@@ -2,26 +2,56 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity, Archive, Boxes, ChevronRight, CircleStop, Clock3, Code2, Copy, Database,
   ExternalLink, FileTerminal, Gauge, History, LayoutDashboard, ListChecks, Menu, Moon,
-  Network, Play, Plus, RefreshCw, RotateCcw, Search, Server, Settings, Sparkles, Square,
+  Minus, Network, Play, Plus, RefreshCw, RotateCcw, Search, Server, Settings, Sparkles, Square,
   Power, Star, Terminal, Unplug, X, Zap, FolderKanban, FolderOpen, BookmarkPlus, ScrollText,
-  Layers3, Check, Tag, Save, ArrowRight, Globe2, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Sun,
+  Layers3, Check, Tag, Save, ArrowLeft, ArrowRight, Globe2, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Sun,
 } from 'lucide-react'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
-import type { Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from './types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember } from './types'
 
 type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
-type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details'
-type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script'
-type StackDetailTab = 'Overview' | 'Logs'
+type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details' | 'Checks & Tests'
+type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script' | 'Checks & Tests'
+type StackDetailTab = 'Overview' | 'Logs' | 'Checks & Tests'
 type DeleteTarget = { type: 'command'; item: SavedCommand } | { type: 'stack'; item: Stack }
 type CatalogSort = 'default' | 'running' | 'stopped' | 'port'
 type Theme = 'light' | 'dark'
 type LogFilter = 'all' | 'errors'
+type CheckDetailView = 'request' | 'response' | 'edit'
 type ParameterRequest = { title: string; commands: SavedCommand[]; submit: (values: Record<string, Record<string, string>>) => void }
+type CheckDraft = { name: string; description: string; kind: 'http' | 'command'; commandID: string; method: NonNullable<CheckDefinition['http_method']>; url: string; scope: 'local' | 'remote'; headers: string; body: string; expectedStatus: string; bodyContains: string; timeoutMS: string; trigger: 'manual' | 'after_ready'; tags: string }
 
-const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [] }
+const pagePaths: Record<Page, string> = {
+	dashboard: '/',
+	runs: '/runs',
+	ports: '/ports',
+	logs: '/logs',
+	history: '/history',
+	projects: '/projects',
+	services: '/services',
+	tasks: '/tasks',
+	stacks: '/stacks',
+	settings: '/settings',
+}
+const pageFromPath = (pathname: string): Page => {
+	const normalized = pathname !== '/' ? pathname.replace(/\/+$/, '') : pathname
+	return (Object.entries(pagePaths).find(([, path]) => path === normalized)?.[0] as Page | undefined) ?? 'dashboard'
+}
+
+const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [], checks: [] }
 const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
+const externalDisplayState = (lifecycleMode?: string, observedState?: string, status?: string, canStop?: boolean) => {
+	if (lifecycleMode !== 'external') return status ?? 'stopped'
+	if (status === 'failed') return 'failed'
+	if (observedState === 'unknown' && canStop) return 'started_unverified'
+	if (observedState) return observedState
+	if (status === 'starting' || status === 'stopping') return 'checking'
+	if (status === 'stopped') return 'stopped'
+	return 'unknown'
+}
+const commandDisplayState = (command: SavedCommand) => externalDisplayState(command.lifecycle_mode, command.observed_state, command.status, command.can_stop)
+const memberDisplayState = (member: StackMember, command?: SavedCommand) => externalDisplayState(member.lifecycle_mode ?? command?.lifecycle_mode, member.observed_state ?? command?.observed_state, member.status ?? command?.status, member.can_stop ?? command?.can_stop)
 const humanBytes = (bytes = 0) => bytes ? bytes > 1_000_000_000 ? `${(bytes / 1_000_000_000).toFixed(1)} GB` : `${Math.round(bytes / 1_000_000)} MB` : '—'
 const duration = (date?: string, ended?: string | null) => {
   if (!date) return '—'
@@ -41,6 +71,31 @@ const splitLogLines = (content: string) => {
   const lines = content.split('\n')
   if (lines.at(-1) === '') lines.pop()
   return lines
+}
+const outputTail = (content: string, count = 2) => splitLogLines(content).map(stripAnsi).filter(line => line.trim()).slice(-count).join('\n')
+const sourceClass = (source?: string) => (source ?? 'user').toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
+const mcpSourceLabel = (source?: string) => {
+	if (!source) return ''
+	const normalized = source.toLowerCase()
+	if (normalized === 'ai') return 'AI Started'
+	return ['user', 'cli', 'catalog', 'check', 'system'].includes(normalized) ? '' : source
+}
+const checkDraft = (check: CheckDefinition): CheckDraft => ({ name: check.name, description: check.description ?? '', kind: check.kind, commandID: check.command_id ?? '', method: check.http_method ?? 'GET', url: check.http_url ?? '', scope: check.http_scope ?? 'local', headers: JSON.stringify(check.http_headers ?? {}, null, 2), body: check.http_body ?? '', expectedStatus: (check.expected_status ?? []).join(', '), bodyContains: check.body_contains ?? '', timeoutMS: String(check.timeout_ms ?? (check.kind === 'http' ? 10000 : 300000)), trigger: check.trigger ?? 'manual', tags: (check.tags ?? []).join(', ') })
+const checkInput = (selected: CheckDefinition, draft: CheckDraft, createdBy?: string): CheckInput => {
+  let headers: Record<string, string> = {}
+  if (draft.kind === 'http' && draft.headers.trim()) {
+    let parsed: unknown
+    try { parsed = JSON.parse(draft.headers) as unknown }
+    catch { throw new Error('Headers must be valid JSON.') }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || Object.values(parsed).some(value => typeof value !== 'string')) throw new Error('Headers must be a JSON object whose values are strings.')
+    headers = parsed as Record<string, string>
+  }
+  const expected = draft.expectedStatus.split(',').map(value => value.trim()).filter(Boolean).map(Number)
+  if (expected.some(value => !Number.isInteger(value) || value < 100 || value > 599)) throw new Error('Expected status must contain comma-separated HTTP status codes from 100 to 599.')
+  const timeout = Number(draft.timeoutMS)
+  if (!Number.isInteger(timeout)) throw new Error('Timeout must be a whole number of milliseconds.')
+  const common = { owner_type: selected.owner_type, owner_id: selected.owner_id, name: draft.name.trim(), description: draft.description.trim(), kind: draft.kind, timeout_ms: timeout, trigger: draft.trigger, tags: draft.tags.split(',').map(value => value.trim()).filter(Boolean), ...(createdBy ? { created_by: createdBy } : {}) }
+  return draft.kind === 'http' ? { ...common, http_method: draft.method, http_url: draft.url.trim(), http_scope: draft.scope, http_headers: headers, http_body: draft.body, expected_status: expected, body_contains: draft.bodyContains } : { ...common, command_id: draft.commandID }
 }
 const classifiedLogLines = (content: string, stderr: string) => {
   const stderrLines = new Set(splitLogLines(stderr).map(stripAnsi))
@@ -62,7 +117,7 @@ function LogOutput({ content, stderr = '', filter = 'all', testId, className = '
 }
 
 function Status({ value = 'unknown' }: { value?: string }) {
-  return <span className={`status status-${value}`}><i />{value.replace('_', ' ')}</span>
+  return <span className={`status status-${value}`}><i />{value.replaceAll('_', ' ')}</span>
 }
 
 function IconButton({ label, children, onClick, danger, disabled, testId, pressed }: { label: string; children: React.ReactNode; onClick?: () => void; danger?: boolean; disabled?: boolean; testId?: string; pressed?: boolean }) {
@@ -114,9 +169,10 @@ function PortAction({ port }: { port: Listener }) {
 }
 
 function RunCard({ run, select, act, busy, accepting = true }: { run: Run; select: (tab?: DetailTab) => void; act: (action: 'stop' | 'restart') => void; busy: boolean; accepting?: boolean }) {
+	const actor = mcpSourceLabel(run.source)
   return <article className="run-card" data-testid={`run-card-${run.id}`}>
     <button className="run-main" onClick={() => select()} aria-label={`Inspect ${run.label}`}>
-      <div className="run-name"><span className={`run-dot ${run.status}`} /><div><h3>{run.label}</h3><code>{run.command}</code><p>{run.cwd}</p></div>{run.source?.toLowerCase() === 'ai' && <span className="ai-badge">AI Started</span>}</div>
+      <div className="run-name"><span className={`run-dot ${run.status}`} /><div><h3>{run.label}</h3><code>{run.command}</code><p>{run.cwd}</p></div>{actor && <span className="ai-badge">{actor}</span>}</div>
       <div className="run-stat"><strong>{duration(run.started_at)}</strong><span>Uptime</span></div>
       <div className="run-ports">{run.listeners?.slice(0, 2).map(port => <span key={port.port}><i />:{port.port}<small>{port.name}</small></span>) || <span className="muted">No ports</span>}</div>
       <div className="run-resource"><span>PID {run.root_pid ?? '—'}</span><strong>{run.cpu_percent?.toFixed(1) ?? '—'}% CPU</strong><span>{humanBytes(run.memory_bytes)} RAM</span></div>
@@ -133,7 +189,10 @@ function RunCard({ run, select, act, busy, accepting = true }: { run: Run; selec
 function HistoryTable({ runs, onSelect, onRunAgain, onPromote, full = false, accepting = true }: { runs: Run[]; onSelect: (r: Run, tab?: DetailTab) => void; onRunAgain?: (r: Run) => void; onPromote?: (r: Run) => void; full?: boolean; accepting?: boolean }) {
   const shown = full ? runs : runs.slice(0, 5)
   const showActions = full || !!onPromote
-  return <div className="table-wrap history-table"><table className={full ? 'history-full' : ''}><colgroup><col className="history-time" /><col className="history-command" /><col className="history-status" /><col className="history-duration" /><col className="history-source" />{showActions && <col className="history-action-column" />}</colgroup><thead><tr><th>Time</th><th>Command</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => <tr key={run.id}><td>{time(run.started_at)}</td><td><button className="command-link" title={run.command} onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button></td><td><Status value={run.status} /></td><td>{duration(run.started_at, run.ended_at)}</td><td><span className={`source ${run.source?.toLowerCase()}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>)}</tbody></table></div>
+  return <div className="table-wrap history-table"><table className={full ? 'history-full' : ''}><colgroup><col className="history-time" /><col className="history-command" /><col className="history-status" /><col className="history-duration" /><col className="history-source" />{showActions && <col className="history-action-column" />}</colgroup><thead><tr><th>Time</th><th>Command & output</th><th>Status</th><th>Duration</th><th>Source</th>{showActions && <th className="history-actions-heading">Actions</th>}</tr></thead><tbody>{shown.map(run => {
+		const preview = outputTail(run.output_preview ?? '')
+		return <tr key={run.id}><td>{time(run.started_at)}</td><td><div className="history-command-cell"><button className="command-link" data-testid={`history-command-${run.id}`} title={run.command} onClick={() => onSelect(run)}><strong>{run.command}</strong><small>{run.cwd}</small></button>{preview ? <button className="history-output-preview" data-testid={`history-output-${run.id}`} title="Open complete logs" onClick={() => onSelect(run, 'Logs')}><span>Output</span><code>{preview}</code></button> : <span className="history-output-empty">Output · No output captured</span>}</div></td><td><Status value={run.status} /></td><td>{duration(run.started_at, run.ended_at)}</td><td><span className={`source ${sourceClass(run.source)}`}>{run.source ?? 'User'}</span></td>{showActions && <td><div className="history-actions">{full && <button className="button small" data-testid={`history-logs-${run.id}`} onClick={() => onSelect(run, 'Logs')}><ScrollText /> Logs</button>}{full && !running(run.status) && <button className="button small" data-testid={`history-rerun-${run.id}`} onClick={() => onRunAgain?.(run)} disabled={!accepting}><RotateCcw /> Run again</button>}{run.command_definition_id ? <span className="saved-receipt"><Check /> Saved</span> : <button className="button small" data-testid={`history-promote-${run.id}`} onClick={() => onPromote?.(run)}><BookmarkPlus /> Save launcher</button>}</div></td>}</tr>
+	})}</tbody></table></div>
 }
 
 function PortsTable({ ports, full = false }: { ports: Listener[]; full?: boolean }) {
@@ -161,7 +220,7 @@ function QuickLaunchPanel({ data, busy, accepting, commandAction, stackAction, o
         return <article className="quick-launch-card" key={command.id} data-testid={`quick-command-${command.id}`}>
           <button className="quick-launch-main" onClick={() => openCommand(command)} aria-label={`View ${command.name} details`}>
             <span className="quick-launch-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span>
-            <span className="quick-launch-copy"><span><strong>{command.name}</strong><small>{command.kind}</small></span><Status value={command.status} /><code>{command.command}</code><em>{scope(command.project_id, command.collection_id)}</em></span>
+			<span className="quick-launch-copy"><span><strong>{command.name}</strong><small>{command.lifecycle_mode === 'external' ? `${command.kind} · external` : command.kind}</small></span><Status value={commandDisplayState(command)} /><code>{command.command}</code><em>{scope(command.project_id, command.collection_id)}</em></span>
           </button>
           <footer>
             {command.status === 'stopping' ? <button className="button small danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <>
@@ -316,17 +375,17 @@ function ExpectedPortChip({ port, verification, external }: { port: ExpectedPort
 }
 
 function CommandCard({ command, action, favorite, open, busy, accepting }: { command: SavedCommand; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; open: () => void; busy: boolean; accepting: boolean }) {
-  const isRunning = running(command.status)
-  const canStop = command.can_stop ?? isRunning
-  const activate = (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open() } }
-  return <article className="catalog-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`command-card-${command.id}`}><div className="catalog-top"><span className="catalog-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span><div><h3>{command.name}</h3><Status value={command.status} /></div><span onClick={event => event.stopPropagation()}><IconButton label={`${command.favorite ? 'Remove' : 'Add'} ${command.name} ${command.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={command.favorite ? 'favorite' : ''} fill={command.favorite ? 'currentColor' : 'none'} /></IconButton></span></div>{command.description && <p className="catalog-description">{command.description}</p>}<code title={command.command}>{command.command}</code><p title={command.cwd}>{command.cwd}</p><div className="chips">{command.lifecycle_mode === 'external' && <span>external lifecycle</span>}{command.expected_ports?.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}{command.tags?.map(t => <span key={t}>{t}</span>)}</div>{command.state_detail && <small className="state-detail">{command.state_detail}</small>}{provenance(command) && <small className="provenance">{provenance(command)}</small>}<footer onClick={event => event.stopPropagation()}>{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button data-testid={`stop-command-${command.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button data-testid={`restart-command-${command.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button data-testid={`start-command-${command.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></article>
+	const isRunning = running(command.status)
+	const canStop = command.can_stop ?? isRunning
+	const activate = (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open() } }
+	return <article className="catalog-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`command-card-${command.id}`}><div className="catalog-top"><span className="catalog-icon">{command.kind === 'service' ? <Server /> : <Zap />}</span><div><h3>{command.name}</h3><Status value={commandDisplayState(command)} /></div><span onClick={event => event.stopPropagation()}><IconButton label={`${command.favorite ? 'Remove' : 'Add'} ${command.name} ${command.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={command.favorite ? 'favorite' : ''} fill={command.favorite ? 'currentColor' : 'none'} /></IconButton></span></div>{command.description && <p className="catalog-description">{command.description}</p>}<code title={command.command}>{command.command}</code><p title={command.cwd}>{command.cwd}</p><div className="chips">{command.lifecycle_mode === 'external' && <span>external lifecycle</span>}{command.expected_ports?.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}{command.tags?.map(t => <span key={t}>{t}</span>)}</div>{command.state_detail && <small className="state-detail">{command.state_detail}</small>}{provenance(command) && <small className="provenance">{provenance(command)}</small>}<footer onClick={event => event.stopPropagation()}>{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button data-testid={`stop-command-${command.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button data-testid={`restart-command-${command.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button data-testid={`start-command-${command.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></article>
 }
 
 function StackCard({ stack, action, favorite, remove, open, busy, accepting }: { stack: Stack; action: (a: 'start' | 'stop' | 'restart') => void; favorite: () => void; remove: () => void; open: () => void; busy: boolean; accepting: boolean }) {
   const members = stack.members ?? stack.commands ?? []
   const isRunning = running(stack.status) || stack.status === 'partial'
   const activate = (event: React.KeyboardEvent) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open() } }
-  return <article className="stack-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`stack-card-${stack.id}`}><header><div><span className="eyebrow">STACK</span><h3>{stack.name}</h3><p>{stack.description}</p>{stack.created_by && <small className="provenance">Added by {stack.created_by}</small>}</div><div className="stack-summary" onClick={event => event.stopPropagation()}><IconButton label={`${stack.favorite ? 'Remove' : 'Add'} ${stack.name} ${stack.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={stack.favorite ? 'favorite' : ''} fill={stack.favorite ? 'currentColor' : 'none'} /></IconButton><div className="stack-count"><strong>{stack.running_count ?? members.filter(m => running(m.status)).length}/{stack.total_count ?? members.length}</strong><span>Running</span></div></div></header><div className="stack-members">{members.map(m => <div key={m.command_id}><Status value={m.status} /><span>{m.name ?? m.command?.name ?? m.command_id}</span></div>)}</div><footer onClick={event => event.stopPropagation()}><button data-testid={`delete-stack-${stack.id}`} className="button danger subtle" onClick={remove} disabled={busy || isRunning} title={isRunning ? 'Stop all stack members before deleting it' : `Delete ${stack.name}`}><Trash2 /> Delete</button>{isRunning && <><button data-testid={`stop-stack-${stack.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop all</button><button data-testid={`restart-stack-${stack.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button data-testid={`start-stack-${stack.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {isRunning ? 'Start missing' : 'Start all'}</button></footer></article>
+	return <article className="stack-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`stack-card-${stack.id}`}><header><div><span className="eyebrow">STACK</span><h3>{stack.name}</h3><p>{stack.description}</p>{stack.created_by && <small className="provenance">Added by {stack.created_by}</small>}</div><div className="stack-summary" onClick={event => event.stopPropagation()}><IconButton label={`${stack.favorite ? 'Remove' : 'Add'} ${stack.name} ${stack.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={stack.favorite ? 'favorite' : ''} fill={stack.favorite ? 'currentColor' : 'none'} /></IconButton><div className="stack-count"><strong>{stack.running_count ?? members.filter(m => running(m.status)).length}/{stack.total_count ?? members.length}</strong><span>Running</span></div></div></header><div className="stack-members">{members.map(m => { const command = m.command; const external = (m.lifecycle_mode ?? command?.lifecycle_mode) === 'external'; return <div key={m.command_id}><Status value={memberDisplayState(m, command)} />{external && <small className="external-badge">External</small>}<span>{m.name ?? command?.name ?? m.command_id}</span></div> })}</div><footer onClick={event => event.stopPropagation()}><button data-testid={`delete-stack-${stack.id}`} className="button danger subtle" onClick={remove} disabled={busy || isRunning} title={isRunning ? 'Stop all stack members before deleting it' : `Delete ${stack.name}`}><Trash2 /> Delete</button>{isRunning && <><button data-testid={`stop-stack-${stack.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop all</button><button data-testid={`restart-stack-${stack.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button data-testid={`start-stack-${stack.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {isRunning ? 'Start missing' : 'Start all'}</button></footer></article>
 }
 
 interface CatalogHandlers {
@@ -551,7 +610,7 @@ function PromotionReceipt({ result, project, onView, close }: { result: PromoteR
   return <div className="receipt" role="status" data-testid="promotion-receipt"><span className="receipt-icon"><Check /></span><div><strong>{result.action === 'reused' ? 'Existing launcher reused' : 'Launcher saved'}</strong><p>{result.command.name}{project ? ` · ${project.name}` : ' · Global catalog'}</p></div><button className="button small" onClick={onView}>View {project ? 'project' : 'global'} <ArrowRight /></button><IconButton label="Dismiss receipt" onClick={close}><X /></IconButton></div>
 }
 
-function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false }: { api: AgentShellApi; runs: Run[]; runID: string; setRunID: (id: string) => void; testId: string; hideRunSelect?: boolean }) {
+function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false, emptyDetail = 'Start this launcher to capture stdout and stderr here.' }: { api: AgentShellApi; runs: Run[]; runID: string; setRunID: (id: string) => void; testId: string; hideRunSelect?: boolean; emptyDetail?: string }) {
   const [content, setContent] = useState('Select a Run to inspect its combined output.')
   const [stderr, setStderr] = useState('')
   const [logFilter, setLogFilter] = useState<LogFilter>('all')
@@ -590,7 +649,7 @@ function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false
     if (follow && terminal.current) terminal.current.scrollTop = terminal.current.scrollHeight
   }, [content, stderr, logFilter, follow])
 
-  if (!runs.length) return <Empty title="No Runs yet" detail="Start this launcher to capture stdout and stderr here." />
+  if (!runs.length) return <Empty title="No Runs yet" detail={emptyDetail} />
   const errorCount = classifiedLogLines(content, stderr).filter(line => line.error).length
   return <div className="drawer-log-panel">
     <div className="drawer-log-toolbar">
@@ -602,38 +661,167 @@ function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false
   </div>
 }
 
-function CommandDrawer({ command, project, collection, api, close, action, remove, busy, accepting }: { command: SavedCommand; project?: Project; collection?: Collection; api: AgentShellApi; close: () => void; action: (a: 'start' | 'stop' | 'restart') => void; remove: () => void; busy: boolean; accepting: boolean }) {
+function ChecksPanel({ checks, commands, api, run, busy, accepting, refresh, onEmpty }: { checks: CheckDefinition[]; commands: SavedCommand[]; api: AgentShellApi; run: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; busy: string; accepting: boolean; refresh: () => Promise<void>; onEmpty: () => void }) {
+	const [selectedID, setSelectedID] = useState(checks[0]?.id ?? '')
+	const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
+	const [detailView, setDetailView] = useState<CheckDetailView>('request')
+	const [runs, setRuns] = useState<Record<string, Run[]>>({})
+	const [runID, setRunID] = useState('')
+	const [error, setError] = useState('')
+	const [draftError, setDraftError] = useState('')
+	const [saving, setSaving] = useState('')
+	const [deleteConfirm, setDeleteConfirm] = useState(false)
+	const selected = checks.find(check => check.id === selectedID) ?? checks[0]
+	const [draft, setDraft] = useState<CheckDraft>(() => selected ? checkDraft(selected) : { name: '', description: '', kind: 'http', commandID: '', method: 'GET', url: '', scope: 'local', headers: '{}', body: '', expectedStatus: '200', bodyContains: '', timeoutMS: '10000', trigger: 'manual', tags: '' })
+	const runSignature = checks.map(check => `${check.id}:${check.last_run?.id ?? ''}:${check.last_run?.status ?? ''}`).join('|')
+	useEffect(() => {
+		if (!selected) return
+		setDraft(checkDraft(selected))
+		setDraftError('')
+		setDeleteConfirm(false)
+	}, [selected?.id])
+	useEffect(() => {
+		if (!selected) return
+		let cancelled = false
+		setError('')
+		api.getCheckRuns(selected.id).then(history => {
+			if (cancelled) return
+			setRuns(current => ({ ...current, [selected.id]: history }))
+			setRunID(current => history.some(item => item.id === current) ? current : history[0]?.id ?? '')
+		}).catch(reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'Unable to load check Runs') })
+		return () => { cancelled = true }
+	}, [api, selected?.id, runSignature])
+	if (!selected) return null
+	const history = runs[selected.id] ?? (selected.last_run ? [selected.last_run] : [])
+	const selectedCommand = commands.find(item => item.id === selected.command_id)
+	const allCollapsed = checks.every(check => collapsed.has(check.id))
+	const eligibleTasks = commands.filter(command => command.kind === 'task' && command.lifecycle_mode !== 'external' && !(selected.owner_type === 'command' && selected.owner_id === command.id))
+	const selectCheck = (check: CheckDefinition, view: CheckDetailView = 'request') => { setSelectedID(check.id); setDetailView(view); setDeleteConfirm(false) }
+	const execute = (check: CheckDefinition, input?: Partial<CheckInput>) => { selectCheck(check, 'response'); run(check, input) }
+	const toggle = (id: string) => setCollapsed(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
+	const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(checks.map(check => check.id)))
+	const saveCopy = async () => {
+		setDraftError('')
+		setSaving('copy')
+		try {
+			const input = checkInput(selected, draft, 'User')
+			const saved = await api.createCheck(input)
+			await refresh()
+			setSelectedID(saved.id)
+			setDraft(checkDraft(saved))
+			setDetailView('request')
+		} catch (reason) { setDraftError(reason instanceof Error ? reason.message : 'Unable to save check') }
+		finally { setSaving('') }
+	}
+	const runDraft = () => {
+		setDraftError('')
+		try { execute(selected, checkInput(selected, draft)) }
+		catch (reason) { setDraftError(reason instanceof Error ? reason.message : 'Unable to prepare draft') }
+	}
+	const remove = async () => {
+		setDraftError('')
+		setSaving('delete')
+		try {
+			await api.deleteCheck(selected.id)
+			const next = checks.find(check => check.id !== selected.id)
+			setSelectedID(next?.id ?? '')
+			if (checks.length === 1) onEmpty()
+			await refresh()
+		} catch (reason) { setDraftError(reason instanceof Error ? reason.message : 'Unable to delete check') }
+		finally { setSaving(''); setDeleteConfirm(false) }
+	}
+	const requestRows: [string, string][] = selected.kind === 'http' ? [
+		['Request', `${selected.http_method ?? 'GET'} ${selected.http_url ?? '—'}`],
+		['Target scope', selected.http_scope === 'remote' ? 'Remote environment' : 'Local / loopback'],
+		['Headers', Object.keys(selected.http_headers ?? {}).length ? JSON.stringify(selected.http_headers, null, 2) : 'None'],
+		['Body', selected.http_body || 'None'],
+		['Expected status', selected.expected_status?.length ? selected.expected_status.join(', ') : 'Any 2xx'],
+		['Body contains', selected.body_contains || 'No body assertion'],
+		['Timeout', `${selected.timeout_ms ?? 10000} ms`],
+		['Trigger', selected.trigger === 'after_ready' ? 'Automatically after stack readiness' : 'Manual only'],
+	] : [
+		['Task launcher', selectedCommand?.name ?? 'Missing task launcher'],
+		['Command', selectedCommand?.command ?? '—'],
+		['Directory', selectedCommand?.cwd ?? '—'],
+		['Timeout', `${selected.timeout_ms ?? 300000} ms`],
+		['Trigger', selected.trigger === 'after_ready' ? 'Automatically after stack readiness' : 'Manual only'],
+	]
+	return <div className="checks-panel" data-testid="checks-tests-panel">
+		<div className="checks-intro"><div><h3>Checks &amp; Tests</h3><p>Selecting a test only shows its definition. A request or task runs only when you press Run.</p></div><div className="checks-intro-actions"><span>{checks.length} attached</span><IconButton testId="toggle-all-checks" label={allCollapsed ? 'Expand all tests' : 'Collapse all tests'} pressed={!allCollapsed} onClick={toggleAll}>{allCollapsed ? <Plus /> : <Minus />}</IconButton></div></div>
+		<div className="check-cards">{checks.map(check => {
+			const command = commands.find(item => item.id === check.command_id)
+			const active = running(check.last_run?.status)
+			const knownRuns = check.run_count ?? runs[check.id]?.length ?? (check.last_run ? 1 : 0)
+			const closed = collapsed.has(check.id)
+			return <article key={check.id} className={`${selected.id === check.id ? 'selected' : ''} ${closed ? 'collapsed' : ''}`} data-testid={`check-card-${check.id}`}>
+				<header><button type="button" className="check-card-select" data-testid={`select-check-${check.id}`} onClick={() => selectCheck(check)}><span className={`check-kind check-kind-${check.kind}`}>{check.kind === 'http' ? (check.http_method ?? 'GET') : 'TASK'}</span><span><strong>{check.name}</strong><Status value={check.last_run?.status ?? 'unknown'} /></span><span className="check-badges">{check.kind === 'http' && <em className={`check-scope check-scope-${check.http_scope ?? 'local'}`}>{check.http_scope === 'remote' ? 'Remote' : 'Local'}</em>}{check.trigger === 'after_ready' && <em>after ready</em>}</span></button><IconButton testId={`toggle-check-${check.id}`} label={`${closed ? 'Expand' : 'Collapse'} ${check.name}`} pressed={!closed} onClick={() => toggle(check.id)}>{closed ? <Plus /> : <Minus />}</IconButton></header>
+				{!closed && <div className="check-card-body">{check.description && <p>{check.description}</p>}<code title={check.kind === 'http' ? check.http_url : command?.command}>{check.kind === 'http' ? check.http_url : command ? `${command.name} · ${command.command}` : 'Missing task launcher'}</code><footer><small>{knownRuns} Run{knownRuns === 1 ? '' : 's'}{check.last_run?.started_at ? ` · last ${new Date(check.last_run.started_at).toLocaleString()}` : ''}</small><div>{knownRuns > 0 ? <button type="button" className="button small" onClick={() => selectCheck(check, 'response')}><ScrollText /> Response</button> : null}<button type="button" className="button primary small" data-testid={`run-check-${check.id}`} onClick={() => execute(check)} disabled={busy === check.id || active || !accepting}><Play /> {busy === check.id || active ? 'Running…' : 'Run'}</button></div></footer></div>}
+			</article>
+		})}</div>
+		<section className="check-detail" data-testid="check-detail-panel"><header className="check-detail-head"><div><strong>{selected.name}</strong><span>{selected.kind === 'http' ? `${selected.http_method ?? 'GET'} · ${selected.http_scope === 'remote' ? 'Remote HTTP' : 'Local HTTP'}` : 'Saved task check'}</span></div><div className="check-detail-tabs" role="tablist"><button type="button" role="tab" data-testid="check-request-tab" aria-selected={detailView === 'request'} className={detailView === 'request' ? 'active' : ''} onClick={() => setDetailView('request')}>Request</button><button type="button" role="tab" data-testid="check-response-tab" aria-selected={detailView === 'response'} className={detailView === 'response' ? 'active' : ''} onClick={() => setDetailView('response')}>Response</button><button type="button" role="tab" data-testid="check-edit-tab" aria-selected={detailView === 'edit'} className={detailView === 'edit' ? 'active' : ''} onClick={() => { setDraftError(''); setDetailView('edit') }}>Edit</button></div></header>
+			{detailView === 'request' ? <div className="check-request"><div className="check-request-note"><Check /> Inspecting this definition does not send a request or start a task.</div><Definition rows={requestRows} />{!!selected.tags?.length && <div className="chips">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}<button type="button" className="button primary" data-testid={`run-selected-check-${selected.id}`} onClick={() => execute(selected)} disabled={busy === selected.id || running(selected.last_run?.status) || !accepting}><Play /> {busy === selected.id || running(selected.last_run?.status) ? 'Running…' : 'Run now'}</button></div> : detailView === 'response' ? <div className="check-response">{error ? <div className="detail-note"><strong>Response unavailable</strong><span>{error}</span></div> : <RunLogPanel api={api} runs={history} runID={runID} setRunID={setRunID} testId="check-log-panel" emptyDetail="Review the request, then press Run to capture its response, assertions, stdout and stderr here." />}</div> : <form className="check-editor" data-testid="check-editor" onSubmit={event => event.preventDefault()}>
+				<div className="check-editor-note"><strong>Temporary draft</strong><span>Typing here never changes or runs the saved default. Run this draft once, reset it, or save it as a new test.</span></div>
+				<div className="form-row"><label>Name<input value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} required /></label><label>Kind<select value={draft.kind} onChange={event => setDraft(current => ({ ...current, kind: event.target.value as CheckDraft['kind'], timeoutMS: event.target.value === 'http' ? '10000' : '300000' }))}><option value="http">HTTP request</option><option value="command">Saved task</option></select></label></div>
+				<label>Description<textarea value={draft.description} onChange={event => setDraft(current => ({ ...current, description: event.target.value }))} rows={2} /></label>
+				{draft.kind === 'http' ? <><div className="check-http-target"><label>Method<select value={draft.method} onChange={event => setDraft(current => ({ ...current, method: event.target.value as CheckDraft['method'] }))}>{['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].map(method => <option key={method}>{method}</option>)}</select></label><label>URL<input value={draft.url} onChange={event => setDraft(current => ({ ...current, url: event.target.value }))} placeholder="http://127.0.0.1:8080/health" required /></label><label>Scope<select value={draft.scope} onChange={event => setDraft(current => ({ ...current, scope: event.target.value as CheckDraft['scope'] }))}><option value="local">Local</option><option value="remote">Remote</option></select></label></div><label>Headers (JSON)<textarea value={draft.headers} onChange={event => setDraft(current => ({ ...current, headers: event.target.value }))} rows={3} spellCheck={false} /></label><label>Request body<textarea value={draft.body} onChange={event => setDraft(current => ({ ...current, body: event.target.value }))} rows={4} spellCheck={false} /></label><div className="form-row"><label>Expected status<input value={draft.expectedStatus} onChange={event => setDraft(current => ({ ...current, expectedStatus: event.target.value }))} placeholder="200, 204" /></label><label>Body contains<input value={draft.bodyContains} onChange={event => setDraft(current => ({ ...current, bodyContains: event.target.value }))} /></label></div></> : <label>Task launcher<select value={draft.commandID} onChange={event => setDraft(current => ({ ...current, commandID: event.target.value }))} required><option value="">Select a saved task…</option>{eligibleTasks.map(command => <option key={command.id} value={command.id}>{command.name} · {command.command}</option>)}</select></label>}
+				<div className="form-row"><label>Timeout (ms)<input type="number" min="100" max={draft.kind === 'http' ? 120000 : 1800000} value={draft.timeoutMS} onChange={event => setDraft(current => ({ ...current, timeoutMS: event.target.value }))} required /></label><label>Trigger<select value={draft.trigger} onChange={event => setDraft(current => ({ ...current, trigger: event.target.value as CheckDraft['trigger'] }))}><option value="manual">Manual</option>{selected.owner_type === 'stack' && <option value="after_ready">After ready</option>}</select></label></div><label>Tags<input value={draft.tags} onChange={event => setDraft(current => ({ ...current, tags: event.target.value }))} placeholder="smoke, api" /></label>
+				{draftError && <p className="inline-error" role="alert">{draftError}</p>}{deleteConfirm && <div className="check-delete-confirm"><span>Delete this saved test definition? Previous Runs and logs will remain.</span><button type="button" className="button" onClick={() => setDeleteConfirm(false)}>Cancel</button><button type="button" className="button danger" data-testid="confirm-delete-check" onClick={remove} disabled={saving === 'delete'}><Trash2 /> {saving === 'delete' ? 'Deleting…' : 'Delete test'}</button></div>}
+				<footer><button type="button" className="button danger subtle" data-testid="delete-check" onClick={() => setDeleteConfirm(true)} disabled={!!saving}><Trash2 /> Delete</button><span /><button type="button" className="button" onClick={() => { setDraft(checkDraft(selected)); setDraftError('') }} disabled={!!saving}>Reset</button><button type="button" className="button primary" data-testid="run-check-draft" onClick={runDraft} disabled={!!saving || busy === selected.id || !accepting || !draft.name.trim()}><Play /> {busy === selected.id ? 'Running…' : 'Run draft'}</button><button type="button" className="button" data-testid="save-check-copy" onClick={saveCopy} disabled={!!saving || !draft.name.trim()}><Copy /> {saving === 'copy' ? 'Saving…' : 'Save as new'}</button></footer>
+			</form>}
+		</section>
+	</div>
+}
+
+function CommandDrawer({ command, project, collection, checks, commands, api, close, back, action, runCheck, remove, busy, globalBusy, accepting, refresh }: { command: SavedCommand; project?: Project; collection?: Collection; checks: CheckDefinition[]; commands: SavedCommand[]; api: AgentShellApi; close: () => void; back?: { label: string; action: () => void }; action: (a: 'start' | 'stop' | 'restart') => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; remove: () => void; busy: boolean; globalBusy: string; accepting: boolean; refresh: () => Promise<void> }) {
   const [tab, setTab] = useState<CommandDetailTab>('Overview')
   const [runs, setRuns] = useState<Run[]>(command.last_run ? [command.last_run] : [])
   const [source, setSource] = useState<{ available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }>({ available: false })
   const [runID, setRunID] = useState(command.active_run_id ?? command.last_run?.id ?? '')
   const [detailError, setDetailError] = useState('')
+  const [outputPreview, setOutputPreview] = useState<{ runID: string; content: string; state: 'loading' | 'ready' | 'empty' | 'error' }>({ runID: '', content: '', state: 'loading' })
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     let cancelled = false
+    let previewTimer: number | undefined
     setLoading(true)
+    setOutputPreview({ runID: '', content: '', state: 'loading' })
     Promise.all([api.getCommandRuns(command.id), api.getCommandSource(command.id)]).then(([history, script]) => {
       if (cancelled) return
       setRuns(history)
       setSource(script)
-      setRunID(current => current || history[0]?.id || '')
+      const latestRunID = history[0]?.id ?? ''
+      setRunID(current => current || latestRunID)
+      if (!latestRunID) {
+        setOutputPreview({ runID: '', content: '', state: 'empty' })
+        return
+      }
+      setOutputPreview({ runID: latestRunID, content: '', state: 'loading' })
+      const loadPreview = () => api.getLogs(latestRunID, 'combined', 2).then(result => {
+          if (cancelled) return
+          const content = outputTail(result.content)
+          setOutputPreview({ runID: latestRunID, content, state: content ? 'ready' : 'empty' })
+        }).catch(() => { if (!cancelled) setOutputPreview({ runID: latestRunID, content: '', state: 'error' }) })
+      loadPreview()
+      if (running(history[0]?.status)) previewTimer = window.setInterval(loadPreview, 1200)
     }).catch(error => { if (!cancelled) setDetailError(`Unable to load launcher details: ${error.message}`) }).finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    return () => { cancelled = true; if (previewTimer) window.clearInterval(previewTimer) }
   }, [api, command.id])
   const canStop = command.can_stop ?? running(command.status)
-  const tabs: CommandDetailTab[] = source.available ? ['Overview', 'Runs', 'Logs', 'Script'] : ['Overview', 'Runs', 'Logs']
-  const overviewRows: [string, string][] = [[command.lifecycle_mode === 'external' ? 'Start command' : 'Command', command.command]]
-  if (command.lifecycle_mode === 'external') overviewRows.push(['Stop command', command.stop_command ?? '—'], ['Restart command', command.restart_command || 'Stop, then start'])
-  overviewRows.push(['Directory', command.cwd], ['Project', project?.name ?? 'Global catalog'], ['Collection', collection?.name ?? 'Project root'], ['Kind', command.kind], ['Lifecycle', command.lifecycle_mode ?? 'managed'], ['Shell', command.shell || '/bin/sh'], ['Concurrency', command.concurrency_policy ?? 'forbid'], ['Previous Runs', String(command.run_count ?? runs.length)])
-  return <><button className="drawer-scrim" aria-label="Close launcher details" onClick={close} /><aside className="drawer command-drawer" data-testid="command-detail-drawer" aria-label={`${command.name} launcher details`}><header className="drawer-head"><div><h2>{command.name}</h2><Status value={command.status} /></div><IconButton label="Close launcher details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`command-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
-    {tab === 'Overview' && <><Definition rows={overviewRows} />{!!command.parameters?.length && <><h3>Runtime inputs</h3><div className="parameter-schema">{command.parameters.map(parameter => <div key={parameter.key}><span className={parameter.type === 'secret' ? 'secret' : ''}>{parameter.type === 'secret' ? '•••' : parameter.type}</span><strong>{parameter.label}</strong><small>{parameter.required ? 'Required' : 'Optional'} · {parameter.binding === 'stdin' ? 'stdin' : 'temporary ' + parameter.env_var}</small>{parameter.description && <p>{parameter.description}</p>}</div>)}</div><p className="port-verification-note">Only field definitions are saved. Values are requested again for every start or restart.</p></>}{detailError && <div className="detail-note"><strong>Details unavailable</strong><span>{detailError}</span></div>}{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
+  const tabs: CommandDetailTab[] = [...(source.available ? ['Overview', 'Runs', 'Logs', 'Script'] as CommandDetailTab[] : ['Overview', 'Runs', 'Logs'] as CommandDetailTab[]), ...(checks.length ? ['Checks & Tests'] as CommandDetailTab[] : [])]
+	const overviewRows: [string, string][] = [[command.lifecycle_mode === 'external' ? 'Start command' : 'Command', command.command]]
+	if (command.lifecycle_mode === 'external') overviewRows.push(['Stop command', command.stop_command ?? '—'], ['Restart command', command.restart_command || 'Stop, then start'])
+	if (command.lifecycle_mode === 'external') overviewRows.push(['Observed state', commandDisplayState(command)], ['State confidence', command.state_confidence ?? 'unknown'])
+	overviewRows.push(['Directory', command.cwd], ['Project', project?.name ?? 'Global catalog'], ['Collection', collection?.name ?? 'Project root'], ['Kind', command.kind], ['Lifecycle', command.lifecycle_mode ?? 'managed'], ['Shell', command.shell || '/bin/sh'], ['Concurrency', command.concurrency_policy ?? 'forbid'], ['Previous Runs', String(command.run_count ?? runs.length)])
+	return <><button className="drawer-scrim" aria-label="Close launcher details" onClick={close} /><aside className="drawer command-drawer" data-testid="command-detail-drawer" aria-label={`${command.name} launcher details`}><header className="drawer-head"><div className="drawer-heading-copy">{back && <button className="drawer-back" data-testid="drawer-back" onClick={back.action}><ArrowLeft /> Back to {back.label}</button>}<h2>{command.name}</h2><span className="drawer-lifecycle-state"><Status value={commandDisplayState(command)} />{command.lifecycle_mode === 'external' && <em className="external-badge">External</em>}</span></div><IconButton label="Close launcher details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`command-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
+    {tab === 'Overview' && <><Definition rows={overviewRows.slice(0, 1)} /><dl className="definition output-definition"><div><dt>Output</dt><dd>{outputPreview.runID ? <button className="output-preview" data-testid="command-output-preview" onClick={() => { setRunID(outputPreview.runID); setTab('Logs') }}><code>{outputPreview.state === 'loading' ? 'Loading latest output…' : outputPreview.state === 'ready' ? outputPreview.content : outputPreview.state === 'error' ? 'Latest output could not be loaded.' : 'This Run produced no output.'}</code><span><ScrollText /> View full logs</span></button> : <span className="output-preview-empty">{outputPreview.state === 'loading' ? 'Loading Run history…' : 'No previous Run output.'}</span>}</dd></div></dl><Definition rows={overviewRows.slice(1)} />{!!command.parameters?.length && <><h3>Runtime inputs</h3><div className="parameter-schema">{command.parameters.map(parameter => <div key={parameter.key}><span className={parameter.type === 'secret' ? 'secret' : ''}>{parameter.type === 'secret' ? '•••' : parameter.type}</span><strong>{parameter.label}</strong><small>{parameter.required ? 'Required' : 'Optional'} · {parameter.binding === 'stdin' ? 'stdin' : 'temporary ' + parameter.env_var}</small>{parameter.description && <p>{parameter.description}</p>}</div>)}</div><p className="port-verification-note">Only field definitions are saved. Values are requested again for every start or restart.</p></>}{detailError && <div className="detail-note"><strong>Details unavailable</strong><span>{detailError}</span></div>}{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
     {tab === 'Runs' && (loading ? <Empty title="Loading Runs" detail="Reading launcher history." /> : runs.length ? <div className="command-runs">{runs.map(run => <button key={run.id} onClick={() => { setRunID(run.id); setTab('Logs') }}><div><strong>{run.lifecycle_action ? `${run.lifecycle_action} · ` : ''}{run.command}</strong><small>{run.started_at ? new Date(run.started_at).toLocaleString() : 'Not started'} · {duration(run.started_at, run.ended_at)}</small></div><Status value={run.status} /><ScrollText /></button>)}</div> : <Empty title="No previous Runs" detail="This launcher has not been started through AgentShell yet." />)}
     {tab === 'Logs' && <RunLogPanel api={api} runs={runs} runID={runID} setRunID={setRunID} testId="command-log-panel" />}
     {tab === 'Script' && <><div className="script-heading"><div><strong>{source.path}</strong><small>Read-only · loaded from the launcher working directory</small></div>{source.truncated && <span>First 512 KiB</span>}</div><pre className="script-view" data-testid="command-script-panel">{source.content || '# Empty script'}</pre></>}
+	{tab === 'Checks & Tests' && <ChecksPanel checks={checks} commands={commands} api={api} run={runCheck} busy={globalBusy} accepting={accepting} refresh={refresh} onEmpty={() => setTab('Overview')} />}
 	  </div><footer className="drawer-actions command-drawer-actions"><button className="button danger subtle" data-testid={`delete-command-${command.id}`} onClick={remove} disabled={busy || canStop} title={canStop ? 'Stop the launcher before deleting it' : `Delete ${command.name}`}><Trash2 /> Delete</button><span />{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></aside></>
 }
 
-function StackDrawer({ stack, commands, project, collection, api, close, action, save, remove, busy, accepting, initialEditing = false }: { stack: Stack; commands: SavedCommand[]; project?: Project; collection?: Collection; api: AgentShellApi; close: () => void; action: (a: 'start' | 'stop' | 'restart', commandIDs?: string[]) => void; save: (input: Partial<Stack>) => void; remove: () => void; busy: boolean; accepting: boolean; initialEditing?: boolean }) {
+function StackDrawer({ stack, commands, project, collection, checks, api, close, openMember, action, memberAction, runCheck, save, remove, busy, globalBusy, accepting, refresh, initialEditing = false }: { stack: Stack; commands: SavedCommand[]; project?: Project; collection?: Collection; checks: CheckDefinition[]; api: AgentShellApi; close: () => void; openMember: (id: string) => void; action: (a: 'start' | 'stop' | 'restart', commandIDs?: string[]) => void; memberAction: (command: SavedCommand, action: 'stop' | 'restart') => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; save: (input: Partial<Stack>) => void; remove: () => void; busy: boolean; globalBusy: string; accepting: boolean; refresh: () => Promise<void>; initialEditing?: boolean }) {
 	const members = (stack.members ?? stack.commands ?? []).slice().sort((left, right) => (left.position ?? 0) - (right.position ?? 0))
 	const normalized = () => members.map((member, position) => ({ ...member, position, depends_on: member.depends_on ?? [], wait_for: member.wait_for ?? 'spawn' as const, wait_timeout_ms: member.wait_timeout_ms ?? 30000 }))
 	const isActive = (member: (typeof members)[number]) => member.can_stop ?? running(member.status)
@@ -696,7 +884,8 @@ function StackDrawer({ stack, commands, project, collection, api, close, action,
 		save({ start_strategy: strategy, failure_policy: failurePolicy, members: draft.map(({ command_id, position, depends_on, wait_for, wait_timeout_ms }) => ({ command_id, position, depends_on, wait_for, wait_timeout_ms })) })
 		setEditing(false)
 	}
-	return <><button className="drawer-scrim" aria-label="Close stack details" onClick={close} /><aside className="drawer stack-drawer" data-testid="stack-detail-drawer" aria-label={`${stack.name} stack details`}><header className="drawer-head"><div><h2>{stack.name}</h2><Status value={stack.status} /></div><div className="drawer-head-actions">{editing ? <button className="button small" onClick={() => setEditing(false)} disabled={busy}>Cancel edit</button> : <button className="button small" data-testid={`edit-stack-orchestration-${stack.id}`} onClick={beginEdit} disabled={busy || hasActive} title={hasActive ? 'Stop all stack members before editing orchestration' : 'Edit dependency orchestration'}><Settings /> Orchestration</button>}<IconButton label="Close stack details" onClick={close}><X /></IconButton></div></header>{!editing && <div className="tabs" role="tablist">{(['Overview', 'Logs'] as StackDetailTab[]).map(name => <button data-testid={`stack-tab-${name.toLowerCase()}`} role="tab" aria-selected={viewTab === name} className={viewTab === name ? 'active' : ''} onClick={() => setViewTab(name)} key={name}>{name}</button>)}</div>}<div className="drawer-body">
+	const tabs: StackDetailTab[] = ['Overview', 'Logs', ...(checks.length ? ['Checks & Tests'] as StackDetailTab[] : [])]
+	return <><button className="drawer-scrim" aria-label="Close stack details" onClick={close} /><aside className="drawer stack-drawer" data-testid="stack-detail-drawer" aria-label={`${stack.name} stack details`}><header className="drawer-head"><div><h2>{stack.name}</h2><Status value={stack.status} /></div><div className="drawer-head-actions">{editing ? <button className="button small" onClick={() => setEditing(false)} disabled={busy}>Cancel edit</button> : <button className="button small" data-testid={`edit-stack-orchestration-${stack.id}`} onClick={beginEdit} disabled={busy || hasActive} title={hasActive ? 'Stop all stack members before editing orchestration' : 'Edit dependency orchestration'}><Settings /> Orchestration</button>}<IconButton label="Close stack details" onClick={close}><X /></IconButton></div></header>{!editing && <div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`stack-tab-${name.toLowerCase()}`} role="tab" aria-selected={viewTab === name} className={viewTab === name ? 'active' : ''} onClick={() => setViewTab(name)} key={name}>{name}</button>)}</div>}<div className="drawer-body">
 		{stack.description && <p className="stack-detail-description">{stack.description}</p>}
 		{editing ? <div className="stack-orchestration" data-testid="stack-orchestration-editor">
 			<div className="orchestration-intro"><strong>Dependency orchestration</strong><span>Rows unlock only after their dependencies satisfy the configured condition. Stop runs in reverse dependency order.</span></div>
@@ -706,31 +895,51 @@ function StackDrawer({ stack, commands, project, collection, api, close, action,
 				return <article className="orchestration-member" data-testid={`stack-member-config-${member.command_id}`} key={member.command_id}><header><span className="member-position">{index + 1}</span><div><strong>{member.name ?? command?.name ?? member.command_id}</strong><code>{command?.command ?? member.command_id}</code></div><div><IconButton label={`Move ${nameOf(member.command_id)} up`} onClick={() => moveMember(index, -1)} disabled={index === 0 || busy}><ChevronUp /></IconButton><IconButton label={`Move ${nameOf(member.command_id)} down`} onClick={() => moveMember(index, 1)} disabled={index === draft.length - 1 || busy}><ChevronDown /></IconButton></div></header><div className="member-condition"><label>Consider complete when<select aria-label={`${nameOf(member.command_id)} wait condition`} value={member.wait_for} onChange={event => updateMember(member.command_id, { wait_for: event.target.value as 'spawn' | 'ready' | 'exit' })}><option value="spawn">Process is spawned</option><option value="ready">Expected ports are ready</option><option value="exit">Command exits successfully</option></select></label><label>Timeout (ms)<input aria-label={`${nameOf(member.command_id)} wait timeout`} type="number" min="100" max="600000" step="100" value={member.wait_timeout_ms} onChange={event => updateMember(member.command_id, { wait_timeout_ms: Number(event.target.value) })} /></label></div><fieldset><legend>Starts after</legend><div className="dependency-options">{draft.filter(candidate => candidate.command_id !== member.command_id).map(candidate => <label key={candidate.command_id}><input type="checkbox" checked={member.depends_on?.includes(candidate.command_id) ?? false} onChange={() => toggleDependency(member.command_id, candidate.command_id)} /><span>{nameOf(candidate.command_id)}</span></label>)}{draft.length === 1 && <small>No other stack members.</small>}</div></fieldset></article>
 			})}</div>
 			<div className="orchestration-save"><button className="button primary" data-testid={`save-stack-orchestration-${stack.id}`} onClick={saveOrchestration} disabled={busy}><Save /> Save orchestration</button></div>
-		</div> : viewTab === 'Logs' ? <div className="stack-logs" data-testid="stack-log-view">
+		</div> : viewTab === 'Checks & Tests' ? <ChecksPanel checks={checks} commands={commands} api={api} run={runCheck} busy={globalBusy} accepting={accepting} refresh={refresh} onEmpty={() => setViewTab('Overview')} /> : viewTab === 'Logs' ? <div className="stack-logs" data-testid="stack-log-view">
 			<div className="stack-log-heading"><div><h3>Member logs</h3><small>Choose a stack member, then inspect its current or previous Run output.</small></div>{logsLoading && <span><RefreshCw /> Loading Runs…</span>}</div>
-			<div className="stack-log-members" role="tablist" aria-label="Stack members">{members.map(member => <button key={member.command_id} role="tab" data-testid={`stack-log-member-${member.command_id}`} aria-selected={logMemberID === member.command_id} className={logMemberID === member.command_id ? 'active' : ''} onClick={() => selectLogMember(member.command_id)}><span><strong>{nameOf(member.command_id)}</strong><small>{memberRuns[member.command_id]?.length ?? 0} Run{(memberRuns[member.command_id]?.length ?? 0) === 1 ? '' : 's'}</small></span><Status value={member.status ?? 'stopped'} /></button>)}</div>
+			<div className="stack-log-members" role="tablist" aria-label="Stack members">{members.map(member => { const command = commands.find(item => item.id === member.command_id) ?? member.command; return <button key={member.command_id} role="tab" data-testid={`stack-log-member-${member.command_id}`} aria-selected={logMemberID === member.command_id} className={logMemberID === member.command_id ? 'active' : ''} onClick={() => selectLogMember(member.command_id)}><span><strong>{nameOf(member.command_id)}</strong><small>{memberRuns[member.command_id]?.length ?? 0} Run{(memberRuns[member.command_id]?.length ?? 0) === 1 ? '' : 's'}{(member.lifecycle_mode ?? command?.lifecycle_mode) === 'external' ? ' · external' : ''}</small></span><Status value={memberDisplayState(member, command)} /></button> })}</div>
 			{logsError ? <div className="detail-note"><strong>Logs unavailable</strong><span>{logsError}</span></div> : logMemberID && !logsLoading ? <RunLogPanel api={api} runs={memberRuns[logMemberID] ?? []} runID={logRunID} setRunID={setLogRunID} testId="stack-log-panel" /> : <Empty title="Loading member Runs" detail="Reading Run history and combined output." />}
 		</div> : <>
 			<Definition rows={[["Project", project?.name ?? "Global catalog"], ["Collection", collection?.name ?? "Project root"], ["Start strategy", stack.start_strategy ?? "parallel"], ["Failure policy", stack.failure_policy ?? "continue"], ["Members", `${stack.running_count ?? members.filter(isActive).length}/${stack.total_count ?? members.length} running`]]} />
-			<div className="stack-flow-summary" aria-label="Stack dependency order">{members.map((member, index) => <div key={member.command_id}><span>{index + 1}</span><strong>{nameOf(member.command_id)}</strong><small>{member.depends_on?.length ? `after ${member.depends_on.map(nameOf).join(', ')}` : 'root'} · wait {member.wait_for ?? 'spawn'} · {member.wait_timeout_ms ?? 30000} ms</small></div>)}</div>
+			<div className="stack-flow-summary" aria-label="Stack dependency order">{members.map((member, index) => { const command = commands.find(item => item.id === member.command_id) ?? member.command; return <div key={member.command_id}><span>{index + 1}</span><strong>{nameOf(member.command_id)}</strong><small>{member.depends_on?.length ? `after ${member.depends_on.map(nameOf).join(', ')}` : 'root'} · wait {member.wait_for ?? 'spawn'} · {member.wait_timeout_ms ?? 30000} ms · {memberDisplayState(member, command)}{(member.lifecycle_mode ?? command?.lifecycle_mode) === 'external' ? ' external' : ''}</small></div> })}</div>
 			<div className="stack-member-heading"><div><h3>Choose members to start</h3><small>Dependencies are included automatically; running members stay untouched.</small></div><button className="text-button" onClick={toggleAll} disabled={!available.length}>{allSelected ? "Clear" : "Select available"}</button></div>
 			<div className="stack-member-picker">{members.map(member => {
 				const command = commands.find(item => item.id === member.command_id) ?? member.command
 				const active = isActive(member)
-				return <label className={active ? "active" : ""} key={member.command_id}><input type="checkbox" checked={selectedIDs.includes(member.command_id)} disabled={active || busy} onChange={() => toggle(member.command_id)} /><span><strong>{member.name ?? command?.name ?? member.command_id}</strong><code>{command?.command ?? member.command_id}</code><small>{command?.cwd ?? "Saved stack member"}</small></span><Status value={member.status ?? "stopped"} /></label>
+				const external = (member.lifecycle_mode ?? command?.lifecycle_mode) === 'external'
+				const currentState = memberDisplayState(member, command)
+				return <div className={`stack-member-row ${active ? "active" : ""}`} key={member.command_id} data-testid={`stack-member-${member.command_id}`}><label className="stack-member-select" title={active ? `${member.name ?? command?.name} has already been started` : `Select ${member.name ?? command?.name}`}><input type="checkbox" checked={selectedIDs.includes(member.command_id)} disabled={active || busy} onChange={() => toggle(member.command_id)} /><span><strong>{member.name ?? command?.name ?? member.command_id}</strong><code>{command?.command ?? member.command_id}</code><small>{command?.cwd ?? "Saved stack member"}</small></span></label><div className="stack-member-state"><span><Status value={currentState} />{external && <em className="external-badge">External</em>}</span>{member.state_detail && <small title={member.state_detail}>{member.state_detail}</small>}<div className="stack-member-actions">{active && command && <button className="button small danger" data-testid={`stack-member-stop-${member.command_id}`} onClick={() => memberAction(command, 'stop')} disabled={globalBusy === member.command_id}><Square /> Stop</button>}<button className="button small" data-testid={`stack-member-details-${member.command_id}`} onClick={() => openMember(member.command_id)}><ChevronRight /> Details</button></div></div></div>
 			})}</div>
 		</>}
 	</div>{!editing && <footer className="drawer-actions stack-drawer-actions"><button className="button danger subtle" data-testid={`drawer-delete-stack-${stack.id}`} onClick={remove} disabled={busy || hasActive}><Trash2 /> Delete</button>{hasActive && <><button className="button danger" onClick={() => action("stop")} disabled={busy}><Square /> Stop all</button><button className="button" onClick={() => action("restart")} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button className="button primary" data-testid={`start-selected-stack-${stack.id}`} onClick={() => { action("start", selectedIDs); setSelectedIDs([]) }} disabled={busy || !accepting || selectedIDs.length === 0}><Play /> Start selected ({selectedIDs.length})</button></footer>}</aside></>
 }
 
-function DetailDrawer({ run, tab, setTab, close, api, action, busy, accepting }: { run: Run; tab: DetailTab; setTab: (t: DetailTab) => void; close: () => void; api: AgentShellApi; action: (a: 'stop' | 'restart') => void; busy: boolean; accepting: boolean }) {
+function DetailDrawer({ run, tab, setTab, close, checks, commands, api, action, runCheck, busy, globalBusy, accepting, refresh }: { run: Run; tab: DetailTab; setTab: (t: DetailTab) => void; close: () => void; checks: CheckDefinition[]; commands: SavedCommand[]; api: AgentShellApi; action: (a: 'stop' | 'restart') => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; busy: boolean; globalBusy: string; accepting: boolean; refresh: () => Promise<void> }) {
   const listeners = run.listeners ?? []
-  return <><button className="drawer-scrim" aria-label="Close run details" onClick={close} /><aside className="drawer" data-testid="run-detail-drawer" aria-label={`${run.label} details`}><header className="drawer-head"><div><h2>{run.label}</h2><Status value={run.status} /></div><IconButton label="Close run details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{(['Overview', 'Logs', 'Processes', 'Ports', 'Details'] as DetailTab[]).map(name => <button data-testid={`detail-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
-    {tab === 'Overview' && <><Definition rows={[['Command', run.command], ['Directory', run.cwd], ['Started', run.started_at ? new Date(run.started_at).toLocaleString() : '—'], ['Source', run.source ?? 'User'], ['Shell', run.shell ?? 'default'], ['Exit Code', run.exit_code?.toString() ?? '—']]} /><h3>Ports ({listeners.length})</h3><div className="port-list">{listeners.map(p => <div key={p.port}><strong>{p.port}</strong><span>{p.name ?? p.protocol}</span><Status value={p.status ?? 'listening'} /><PortAction port={p} /></div>)}</div><h3>Resource usage</h3><Metric label="CPU" value={`${run.cpu_percent?.toFixed(1) ?? 0}%`} percent={run.cpu_percent ?? 0} /><Metric label="Memory" value={humanBytes(run.memory_bytes)} percent={Math.min(100, (run.memory_bytes ?? 0) / 5_000_000)} /></>}
+  const tabs: DetailTab[] = ['Overview', 'Logs', 'Processes', 'Ports', 'Details', ...(checks.length ? ['Checks & Tests'] as DetailTab[] : [])]
+	const initialPreview = outputTail(run.output_preview ?? '')
+	const [outputPreview, setOutputPreview] = useState<{ content: string; state: 'loading' | 'ready' | 'empty' | 'error' }>({ content: initialPreview, state: initialPreview ? 'ready' : 'loading' })
+	useEffect(() => {
+		let cancelled = false
+		let timer: number | undefined
+		const fallback = outputTail(run.output_preview ?? '')
+		setOutputPreview({ content: fallback, state: fallback ? 'ready' : 'loading' })
+		const load = () => api.getLogs(run.id, 'combined', 2).then(result => {
+			if (cancelled) return
+			const content = outputTail(result.content)
+			setOutputPreview({ content, state: content ? 'ready' : 'empty' })
+		}).catch(() => { if (!cancelled) setOutputPreview(current => current.content ? current : { content: '', state: 'error' }) })
+		load()
+		if (running(run.status)) timer = window.setInterval(load, 1200)
+		return () => { cancelled = true; if (timer) window.clearInterval(timer) }
+	}, [api, run.id, run.output_preview, run.status])
+  return <><button className="drawer-scrim" aria-label="Close run details" onClick={close} /><aside className="drawer" data-testid="run-detail-drawer" aria-label={`${run.label} details`}><header className="drawer-head"><div><h2>{run.label}</h2><Status value={run.status} /></div><IconButton label="Close run details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`detail-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
+    {tab === 'Overview' && <><Definition rows={[['Command', run.command]]} /><dl className="definition output-definition"><div><dt>Output</dt><dd><button className="output-preview" data-testid="run-output-preview" onClick={() => setTab('Logs')}><code>{outputPreview.state === 'loading' ? 'Loading latest output…' : outputPreview.state === 'ready' ? outputPreview.content : outputPreview.state === 'error' ? 'Latest output could not be loaded.' : 'This Run produced no output.'}</code><span><ScrollText /> View full logs</span></button></dd></div></dl><Definition rows={[['Directory', run.cwd], ['Started', run.started_at ? new Date(run.started_at).toLocaleString() : '—'], ['Source', run.source ?? 'User'], ['Shell', run.shell ?? 'default'], ['Exit Code', run.exit_code?.toString() ?? '—']]} /><h3>Ports ({listeners.length})</h3><div className="port-list">{listeners.map(p => <div key={p.port}><strong>{p.port}</strong><span>{p.name ?? p.protocol}</span><Status value={p.status ?? 'listening'} /><PortAction port={p} /></div>)}</div><h3>Resource usage</h3><Metric label="CPU" value={`${run.cpu_percent?.toFixed(1) ?? 0}%`} percent={run.cpu_percent ?? 0} /><Metric label="Memory" value={humanBytes(run.memory_bytes)} percent={Math.min(100, (run.memory_bytes ?? 0) / 5_000_000)} /></>}
     {tab === 'Logs' && <RunLogPanel api={api} runs={[run]} runID={run.id} setRunID={() => undefined} testId="log-panel" hideRunSelect />}
     {tab === 'Processes' && <div className="process-list">{run.processes?.map(p => <div key={p.pid}><strong>PID {p.pid}</strong><code>{p.command ?? run.command}</code><span>{p.cpu_percent?.toFixed(1) ?? 0}% CPU</span><span>{humanBytes(p.memory_bytes)}</span></div>) ?? <Empty title="No process data" detail="Process discovery is still running." />}</div>}
     {tab === 'Ports' && <PortsTable ports={listeners} full />}
     {tab === 'Details' && <Definition rows={[['Run ID', run.id], ['Root PID', run.root_pid?.toString() ?? '—'], ['Process Group', run.process_group_id?.toString() ?? '—'], ['Kind', run.kind ?? 'service'], ['Readiness', run.readiness ?? 'unknown'], ['Command Definition', run.command_definition_id ?? '—'], ['Stack Run', run.stack_run_id ?? '—']]} />}
+	{tab === 'Checks & Tests' && <ChecksPanel checks={checks} commands={commands} api={api} run={runCheck} busy={globalBusy} accepting={accepting} refresh={refresh} onEmpty={() => setTab('Overview')} />}
   </div><footer className="drawer-actions">{listeners[0] && <PortAction port={listeners[0]} />}<button className="button" data-testid="drawer-restart" onClick={() => action('restart')} disabled={busy || !accepting}><RefreshCw /> Restart</button>{running(run.status) && <button className="button danger" data-testid="drawer-stop" onClick={() => action('stop')} disabled={busy}><CircleStop /> Stop</button>}</footer></aside></>
 }
 
@@ -771,11 +980,12 @@ export default function App() {
   const [fallback, setFallback] = useState<string>()
   const [data, setData] = useState(empty)
   const [runtime, setRuntime] = useState<RuntimeInfo>()
-  const [page, setPage] = useState<Page>('dashboard')
+  const [page, setPageState] = useState<Page>(() => pageFromPath(window.location.pathname))
   const [sidebar, setSidebar] = useState(false)
   const [selected, setSelected] = useState<Run | null>(null)
 	const [selectedCommandID, setSelectedCommandID] = useState('')
 	const [selectedStackID, setSelectedStackID] = useState('')
+	const [commandParentStackID, setCommandParentStackID] = useState('')
 	const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [tab, setTab] = useState<DetailTab>('Overview')
   const [busy, setBusy] = useState('')
@@ -791,6 +1001,26 @@ export default function App() {
 	const [editStackID, setEditStackID] = useState('')
   const [parameterRequest, setParameterRequest] = useState<ParameterRequest | null>(null)
   const shutdownPollFailures = useRef(0)
+	const setPage = useCallback((next: Page) => {
+		const target = pagePaths[next]
+		if (window.location.pathname !== target) window.history.pushState({ page: next }, '', target)
+		setPageState(next)
+	}, [])
+	const openCommand = (id: string, parentStackID = '') => {
+		setCommandParentStackID(parentStackID)
+		setSelectedCommandID(id)
+	}
+	const closeCommand = () => {
+		setSelectedCommandID('')
+		setCommandParentStackID('')
+	}
+	const backToParentStack = () => {
+		if (!commandParentStackID) return
+		const parentID = commandParentStackID
+		setSelectedCommandID('')
+		setCommandParentStackID('')
+		setSelectedStackID(parentID)
+	}
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -799,6 +1029,13 @@ export default function App() {
     if (background) document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background)
   }, [theme])
   useEffect(() => { resolveApi().then(result => { setApi(result.api); setFallback(result.fallbackReason) }) }, [])
+	useEffect(() => {
+		const initial = pageFromPath(window.location.pathname)
+		if (window.location.pathname !== pagePaths[initial]) window.history.replaceState({ page: initial }, '', pagePaths[initial])
+		const onPopState = () => setPageState(pageFromPath(window.location.pathname))
+		window.addEventListener('popstate', onPopState)
+		return () => window.removeEventListener('popstate', onPopState)
+	}, [])
   const reload = useCallback(async () => { if (!api) return; try { const [snapshot, runtimeInfo] = await Promise.all([api.getSnapshot(), api.getRuntime()]); setData(snapshot); setRuntime(runtimeInfo); setError(undefined) } catch (e) { if (!shutdownRequested) setError(e instanceof Error ? e.message : 'Unable to load data') } }, [api, shutdownRequested])
   useEffect(() => { if (!api || runtime?.status === 'stopped') return; reload(); return api.subscribe(reload) }, [api, reload, runtime?.status])
   useEffect(() => {
@@ -850,8 +1087,26 @@ export default function App() {
     }
     execute()
   }
+	const checkAction = (check: CheckDefinition, draft?: Partial<CheckInput>) => {
+		if (!api || !accepting) return
+		const definition = draft ? { ...check, ...draft } : check
+		const execute = (parameters?: Record<string, string>) => perform(check.id, () => api.runCheck(check.id, parameters, draft).then(() => undefined))
+		const command = definition.kind === 'command' ? data.commands.find(item => item.id === definition.command_id) : undefined
+		if (command?.parameters?.length) {
+			setParameterRequest({ title: `Run ${definition.name}`, commands: [command], submit: values => execute(values[command.id]) })
+			return
+		}
+		execute()
+	}
   const runAction = (run: Run, action: 'stop' | 'restart') => {
     if (!api || (action !== 'stop' && !accepting)) return
+	if (action === 'restart' && run.check_definition_id) {
+		const check = data.checks.find(candidate => candidate.id === run.check_definition_id)
+		if (check) {
+			checkAction(check)
+			return
+		}
+	}
     if (action === 'restart' && run.command_definition_id) {
       const command = data.commands.find(candidate => candidate.id === run.command_definition_id)
       if (command?.parameters?.length) {
@@ -863,6 +1118,11 @@ export default function App() {
   }
   const runAgain = (run: Run) => {
     if (!api || !accepting) return
+	const check = data.checks.find(candidate => candidate.id === run.check_definition_id)
+	if (check) {
+		checkAction(check)
+		return
+	}
     const command = data.commands.find(candidate => candidate.id === run.command_definition_id)
     if (command?.parameters?.length) {
       commandAction(command, 'restart')
@@ -870,7 +1130,7 @@ export default function App() {
     }
     perform(run.id, () => api.restartRun(run.id))
   }
-	const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => setSelectedCommandID(command.id), openStack: stack => setSelectedStackID(stack.id), deleteStack: stack => setDeleteTarget({ type: 'stack', item: stack }) }
+	const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => openCommand(command.id), openStack: stack => setSelectedStackID(stack.id), deleteStack: stack => setDeleteTarget({ type: 'stack', item: stack }) }
 	const deleteSaved = async () => {
 		if (!api || !deleteTarget) return
 		const target = deleteTarget
@@ -878,7 +1138,7 @@ export default function App() {
 		try {
 			if (target.type === 'command') await api.deleteCommand(target.item.id)
 			else await api.deleteStack(target.item.id)
-			if (target.type === 'command' && selectedCommandID === target.item.id) setSelectedCommandID('')
+			if (target.type === 'command' && selectedCommandID === target.item.id) closeCommand()
 			if (target.type === 'stack' && selectedStackID === target.item.id) setSelectedStackID('')
 			setDeleteTarget(null)
 			await reload()
@@ -937,6 +1197,7 @@ export default function App() {
   const commands = filter(data.commands)
 	const selectedCommand = data.commands.find(command => command.id === selectedCommandID)
 	const selectedStack = data.stacks.find(stack => stack.id === selectedStackID)
+	const commandParentStack = data.stacks.find(stack => stack.id === commandParentStackID)
 
   if (runtime?.status === 'stopped') return <StoppedScreen mode={api?.mode ?? 'live'} />
 
@@ -948,21 +1209,21 @@ export default function App() {
       {fallback && <div className="demo-banner" role="status"><Sparkles /><span><strong>Demo data</strong> — no live Runtime data is shown ({fallback}). Actions stay inside the isolated browser demo adapter.</span></div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={reload}>Try again</button></div>}
       <div className="content">
-        {page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={command => setSelectedCommandID(command.id)} openStack={stack => setSelectedStackID(stack.id)} />}
+		{page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={command => openCommand(command.id)} openStack={stack => setSelectedStackID(stack.id)} />}
         {page === 'runs' && <Panel title={`${filter(data.runs).filter(r => running(r.status)).length} active runs`}><div className="run-list">{filter(data.runs).filter(r => running(r.status)).map(r => <RunCard key={r.id} run={r} select={tab => select(r, tab)} act={a => runAction(r, a)} busy={busy === r.id} accepting={accepting} />)}</div></Panel>}
         {page === 'ports' && <Panel title={`${data.ports.length} listening ports`}><PortsTable ports={data.ports} full /></Panel>}
         {page === 'logs' && api && <LogsPage data={data} api={api} />}
         {page === 'history' && <Panel title={`${data.history.length} commands`}><HistoryTable runs={filter(data.history)} onSelect={select} onRunAgain={runAgain} onPromote={setPromoteRun} accepting={accepting} full /></Panel>}
         {page === 'projects' && <ProjectCatalog data={data} selectedProject={selectedProject} setSelectedProject={setSelectedProject} busy={busy} accepting={accepting} handlers={catalogHandlers} selectRun={select} runAgain={runAgain} promote={setPromoteRun} addCollection={() => setCollectionOpen(true)} />}
-        {page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => setSelectedCommandID(c.id)} />)}</div>}
-        {page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => setSelectedCommandID(c.id)} />)}</div>}
+		{page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => openCommand(c.id)} />)}</div>}
+		{page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => openCommand(c.id)} />)}</div>}
 		{page === 'stacks' && <><div className="library-toolbar"><div><strong>Reusable environments</strong><span>Dependency-aware groups of saved launchers.</span></div><button className="button primary" data-testid="new-stack" onClick={() => setStackOpen(true)}><Plus /> New stack</button></div><div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} remove={() => setDeleteTarget({ type: 'stack', item: s })} open={() => { setEditStackID(''); setSelectedStackID(s.id) }} />)}</div></>}
         {page === 'settings' && api && <SettingsPage runtime={runtime} mode={api.mode} onShutdown={() => setShutdownOpen(true)} />}
       </div>
     </main>
-    {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} api={api} action={a => runAction(selected, a)} busy={busy === selected.id} accepting={accepting} />}
-	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} api={api} close={() => setSelectedCommandID('')} action={action => commandAction(selectedCommand, action)} remove={() => setDeleteTarget({ type: 'command', item: selectedCommand })} busy={busy === selectedCommand.id} accepting={accepting} />}
-	{selectedStack && api && <StackDrawer stack={selectedStack} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} api={api} close={() => { setSelectedStackID(''); setEditStackID('') }} action={(action, commandIDs) => stackAction(selectedStack, action, commandIDs)} save={input => { saveStack(selectedStack, input); setEditStackID('') }} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} accepting={accepting} initialEditing={editStackID === selectedStack.id} />}
+    {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} checks={data.checks.filter(check => check.owner_type === 'run' && check.owner_id === selected.id)} commands={data.commands} api={api} action={a => runAction(selected, a)} runCheck={checkAction} busy={busy === selected.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
+	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} checks={data.checks.filter(check => check.owner_type === 'command' && check.owner_id === selectedCommand.id)} commands={data.commands} api={api} close={closeCommand} back={commandParentStack ? { label: commandParentStack.name, action: backToParentStack } : undefined} action={action => commandAction(selectedCommand, action)} runCheck={checkAction} remove={() => setDeleteTarget({ type: 'command', item: selectedCommand })} busy={busy === selectedCommand.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
+	{selectedStack && api && <StackDrawer stack={selectedStack} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} checks={data.checks.filter(check => check.owner_type === 'stack' && check.owner_id === selectedStack.id)} api={api} close={() => { setSelectedStackID(''); setEditStackID('') }} openMember={id => { const parentID = selectedStack.id; setSelectedStackID(''); setEditStackID(''); openCommand(id, parentID) }} action={(action, commandIDs) => stackAction(selectedStack, action, commandIDs)} memberAction={(command, action) => commandAction(command, action)} runCheck={checkAction} save={input => { saveStack(selectedStack, input); setEditStackID('') }} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} globalBusy={busy} accepting={accepting} refresh={reload} initialEditing={editStackID === selectedStack.id} />}
     {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}
     {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === selectedProject)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
 	{stackOpen && <StackDialog commands={data.commands} projects={data.projects} collections={data.collections} close={() => setStackOpen(false)} submit={createStack} busy={busy === 'create-stack'} />}

@@ -56,6 +56,9 @@ func (s *Server) handler() http.Handler {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			if source := r.Header.Get("X-AgentShell-MCP-Client"); source != "" {
+				r = r.WithContext(runtimepkg.WithRunSource(r.Context(), source))
+			}
 			s.api(w, r)
 			return
 		}
@@ -116,6 +119,9 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		return
 	case "stacks":
 		s.stacks(w, r, parts[2:])
+		return
+	case "checks":
+		s.checks(w, r, parts[2:])
 		return
 	case "catalog":
 		s.catalogAPI(w, r, parts[2:])
@@ -264,7 +270,31 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, parts []string) {
 	if len(parts) == 0 {
 		switch r.Method {
 		case http.MethodGet:
-			v, e := s.store.Runs(ctx, 200)
+			limit := 200
+			if raw := r.URL.Query().Get("limit"); raw != "" {
+				parsed, parseErr := strconv.Atoi(raw)
+				if parseErr != nil || parsed < 1 || parsed > 500 {
+					writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+					return
+				}
+				limit = parsed
+			}
+			v, e := s.store.Runs(ctx, limit)
+			if e == nil {
+				status := strings.TrimSpace(r.URL.Query().Get("status"))
+				source := strings.TrimSpace(r.URL.Query().Get("source"))
+				filtered := make([]domain.Run, 0, len(v))
+				for i := range v {
+					if status != "" && !strings.EqualFold(string(v[i].Status), status) {
+						continue
+					}
+					if source != "" && !strings.EqualFold(v[i].Source, source) {
+						continue
+					}
+					filtered = append(filtered, v[i])
+				}
+				v = filtered
+			}
 			respond(w, v, e)
 		case http.MethodPost:
 			if !s.accepting(w) {
@@ -273,6 +303,9 @@ func (s *Server) runs(w http.ResponseWriter, r *http.Request, parts []string) {
 			var spec domain.StartSpec
 			if !decode(w, r, &spec) {
 				return
+			}
+			if source := runtimepkg.RunSource(ctx, ""); source != "" {
+				spec.Source = source
 			}
 			if spec.ProjectID != "" {
 				if _, e := s.store.Project(ctx, spec.ProjectID); e != nil {
@@ -408,8 +441,24 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	v, e := s.store.Runs(r.Context(), limit)
-	respond(w, v, e)
+	runs, e := s.store.Runs(r.Context(), limit)
+	if e != nil {
+		respond(w, nil, e)
+		return
+	}
+	type historyRun struct {
+		domain.Run
+		OutputPreview string `json:"output_preview,omitempty"`
+	}
+	views := make([]historyRun, 0, len(runs))
+	for i := range runs {
+		preview, logErr := s.manager.Log(r.Context(), runs[i].ID, "combined", 2)
+		if logErr != nil {
+			preview = ""
+		}
+		views = append(views, historyRun{Run: runs[i], OutputPreview: preview})
+	}
+	writeJSON(w, http.StatusOK, views)
 }
 
 func (s *Server) projects(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -1082,6 +1131,8 @@ type commandView struct {
 	LastRun           *domain.Run               `json:"last_run,omitempty"`
 	CanStop           bool                      `json:"can_stop"`
 	StateDetail       string                    `json:"state_detail,omitempty"`
+	ObservedState     string                    `json:"observed_state,omitempty"`
+	StateConfidence   string                    `json:"state_confidence,omitempty"`
 	RunCount          int                       `json:"run_count"`
 	PortVerifications []domain.PortVerification `json:"port_verifications,omitempty"`
 }
@@ -1129,6 +1180,10 @@ func (s *Server) commandView(ctx context.Context, id string) (commandView, error
 }
 func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView {
 	v := commandView{CommandDefinition: c, Status: "stopped", RunCount: len(runs)}
+	if c.LifecycleMode == "external" {
+		v.ObservedState = "unknown"
+		v.StateConfidence = "unknown"
+	}
 	if len(runs) > 0 {
 		copy := runs[0]
 		v.LastRun = &copy
@@ -1139,9 +1194,13 @@ func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView 
 			v.PortVerifications = append([]domain.PortVerification(nil), r.PortVerifications...)
 			if c.LifecycleMode == "external" && r.LifecycleAction == "stop" {
 				v.Status = "stopping"
+				v.ObservedState = "checking"
+				v.StateConfidence = "action"
 				v.StateDetail = "External stop action is running."
 			} else if c.LifecycleMode == "external" {
 				v.Status = "starting"
+				v.ObservedState = "checking"
+				v.StateConfidence = "action"
 				v.CanStop = true
 				v.StateDetail = "External start action is running."
 			} else {
@@ -1157,22 +1216,25 @@ func makeCommandView(c domain.CommandDefinition, runs []domain.Run) commandView 
 	}
 	for _, r := range runs {
 		v.PortVerifications = append([]domain.PortVerification(nil), r.PortVerifications...)
+		observation := domain.ObserveExternalRun(r)
+		v.ObservedState = observation.State
+		v.StateConfidence = observation.Confidence
 		switch r.LifecycleAction {
 		case "start", "restart":
 			if r.Status == domain.RunCompleted {
 				v.Status = "external"
-				v.CanStop = true
+				v.CanStop = observation.State != "stopped"
 				v.StateDetail = externalStartStateDetail(r.PortVerifications)
 			} else if r.Status == domain.RunFailed {
 				v.Status = "failed"
-				v.CanStop = true
+				v.CanStop = observation.State != "stopped"
 				v.StateDetail = "The external start action failed and may have partially changed resources."
 			}
 			return v
 		case "stop":
 			if r.Status == domain.RunFailed {
 				v.Status = "failed"
-				v.CanStop = true
+				v.CanStop = observation.State != "stopped"
 				v.StateDetail = "The external stop action failed; resources may still be active."
 			} else if hasPortVerification(r.PortVerifications, "still_listening") {
 				v.Status = "external"
@@ -1250,15 +1312,20 @@ func externalStartStateDetail(verifications []domain.PortVerification) string {
 }
 
 type stackMemberView struct {
-	CommandID     string   `json:"command_id"`
-	Position      int      `json:"position"`
-	DependsOn     []string `json:"depends_on,omitempty"`
-	WaitFor       string   `json:"wait_for"`
-	WaitTimeoutMS int      `json:"wait_timeout_ms"`
-	Name          string   `json:"name"`
-	Status        string   `json:"status"`
-	ActiveRunID   string   `json:"active_run_id,omitempty"`
-	CanStop       bool     `json:"can_stop"`
+	CommandID         string                    `json:"command_id"`
+	Position          int                       `json:"position"`
+	DependsOn         []string                  `json:"depends_on,omitempty"`
+	WaitFor           string                    `json:"wait_for"`
+	WaitTimeoutMS     int                       `json:"wait_timeout_ms"`
+	Name              string                    `json:"name"`
+	Status            string                    `json:"status"`
+	LifecycleMode     string                    `json:"lifecycle_mode,omitempty"`
+	ObservedState     string                    `json:"observed_state,omitempty"`
+	StateConfidence   string                    `json:"state_confidence,omitempty"`
+	StateDetail       string                    `json:"state_detail,omitempty"`
+	PortVerifications []domain.PortVerification `json:"port_verifications,omitempty"`
+	ActiveRunID       string                    `json:"active_run_id,omitempty"`
+	CanStop           bool                      `json:"can_stop"`
 }
 type stackView struct {
 	ID            string            `json:"id"`
@@ -1273,6 +1340,7 @@ type stackView struct {
 	Members       []stackMemberView `json:"members"`
 	RunningCount  int               `json:"running_count"`
 	TotalCount    int               `json:"total_count"`
+	UnknownCount  int               `json:"unknown_count,omitempty"`
 	Status        string            `json:"status"`
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
@@ -1319,8 +1387,11 @@ func makeStackView(st domain.Stack, commands map[string]commandView) stackView {
 	v := stackView{ID: st.ID, ProjectID: st.ProjectID, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
 	for _, m := range st.Members {
 		c := commands[m.CommandID]
-		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, DependsOn: m.DependsOn, WaitFor: m.WaitFor, WaitTimeoutMS: m.WaitTimeoutMS, Name: c.Name, Status: c.Status, ActiveRunID: c.ActiveRunID, CanStop: c.CanStop}
-		if c.ActiveRunID != "" || c.CanStop {
+		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, DependsOn: m.DependsOn, WaitFor: m.WaitFor, WaitTimeoutMS: m.WaitTimeoutMS, Name: c.Name, Status: c.Status, LifecycleMode: c.LifecycleMode, ObservedState: c.ObservedState, StateConfidence: c.StateConfidence, StateDetail: c.StateDetail, PortVerifications: append([]domain.PortVerification(nil), c.PortVerifications...), ActiveRunID: c.ActiveRunID, CanStop: c.CanStop}
+		if c.LifecycleMode == "external" && c.ObservedState == "unknown" {
+			v.UnknownCount++
+		}
+		if c.ActiveRunID != "" || (c.LifecycleMode == "external" && (c.ObservedState == "running" || c.ObservedState == "checking")) || (c.LifecycleMode != "external" && c.CanStop) {
 			v.RunningCount++
 		}
 		v.Members = append(v.Members, mv)
@@ -1329,6 +1400,8 @@ func makeStackView(st domain.Stack, commands map[string]commandView) stackView {
 		v.Status = "running"
 	} else if v.RunningCount > 0 {
 		v.Status = "partial"
+	} else if v.UnknownCount > 0 {
+		v.Status = "unknown"
 	}
 	return v
 }

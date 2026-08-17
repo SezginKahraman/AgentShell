@@ -20,6 +20,7 @@ Amaç şudur:
 | Collection | Bir Project içindeki isteğe bağlı düzenleme klasörü | `Internal Services`, `Tests`, `Build` |
 | Launcher | Daha sonra tekrar çalıştırılabilecek kayıtlı service veya task komutu | `make go`, `npm test` |
 | Stack | Birden fazla launcher'ın isimlendirilmiş grubu | `Internal Microservices` |
+| Check / Test | Stack, launcher veya Run'a bağlı yeniden kullanılabilir doğrulama | `GET /health`, `bash ./smoke.sh` |
 | Run | Bir komutun belirli bir çalıştırma örneği | PID, log, port ve exit code taşıyan kayıt |
 | History | Tamamlanmış ve çalışan Run geçmişi | Başlatma, test ve build kayıtları |
 
@@ -179,6 +180,11 @@ Aşağıdaki metin proje `CLAUDE.md` dosyasına eklenebilir:
   secret in command, env, default, description, tags, or catalog metadata. For
   credentials use a secret field with stdin binding and prefer dashboard entry
   over asking the user to paste a secret into chat.
+- For reusable verification use `save_check`. Native HTTP checks default to
+  `http_scope=local`; set `http_scope=remote` explicitly for a remote test
+  environment. For `.sh` tests, save a managed task first and reference its
+  command ID. Never put secrets in HTTP check URLs, headers, bodies, assertions,
+  or metadata. Prefer read-only `GET`/`HEAD` checks against production.
 ```
 
 ## 5. Cursor Agent bağlantısı
@@ -239,6 +245,10 @@ Workflow:
 10. Configure runtime input schemas when needed, but never persist or guess
     secret values. Prefer asking the user to complete the AgentShell dashboard
     prompt.
+11. Attach reusable verification with `save_check`: native HTTP uses
+    `http_scope=local` by default; choose `remote` explicitly for a remote test
+    environment. Use a saved managed task for bash/.sh tests. Every execution
+    must remain a normal AgentShell Run with inspectable logs.
 ```
 
 ### 5.3. Cursor bağlantı testi
@@ -401,7 +411,7 @@ Stack payload'ında ilk anahtar command ID'dir:
 
 ## 8. MCP araçları
 
-AgentShell şu anda 35 MCP tool sunar.
+AgentShell şu anda 41 MCP tool sunar.
 
 ### Runtime ve Run araçları
 
@@ -457,6 +467,57 @@ AgentShell şu anda 35 MCP tool sunar.
 | `start_stack` | Tüm çalışmayan member'ları veya verilen alt kümeyi transitif bağımlılıklarıyla başlatmak |
 | `stop_stack` | Aktif member Run'larını durdurmak |
 | `restart_stack` | Çalışanları restart edip eksikleri başlatmak |
+
+### Checks & Tests araçları
+
+| Tool | Amaç |
+| --- | --- |
+| `list_checks` | Stack, command veya Run sahibine bağlı kontrolleri ve son Run durumunu listelemek |
+| `save_check` | Local/Remote HTTP kontrolü veya kayıtlı task tabanlı test eklemek; çalıştırmaz |
+| `update_check` | Kontrol tanımını, assertion'ı, timeout'u veya trigger'ı güncellemek |
+| `delete_check` | Kontrol tanımını silmek; önceki Run/log geçmişini korumak |
+| `run_check` | Tek kontrolü normal, loglanabilir bir Run olarak çalıştırmak |
+| `run_checks` | Bir sahibin tüm kontrollerini veya seçili `check_ids` alt kümesini çalıştırmak |
+
+Checks & Tests sahibi `stack`, `command` veya `run` olabilir. Dashboard ilgili
+detay drawer'ında yalnız en az bir kontrol varsa sekmeyi gösterir.
+
+- `kind=http`: `http_scope=local` varsayılandır ve yalnız `localhost`,
+  `127.0.0.1`, `::1` gibi loopback adreslerini kabul eder.
+  `http_scope=remote` uzak development/staging/production URL'lerini etkinleştirir
+  ve dashboard kartında **Remote** etiketiyle gösterilir. Remote DNS sonucu veya
+  redirect loopback, link-local, multicast ya da unspecified bir adrese dönemez;
+  VPN/LAN üzerindeki private adresler bilinçli olarak desteklenir.
+  `expected_status` verilmezse herhangi bir 2xx başarılıdır; `body_contains`
+  literal response assertion'ıdır. URL, header, body ve metadata içine
+  token/şifre koyulmaz. Production için varsayılan tercih `GET`/`HEAD` olmalıdır;
+  mutating istek ancak kullanıcı bunu açıkça istediyse tanımlanıp çalıştırılır.
+- `kind=command`: Önce `kind=task`, `lifecycle_mode=managed` bir launcher
+  kaydedilir; kontrol bu task'ın `command_id` değerini referanslar. Böylece
+  `bash ./scripts/smoke.sh`, Go/Node testleri veya başka finite komutlar aynı
+  parametre, process ve log modelini kullanır.
+- `trigger=manual` varsayılandır. `after_ready` yalnız Stack sahibi için
+  kullanılabilir ve dependency orchestration başarıyla tamamlanınca çalışır.
+  İnteraktif zorunlu parametre isteyen task'lar `after_ready` olamaz.
+- Her çalıştırma `source=check` taşıyan normal bir Run üretir. stdout, stderr,
+  exit code ve error filtresi standart Logs UX'inde bulunur.
+
+Örnek AI akışı:
+
+```text
+Önce bash ./scripts/smoke.sh komutunu managed task olarak kaydet.
+Sonra bu task'ı Backend API launcher'ına "Smoke test" adıyla manual check olarak bağla.
+Henüz çalıştırma. list_checks ile ilişkiyi doğrula.
+
+Local Application stack'ine GET http://127.0.0.1:8080/health kontrolü ekle.
+http_scope local, 200 beklesin, timeout 5 saniye ve trigger after_ready olsun.
+URL, header veya body içine secret koyma.
+
+Staging stack'ine GET https://9984-b2b-ots.gcp.enuygun.dev/health kontrolü ekle.
+http_scope remote, 200 beklesin ve manual kalsın. Çalıştırmadan önce kaydı
+list_checks ile göster; production'a mutating bir HTTP isteği gönderme.
+URL, header veya body içine secret koyma.
+```
 
 ### Collection ataması hakkında mevcut sözleşme
 

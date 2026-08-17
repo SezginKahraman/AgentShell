@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -132,7 +131,7 @@ func (m *Manager) Start(ctx context.Context, spec domain.StartSpec) (*domain.Run
 		source = "user"
 	}
 	now := time.Now().UTC()
-	r := &domain.Run{ID: NewID("run"), Label: label, Command: spec.Command, Cwd: cwd, Shell: shell, Kind: kind, Source: source, Status: domain.RunStarting, Readiness: domain.ReadinessUnknown, CreatedAt: now, ExpectedPorts: spec.ExpectedPorts, Env: spec.Env, CommandDefinitionID: spec.CommandDefinitionID, StackRunID: spec.StackRunID, ProjectID: spec.ProjectID, LifecycleAction: spec.LifecycleAction}
+	r := &domain.Run{ID: NewID("run"), Label: label, Command: spec.Command, Cwd: cwd, Shell: shell, Kind: kind, Source: source, Status: domain.RunStarting, Readiness: domain.ReadinessUnknown, CreatedAt: now, ExpectedPorts: spec.ExpectedPorts, Env: spec.Env, CommandDefinitionID: spec.CommandDefinitionID, StackRunID: spec.StackRunID, ProjectID: spec.ProjectID, LifecycleAction: spec.LifecycleAction, CheckDefinitionID: spec.CheckDefinitionID, CheckOwnerType: spec.CheckOwnerType, CheckOwnerID: spec.CheckOwnerID}
 	if len(spec.ExpectedPorts) > 0 {
 		r.Readiness = domain.ReadinessWaiting
 	}
@@ -431,6 +430,29 @@ func (m *Manager) Restart(ctx context.Context, id string) (*domain.Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if old.CheckDefinitionID != "" {
+		check, checkErr := m.store.Check(ctx, old.CheckDefinitionID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if old.Active() {
+			_, _ = m.Stop(ctx, id)
+			deadline := time.Now().Add(m.cfg.StopGrace + 2*time.Second)
+			for time.Now().Before(deadline) {
+				time.Sleep(50 * time.Millisecond)
+				current, _ := m.store.Run(ctx, id)
+				if current != nil && !current.Active() {
+					break
+				}
+			}
+		}
+		run, restartErr := m.RunCheck(ctx, check, nil)
+		if run != nil {
+			run.RestartOfRunID = id
+			_ = m.store.SaveRun(ctx, run)
+		}
+		return run, restartErr
+	}
 	if old.CommandDefinitionID != "" {
 		if command, commandErr := m.store.Command(ctx, old.CommandDefinitionID); commandErr == nil && len(command.Parameters) > 0 {
 			return nil, errors.New("saved launcher requires runtime parameters; restart it through the command action")
@@ -447,7 +469,7 @@ func (m *Manager) Restart(ctx context.Context, id string) (*domain.Run, error) {
 			}
 		}
 	}
-	r, err := m.Start(ctx, domain.StartSpec{Command: old.Command, Cwd: old.Cwd, Label: old.Label, Shell: old.Shell, Env: old.Env, ExpectedPorts: old.ExpectedPorts, Kind: old.Kind, Source: old.Source, CommandDefinitionID: old.CommandDefinitionID, StackRunID: old.StackRunID, ProjectID: old.ProjectID, LifecycleAction: old.LifecycleAction})
+	r, err := m.Start(ctx, domain.StartSpec{Command: old.Command, Cwd: old.Cwd, Label: old.Label, Shell: old.Shell, Env: old.Env, ExpectedPorts: old.ExpectedPorts, Kind: old.Kind, Source: RunSource(ctx, old.Source), CommandDefinitionID: old.CommandDefinitionID, StackRunID: old.StackRunID, ProjectID: old.ProjectID, LifecycleAction: old.LifecycleAction})
 	if r != nil {
 		r.RestartOfRunID = id
 		_ = m.store.SaveRun(ctx, r)
@@ -607,14 +629,14 @@ func (m *Manager) startLifecycleAction(ctx context.Context, c domain.CommandDefi
 	if lifecycleMode(c) == "external" {
 		return m.startExternalLifecycleAction(ctx, c, command, action, label, kind, stackRunID, transientEnv, stdin)
 	}
-	return m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, ExpectedPorts: expected, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action, TransientEnv: transientEnv, Stdin: stdin})
+	return m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, ExpectedPorts: expected, Kind: kind, Source: RunSource(ctx, "catalog"), CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action, TransientEnv: transientEnv, Stdin: stdin})
 }
 
 func (m *Manager) startExternalLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, label, kind, stackRunID string, transientEnv map[string]string, stdin []byte) (*domain.Run, error) {
 	verifications := snapshotExternalPorts(c.ExpectedPorts, action)
 	// External lifecycle commands are allowed to encounter pre-existing ports;
 	// those ports are recorded as such rather than rejected or attributed.
-	r, err := m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action, TransientEnv: transientEnv, Stdin: stdin})
+	r, err := m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, Kind: kind, Source: RunSource(ctx, "catalog"), CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action, TransientEnv: transientEnv, Stdin: stdin})
 	if r == nil {
 		return nil, err
 	}
@@ -745,16 +767,18 @@ func (m *Manager) externalStarted(ctx context.Context, id string) (bool, *domain
 		}
 		switch r.LifecycleAction {
 		case "stop":
-			stillListening := false
-			for _, verification := range r.PortVerifications {
-				if verification.Status == "still_listening" || verification.Status == "pending" {
-					stillListening = true
-					break
-				}
-			}
-			return r.Status == domain.RunFailed || stillListening, r, nil
+			observation := domain.ObserveExternalRun(*r)
+			return observation.State == "running" || observation.State == "checking" || (r.Status == domain.RunFailed && observation.State == "unknown"), r, nil
 		case "start", "restart":
-			return r.Status == domain.RunCompleted || r.Active(), r, nil
+			observation := domain.ObserveExternalRun(*r)
+			switch observation.State {
+			case "running", "checking":
+				return true, r, nil
+			case "stopped":
+				return false, r, nil
+			default:
+				return r.Status == domain.RunCompleted || r.Active(), r, nil
+			}
 		}
 	}
 	return false, nil, nil
@@ -953,6 +977,12 @@ func (m *Manager) StartStackMembersWithParameters(ctx context.Context, id string
 				return out, fmt.Errorf("stack member %s: %w", item.member.CommandID, item.err)
 			}
 		}
+	}
+	// Stack-level after_ready checks describe the complete environment. A
+	// selected-member start may intentionally leave the stack partial, so it
+	// must not claim the whole owner is ready.
+	if len(failed) == 0 && commandIDs == nil {
+		go m.runTriggeredChecks("stack", id, "after_ready")
 	}
 	return out, nil
 }
@@ -1183,33 +1213,56 @@ func tailFile(path string, n int) (string, error) {
 	if n <= 0 {
 		n = 200
 	}
-	f, e := os.Open(path)
-	if e != nil {
-		return "", e
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
 	}
 	defer f.Close()
-	lines := make([]string, n)
-	count := 0
-	s := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	s.Buffer(buf, 1024*1024)
-	for s.Scan() {
-		lines[count%n] = s.Text()
-		count++
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
 	}
-	if e = s.Err(); e != nil {
-		return "", e
+	if info.Size() == 0 {
+		return "", nil
 	}
-	start := 0
-	if count > n {
-		start = count % n
-		count = n
+	const chunkSize int64 = 64 << 10
+	position := info.Size()
+	chunks := make([][]byte, 0, 2)
+	totalBytes := 0
+	newlines := 0
+	for position > 0 {
+		start := position - chunkSize
+		if start < 0 {
+			start = 0
+		}
+		chunk := make([]byte, position-start)
+		if _, err = f.ReadAt(chunk, start); err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		chunks = append(chunks, chunk)
+		totalBytes += len(chunk)
+		newlines += bytes.Count(chunk, []byte{'\n'})
+		position = start
+		if newlines > n {
+			break
+		}
 	}
-	out := make([]string, 0, count)
-	for i := 0; i < count; i++ {
-		out = append(out, lines[(start+i)%n])
+	data := make([]byte, totalBytes)
+	offset := 0
+	for i := len(chunks) - 1; i >= 0; i-- {
+		offset += copy(data[offset:], chunks[i])
 	}
-	return strings.Join(out, "\n"), nil
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if position > 0 && len(lines) > 0 {
+		lines = lines[1:]
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func (m *Manager) poll() {

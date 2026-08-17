@@ -54,6 +54,17 @@ describe('DemoApi', () => {
     await api.updateCommand('cmd-worker', { favorite: true })
     expect((await api.getSnapshot()).commands.find(item => item.id === 'cmd-worker')?.favorite).toBe(true)
   })
+
+  it('creates, updates and deletes check definitions without running them', async () => {
+    const api = new DemoApi()
+    const created = await api.createCheck({ owner_type: 'stack', owner_id: 'stack-internal', name: 'Draft health', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/ready', http_scope: 'local', timeout_ms: 5000, trigger: 'manual' })
+    expect(created.last_run).toBeUndefined()
+    const updated = await api.updateCheck(created.id, { name: 'Saved health', body_contains: 'ready' })
+    expect(updated.name).toBe('Saved health')
+    expect(updated.body_contains).toBe('ready')
+    await api.deleteCheck(created.id)
+    expect((await api.getSnapshot()).checks.some(item => item.id === created.id)).toBe(false)
+  })
 })
 
 async function apiSnapshot() { return new DemoApi().getSnapshot() }

@@ -9,6 +9,7 @@ AgentShell is a local-first runtime manager for commands started by people and A
 - Child process, CPU, memory, and listening-port discovery
 - Separate stdout, stderr, and combined logs
 - Saved projects, collections, service/task commands, and multi-command stacks
+- Reusable HTTP and shell/task Checks & Tests attached to stacks, launchers, or individual Runs
 - Managed and external service lifecycles with launcher-level stop/restart actions
 - History-to-launcher promotion with duplicate-safe command fingerprints
 - Atomic, dry-runnable catalog imports for AI-created project launchers
@@ -74,6 +75,27 @@ Make, Go, Node, Compose, and shell-script entry points with evidence and warning
 `apply_catalog` supports a no-write `dry_run` and applies the accepted project,
 collections, commands, and stacks atomically and idempotently.
 
+Checks & Tests can be attached to a stack, saved command, or one historical
+Run. Native HTTP checks have an explicit target scope: `local` is the safe,
+backward-compatible default for localhost/loopback; `remote` enables a named
+development, staging, or production endpoint and is shown as **Remote** in the
+dashboard. Redirects must remain in the declared scope, and remote DNS cannot
+resolve back to loopback or link-local addresses. Shell and `.sh` tests reuse a
+saved managed task launcher (for example `bash ./scripts/smoke.sh`) so
+parameters, process ownership, History, and logs remain consistent. Every
+execution becomes an ordinary durable Run. Stack
+checks may use `after_ready`; checks requiring interactive parameters remain
+manual. The dashboard shows the tab only when its current owner has checks.
+Selecting a check only opens its saved request or task definition; execution
+requires an explicit **Run** action. The editor works on a temporary draft:
+**Run draft** executes the validated variant once without changing the saved
+default, while **Save as new** creates another definition. Deleting a definition
+retains its historical Runs and logs. Check cards can be collapsed individually
+or together.
+Do not persist credentials in HTTP URLs, headers, or bodies; production checks
+should normally be read-only (`GET`/`HEAD`) unless the user explicitly requests
+a mutating request.
+
 Runtime tools include `get_runtime`, `get_workspace_context`, `list_ports`,
 `run`, `list_runs`, `inspect_run`, `get_logs`, `stop_run`, `restart_run`, and the
 confirmation-gated `shutdown_runtime`.
@@ -90,6 +112,12 @@ Example workflow:
  Do not run them."
 
 "Save the command from the last Run as Backend Tests and pin it."
+
+"Save bash ./scripts/smoke.sh as a task, attach it to Backend API as a manual
+ check, and do not run it yet."
+
+"Attach GET http://127.0.0.1:8080/health to Local Application as an
+ after_ready check expecting 200."
 ```
 
 Saved service definitions default to duplicate protection. If a service is already active, AgentShell returns the existing Run instead of silently starting another copy.
