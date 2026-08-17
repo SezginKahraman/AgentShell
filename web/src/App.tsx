@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
+import { classifiedLogLines, logLineClass, splitLogLines, stripAnsi } from './logs'
 import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember } from './types'
 
 type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
@@ -63,15 +64,6 @@ const duration = (date?: string, ended?: string | null) => {
 const time = (date?: string) => date ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(date)) : '—'
 const httpPort = (port: Listener) => ['http', 'https'].includes((port.protocol ?? '').toLowerCase())
 const address = (port: Listener) => `${port.protocol ?? 'tcp'}://${port.address && port.address !== '0.0.0.0' ? port.address : 'localhost'}:${port.port}`
-const stripAnsi = (line: string) => line.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
-const explicitError = /(?:^|\b)(?:error|err|fatal|panic|failed|failure|exception|critical|traceback)(?:\b|:)/i
-const serverError = /(?:\bstatus(?:_code)?\s*[=: ]\s*5\d\d\b|\bHTTP\/\d(?:\.\d)?\s+5\d\d\b|(?:^|\s)5\d\d(?:\s|$))/i
-const harmlessErrorCount = /\b(?:0|no)\s+(?:errors?|failures?)\b/i
-const splitLogLines = (content: string) => {
-  const lines = content.split('\n')
-  if (lines.at(-1) === '') lines.pop()
-  return lines
-}
 const outputTail = (content: string, count = 2) => splitLogLines(content).map(stripAnsi).filter(line => line.trim()).slice(-count).join('\n')
 const sourceClass = (source?: string) => (source ?? 'user').toLowerCase().replace(/[^a-z0-9_-]+/g, '-')
 const mcpSourceLabel = (source?: string) => {
@@ -97,15 +89,6 @@ const checkInput = (selected: CheckDefinition, draft: CheckDraft, createdBy?: st
   const common = { owner_type: selected.owner_type, owner_id: selected.owner_id, name: draft.name.trim(), description: draft.description.trim(), kind: draft.kind, timeout_ms: timeout, trigger: draft.trigger, tags: draft.tags.split(',').map(value => value.trim()).filter(Boolean), ...(createdBy ? { created_by: createdBy } : {}) }
   return draft.kind === 'http' ? { ...common, http_method: draft.method, http_url: draft.url.trim(), http_scope: draft.scope, http_headers: headers, http_body: draft.body, expected_status: expected, body_contains: draft.bodyContains } : { ...common, command_id: draft.commandID }
 }
-const classifiedLogLines = (content: string, stderr: string) => {
-  const stderrLines = new Set(splitLogLines(stderr).map(stripAnsi))
-  return splitLogLines(content).map((line, index) => {
-    const plain = stripAnsi(line)
-    const error = stderrLines.has(plain) || (!harmlessErrorCount.test(plain) && (explicitError.test(plain) || serverError.test(plain)))
-    return { line, index, error }
-  })
-}
-
 function LogFilterControls({ value, setValue, errors }: { value: LogFilter; setValue: (value: LogFilter) => void; errors: number }) {
   return <div className="log-filter" role="group" aria-label="Filter log lines"><button aria-pressed={value === 'all'} className={value === 'all' ? 'active' : ''} onClick={() => setValue('all')}>All</button><button data-testid="log-filter-errors" aria-pressed={value === 'errors'} className={value === 'errors' ? 'active' : ''} onClick={() => setValue('errors')}>Errors / stderr <span>{errors}</span></button></div>
 }
@@ -113,7 +96,7 @@ function LogFilterControls({ value, setValue, errors }: { value: LogFilter; setV
 function LogOutput({ content, stderr = '', filter = 'all', testId, className = 'log-view', elementRef }: { content: string; stderr?: string; filter?: LogFilter; testId: string; className?: string; elementRef?: React.Ref<HTMLPreElement> }) {
   const lines = classifiedLogLines(content, stderr)
   const visible = filter === 'errors' ? lines.filter(line => line.error) : lines
-  return <pre ref={elementRef} className={className} data-testid={testId}>{visible.length ? visible.map(item => <span key={item.index} className={item.error ? 'log-line log-line-error' : 'log-line'}>{item.line || ' '}{'\n'}</span>) : <span className="log-filter-empty">$ no error or stderr lines in the last 300 lines</span>}</pre>
+  return <pre ref={elementRef} className={className} data-testid={testId}>{visible.length ? visible.map(item => <span key={item.index} className={logLineClass(item.severity)}>{item.line || ' '}{'\n'}</span>) : <span className="log-filter-empty">$ no error or stderr lines in the last 300 lines</span>}</pre>
 }
 
 function Status({ value = 'unknown' }: { value?: string }) {
@@ -342,7 +325,7 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
       {selected && <div className="terminal-shell">
         <header><div className="terminal-title"><span className="terminal-lights"><i /><i /><i /></span><div><strong>{selected.run.label}</strong><small>{selected.projectName} / {selected.collectionName} / :{selected.port.port}</small></div></div><div className="terminal-actions"><LogFilterControls value={logFilter} setValue={setLogFilter} errors={classifiedLogLines(content, stderr).filter(line => line.error).length} /><label><input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> Follow output</label><button className={`button small ${live ? 'live-active' : ''}`} onClick={() => setLive(value => !value)}><Activity /> {live ? 'Live' : 'Paused'}</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton></div></header>
         {loading ? <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ attaching to combined stdout/stderr…</pre> : logError ? <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ log stream error: {logError}</pre> : content ? <LogOutput content={content} stderr={stderr} filter={logFilter} elementRef={terminal} className="live-terminal" testId="live-log-terminal" /> : <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ connected — waiting for process output…</pre>}
-        <footer><code>$ {selected.run.command}</code><span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Connecting…'} · Errors includes stderr and explicit error severity · last 300 lines</span></footer>
+        <footer><code>$ {selected.run.command}</code><span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Connecting…'} · Errors includes unmatched stderr and explicit error severity · last 300 lines</span></footer>
       </div>}
     </>}
   </section>

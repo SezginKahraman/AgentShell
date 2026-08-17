@@ -660,7 +660,7 @@ func snapshotExternalPorts(expected []domain.ExpectedPort, action string) []doma
 	now := time.Now().UTC()
 	out := make([]domain.PortVerification, 0, len(expected))
 	for _, port := range expected {
-		open := platform.PortListening(port.Port)
+		open := platform.PortOpen(port.Port, port.Protocol)
 		state := "closed"
 		if open {
 			state = "listening"
@@ -696,7 +696,7 @@ func (m *Manager) verifyExternalPorts(runID, action string, expected []domain.Ex
 			if verifications[i].Status != "pending" {
 				continue
 			}
-			open := platform.PortListening(verifications[i].Port)
+			open := platform.PortOpen(verifications[i].Port, verifications[i].Protocol)
 			if action == "stop" && !open {
 				verifications[i].After = "closed"
 				verifications[i].Current = "closed"
@@ -1355,7 +1355,7 @@ func (m *Manager) observeExternalPortHealth(runs []domain.Run) {
 		changed := false
 		for j := range run.PortVerifications {
 			current := "closed"
-			if platform.PortListening(run.PortVerifications[j].Port) {
+			if platform.PortOpen(run.PortVerifications[j].Port, run.PortVerifications[j].Protocol) {
 				current = "listening"
 			}
 			if run.PortVerifications[j].Current != current {

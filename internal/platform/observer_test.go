@@ -30,3 +30,21 @@ func TestPortListeningChecksObservableTCPHealth(t *testing.T) {
 		t.Fatal("closed TCP port was reported listening")
 	}
 }
+
+func TestPortOpenDetectsBoundUDPPorts(t *testing.T) {
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	if !PortOpen(port, "udp") {
+		t.Fatal("bound UDP port was not detected")
+	}
+	_ = conn.Close()
+	if PortOpen(port, "udp") {
+		t.Fatal("closed UDP port was reported bound")
+	}
+	if PortOpen(port, "tcp") {
+		t.Fatal("UDP-only port was reported as TCP listening")
+	}
+}

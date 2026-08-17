@@ -429,7 +429,11 @@ func currentListeners(runs []domain.Run, commands []domain.CommandDefinition) []
 			if protocol == "" {
 				protocol = verification.Protocol
 			}
-			out = append(out, domain.Listener{Port: verification.Port, Address: "127.0.0.1", Transport: "tcp", Name: verification.Name, Protocol: protocol, RunID: view.LastRun.ID, RunLabel: command.Name, Status: "external_verified", Attribution: "external", Confidence: verification.Confidence})
+			transport := "tcp"
+			if strings.EqualFold(verification.Protocol, "udp") {
+				transport = "udp"
+			}
+			out = append(out, domain.Listener{Port: verification.Port, Address: "127.0.0.1", Transport: transport, Name: verification.Name, Protocol: protocol, RunID: view.LastRun.ID, RunLabel: command.Name, Status: "external_verified", Attribution: "external", Confidence: verification.Confidence})
 			seen[verification.Port] = true
 		}
 	}

@@ -68,7 +68,7 @@ export class DemoApi implements AgentShellApi {
   async getRun(id: string) { const run = runs.find(r => r.id === id) ?? history.find(r => r.id === id); if (!run) throw new Error('Run not found'); return structuredClone(run) }
   async getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined', tail = 300) {
     const run = runs.find(item => item.id === id) ?? history.find(item => item.id === id)
-    const stdout = `[19:42:11] starting ${run?.command ?? 'command'}\n[19:42:12] connected to database\n[19:42:12] server listening and ready\n[19:42:13] GET /health 200 1.8ms\n`
+    const stdout = `[19:42:11] starting ${run?.command ?? 'command'}\n[19:42:12] connected to database\n[19:42:12] server listening and ready\n{"level":"warn","msg":"slow query"}\n[19:42:13] GET /health 200 1.8ms\n`
     const stderr = id === 'hist-build' ? '[19:42:14] ERROR build failed: module not found\n' : ''
     const content = stream === 'stderr' ? stderr : stream === 'stdout' ? stdout : stdout + stderr
     const lines = content.split('\n')

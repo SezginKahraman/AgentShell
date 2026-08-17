@@ -21,6 +21,7 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
 	await expect(page.getByTestId('check-card-check-smoke')).toContainText('Backend smoke test')
   await page.getByTestId('command-tab-logs').click()
   await expect(page.getByTestId('command-log-panel')).toContainText('server listening')
+  await expect(page.getByTestId('command-log-panel').locator('.log-line-warn')).toContainText('slow query')
   await expect(page.getByTestId('command-detail-drawer').getByText('Live', { exact: true })).toBeVisible()
   await page.getByTestId('command-detail-drawer').getByRole('button', { name: 'Close launcher details' }).click()
 

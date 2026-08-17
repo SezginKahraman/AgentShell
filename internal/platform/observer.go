@@ -210,8 +210,17 @@ func PortAvailable(port int) bool {
 // used for detached/external resources whose processes are outside the managed
 // process group.
 func PortListening(port int) bool {
+	return PortOpen(port, "tcp")
+}
+
+// PortOpen reports whether the given TCP or UDP port is currently bound on
+// localhost. UDP cannot be dialed, so a failed bind is treated as in-use.
+func PortOpen(port int, protocol string) bool {
 	if port < 1 || port > 65535 {
 		return false
+	}
+	if strings.EqualFold(protocol, "udp") {
+		return udpPortBound(port)
 	}
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 150*time.Millisecond)
@@ -221,4 +230,27 @@ func PortListening(port int) bool {
 		}
 	}
 	return false
+}
+
+func udpPortBound(port int) bool {
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		conn, err := net.ListenPacket("udp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			if host == "::1" && ipv6Unavailable(err) {
+				continue
+			}
+			return true
+		}
+		_ = conn.Close()
+	}
+	return false
+}
+
+func ipv6Unavailable(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot assign requested address") ||
+		strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "protocol not supported") ||
+		strings.Contains(msg, "address family not supported") ||
+		strings.Contains(msg, "network is unreachable")
 }
