@@ -6,13 +6,13 @@ export interface AgentShellApi {
   getRuntime(): Promise<RuntimeInfo>
   shutdownRuntime(): Promise<ShutdownResult>
   getRun(id: string): Promise<Run>
-  getLogs(id: string): Promise<LogResponse>
+  getLogs(id: string, stream?: 'combined' | 'stdout' | 'stderr'): Promise<LogResponse>
 	getCommandRuns(id: string): Promise<Run[]>
 	getCommandSource(id: string): Promise<CommandSource>
   stopRun(id: string): Promise<void>
   restartRun(id: string): Promise<void>
-  commandAction(id: string, action: 'start' | 'stop' | 'restart'): Promise<void>
-  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[]): Promise<void>
+  commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>): Promise<void>
+  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>): Promise<void>
   promoteRun(id: string, input: PromoteRunInput): Promise<PromoteRunResult>
   updateCommand(id: string, input: Partial<SavedCommand>): Promise<SavedCommand>
   updateStack(id: string, input: Partial<Stack>): Promise<Stack>
@@ -61,13 +61,16 @@ export class HttpApi implements AgentShellApi {
   getRuntime() { return request<RuntimeInfo>('/api/runtime') }
   shutdownRuntime() { return request<ShutdownResult>('/api/runtime/shutdown', { method: 'POST', body: JSON.stringify({ confirm: true }) }) }
   getRun(id: string) { return request<Run>(`/api/runs/${id}`) }
-  getLogs(id: string) { return request<LogResponse>(`/api/runs/${id}/logs?stream=combined&tail=300`) }
+  getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined') { return request<LogResponse>(`/api/runs/${id}/logs?stream=${stream}&tail=300`) }
 	async getCommandRuns(id: string) { return array(await request<Run[] | { items?: Run[] } | null>(`/api/commands/${id}/runs`)) }
 	getCommandSource(id: string) { return request<CommandSource>(`/api/commands/${id}/source`) }
   async stopRun(id: string) { await request(`/api/runs/${id}/stop`, { method: 'POST' }) }
   async restartRun(id: string) { await request(`/api/runs/${id}/restart`, { method: 'POST' }) }
-  async commandAction(id: string, action: 'start' | 'stop' | 'restart') { await request(`/api/commands/${id}/${action}`, { method: 'POST' }) }
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) { await request(`/api/stacks/${id}/${action}`, { method: 'POST', body: action === 'start' && commandIDs ? JSON.stringify({ command_ids: commandIDs }) : undefined }) }
+  async commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>) { await request(`/api/commands/${id}/${action}`, { method: 'POST', body: parameters ? JSON.stringify({ parameters }) : undefined }) }
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>) {
+		const payload = { ...(action === 'start' && commandIDs ? { command_ids: commandIDs } : {}), ...(parameters ? { parameters } : {}) }
+		await request(`/api/stacks/${id}/${action}`, { method: 'POST', body: Object.keys(payload).length ? JSON.stringify(payload) : undefined })
+	}
   promoteRun(id: string, input: PromoteRunInput) { return request<PromoteRunResult>(`/api/runs/${id}/promote`, { method: 'POST', body: JSON.stringify(input) }) }
   updateCommand(id: string, input: Partial<SavedCommand>) { return request<SavedCommand>(`/api/commands/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   updateStack(id: string, input: Partial<Stack>) { return request<Stack>(`/api/stacks/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }

@@ -76,6 +76,13 @@ func (c *daemonClient) mergeAndPut(ctx context.Context, path string, patch map[s
 			}
 		}
 	}
+	for _, optionalList := range []string{"parameters"} {
+		if containsField(fields, optionalList) {
+			if _, ok := merged[optionalList]; !ok {
+				merged[optionalList] = []any{}
+			}
+		}
+	}
 	for field, value := range patch {
 		merged[field] = value
 	}

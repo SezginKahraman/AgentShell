@@ -175,6 +175,10 @@ Aşağıdaki metin proje `CLAUDE.md` dosyasına eklenebilir:
 - Do not infer stable expected ports from one observation. Include a port only when it is known to be part of the command contract.
 - Never call `shutdown_runtime`, delete catalog records, or stop unrelated runs unless the user explicitly requests it.
 - Report created/reused IDs, run status, ports and log results clearly.
+- If a launcher needs user input, define a parameters schema. Never save a real
+  secret in command, env, default, description, tags, or catalog metadata. For
+  credentials use a secret field with stdin binding and prefer dashboard entry
+  over asking the user to paste a secret into chat.
 ```
 
 ## 5. Cursor Agent bağlantısı
@@ -232,6 +236,9 @@ Workflow:
 7. Read stdout/stderr with `get_logs` and report exit state and listening ports.
 8. Never duplicate an already-running service.
 9. Never stop the Runtime or delete records without explicit user intent.
+10. Configure runtime input schemas when needed, but never persist or guess
+    secret values. Prefer asking the user to complete the AgentShell dashboard
+    prompt.
 ```
 
 ### 5.3. Cursor bağlantı testi
@@ -321,6 +328,68 @@ Project, Collection ve birden fazla launcher birlikte istenmişse ayrı ayrı `s
 - `wait_for: ready`, yalnız readiness için bilinen expected port varsa anlamlıdır.
 - Doğrudan `run`/command çağrısındaki `wait_timeout_ms`, MCP yanıtının bekleme süresidir. Stack member üzerindeki `wait_timeout_ms` ise o member'ın orchestration koşulunun gerçek timeout'udur.
 - `run_timeout_ms`, çalışan komutun maksimum yaşam süresidir.
+
+#### Runtime parametreleri ve secret girdileri
+
+Yalnız kayıtlı launcher'lar bir parameters şeması taşıyabilir. Bu şema değeri
+değil, panelde gösterilecek alanı tarif eder:
+
+    {
+      "name": "Vault unseal",
+      "command": "docker exec -i hotel-vault vault operator unseal -",
+      "cwd": "/absolute/path/to/project",
+      "kind": "task",
+      "parameters": [
+        {
+          "key": "unseal_key",
+          "label": "Vault unseal key",
+          "description": "Bu Run için yalnız stdin üzerinden kullanılır.",
+          "type": "secret",
+          "required": true,
+          "binding": "stdin",
+          "append_newline": false
+        }
+      ]
+    }
+
+Desteklenen türler text, secret, number, boolean ve choice; binding türleri
+stdin ve env'dir. Env seçildiğinde env_var zorunludur. Bir launcher'da en fazla
+bir stdin parametresi olabilir. Choice için options gerekir. Secret
+parametrelerde default kesin olarak reddedilir.
+
+Güvenlik sözleşmesi:
+
+- Save/update/apply araçları yalnız şemayı kaydeder.
+- Dashboard Start/Run/Restart anında alanları açar. Secret input maskelidir.
+- Değerler yalnız child process'in geçici stdin veya environment akışına
+  verilir; Command, Run, History, SQLite ve loglara yazılmaz.
+- Değerler restart için saklanmaz; her restart yeniden giriş ister.
+- Stack başlatılırken seçilen member ve otomatik eklenen bağımlılıkların gerekli
+  alanları tek formda toplanır.
+- MCP ile şema oluşturmak güvenlidir. Gerçek secret'ı bir MCP start çağrısında
+  göndermek teknik olarak desteklenir, fakat bu değer AI istemcisinin
+  tool-call/conversation belleğinden geçer. Bu nedenle secret girişi için
+  dashboard tercih edilmelidir; agent secret istememeli, tahmin etmemeli,
+  tekrar etmemeli veya loglamamalıdır.
+
+Non-secret bir MCP start örneği:
+
+    {
+      "id": "saved-command-id",
+      "parameters": {
+        "region": "eu"
+      }
+    }
+
+Stack payload'ında ilk anahtar command ID'dir:
+
+    {
+      "id": "saved-stack-id",
+      "parameters": {
+        "database-command-id": { "profile": "local" },
+        "api-command-id": { "region": "eu" }
+      }
+    }
 
 ### 7.5. Gözlem ve sonuç
 

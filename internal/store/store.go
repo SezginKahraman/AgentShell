@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS commands (
 	 collection_id TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '',
 	 created_from_run_id TEXT NOT NULL DEFAULT '', discovery_source TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', stable_key TEXT NOT NULL DEFAULT '',
 	 lifecycle_mode TEXT NOT NULL DEFAULT 'managed', stop_command TEXT NOT NULL DEFAULT '', restart_command TEXT NOT NULL DEFAULT '',
+	 parameters TEXT NOT NULL DEFAULT '[]',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS stacks (
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS collections (
 	}
 	columns := map[string][]string{
 		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'"},
-		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''"},
+		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
 		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''"},
 	}
 	for table, defs := range columns {
@@ -393,7 +394,7 @@ func (s *Store) SaveCommand(ctx context.Context, c *domain.CommandDefinition) er
 	if c.Fingerprint == "" {
 		c.Fingerprint = domain.CommandFingerprint(*c)
 	}
-	_, e := s.db.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, ts(c.CreatedAt), ts(c.UpdatedAt))
+	_, e := s.db.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,parameters=excluded.parameters,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, js(c.Parameters), ts(c.CreatedAt), ts(c.UpdatedAt))
 	if e != nil && strings.Contains(strings.ToLower(e.Error()), "unique constraint") {
 		return fmt.Errorf("%w: equivalent command or stable key already exists", ErrConflict)
 	}
@@ -401,9 +402,9 @@ func (s *Store) SaveCommand(ctx context.Context, c *domain.CommandDefinition) er
 }
 func scanCommand(row scanner) (domain.CommandDefinition, error) {
 	var c domain.CommandDefinition
-	var env, ports, tags, created, updated string
+	var env, ports, tags, parameters, created, updated string
 	var fav int
-	err := row.Scan(&c.ID, &c.ProjectID, &c.CollectionID, &c.Name, &c.Description, &c.Command, &c.Cwd, &c.Shell, &c.Kind, &c.ConcurrencyPolicy, &env, &ports, &tags, &fav, &c.CreatedBy, &c.CreatedFromRunID, &c.DiscoverySource, &c.Fingerprint, &c.StableKey, &c.LifecycleMode, &c.StopCommand, &c.RestartCommand, &created, &updated)
+	err := row.Scan(&c.ID, &c.ProjectID, &c.CollectionID, &c.Name, &c.Description, &c.Command, &c.Cwd, &c.Shell, &c.Kind, &c.ConcurrencyPolicy, &env, &ports, &tags, &fav, &c.CreatedBy, &c.CreatedFromRunID, &c.DiscoverySource, &c.Fingerprint, &c.StableKey, &c.LifecycleMode, &c.StopCommand, &c.RestartCommand, &parameters, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -416,10 +417,11 @@ func scanCommand(row scanner) (domain.CommandDefinition, error) {
 	_ = json.Unmarshal([]byte(env), &c.Env)
 	_ = json.Unmarshal([]byte(ports), &c.ExpectedPorts)
 	_ = json.Unmarshal([]byte(tags), &c.Tags)
+	_ = json.Unmarshal([]byte(parameters), &c.Parameters)
 	return c, nil
 }
 
-const commandCols = `id,project_id,collection_id,name,description,command,cwd,shell,kind,concurrency_policy,env,expected_ports,tags,favorite,created_by,created_from_run_id,discovery_source,fingerprint,stable_key,lifecycle_mode,stop_command,restart_command,created_at,updated_at`
+const commandCols = `id,project_id,collection_id,name,description,command,cwd,shell,kind,concurrency_policy,env,expected_ports,tags,favorite,created_by,created_from_run_id,discovery_source,fingerprint,stable_key,lifecycle_mode,stop_command,restart_command,parameters,created_at,updated_at`
 
 func (s *Store) Command(ctx context.Context, id string) (domain.CommandDefinition, error) {
 	return scanCommand(s.db.QueryRowContext(ctx, `SELECT `+commandCols+` FROM commands WHERE id=?`, id))

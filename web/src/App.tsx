@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
-import type { Collection, CollectionInput, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from './types'
+import type { Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from './types'
 
 type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details'
@@ -17,6 +17,8 @@ type StackDetailTab = 'Overview' | 'Logs'
 type DeleteTarget = { type: 'command'; item: SavedCommand } | { type: 'stack'; item: Stack }
 type CatalogSort = 'default' | 'running' | 'stopped' | 'port'
 type Theme = 'light' | 'dark'
+type LogFilter = 'all' | 'errors'
+type ParameterRequest = { title: string; commands: SavedCommand[]; submit: (values: Record<string, Record<string, string>>) => void }
 
 const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [] }
 const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
@@ -31,6 +33,33 @@ const duration = (date?: string, ended?: string | null) => {
 const time = (date?: string) => date ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(date)) : '—'
 const httpPort = (port: Listener) => ['http', 'https'].includes((port.protocol ?? '').toLowerCase())
 const address = (port: Listener) => `${port.protocol ?? 'tcp'}://${port.address && port.address !== '0.0.0.0' ? port.address : 'localhost'}:${port.port}`
+const stripAnsi = (line: string) => line.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+const explicitError = /(?:^|\b)(?:error|err|fatal|panic|failed|failure|exception|critical|traceback)(?:\b|:)/i
+const serverError = /(?:\bstatus(?:_code)?\s*[=: ]\s*5\d\d\b|\bHTTP\/\d(?:\.\d)?\s+5\d\d\b|(?:^|\s)5\d\d(?:\s|$))/i
+const harmlessErrorCount = /\b(?:0|no)\s+(?:errors?|failures?)\b/i
+const splitLogLines = (content: string) => {
+  const lines = content.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  return lines
+}
+const classifiedLogLines = (content: string, stderr: string) => {
+  const stderrLines = new Set(splitLogLines(stderr).map(stripAnsi))
+  return splitLogLines(content).map((line, index) => {
+    const plain = stripAnsi(line)
+    const error = stderrLines.has(plain) || (!harmlessErrorCount.test(plain) && (explicitError.test(plain) || serverError.test(plain)))
+    return { line, index, error }
+  })
+}
+
+function LogFilterControls({ value, setValue, errors }: { value: LogFilter; setValue: (value: LogFilter) => void; errors: number }) {
+  return <div className="log-filter" role="group" aria-label="Filter log lines"><button aria-pressed={value === 'all'} className={value === 'all' ? 'active' : ''} onClick={() => setValue('all')}>All</button><button data-testid="log-filter-errors" aria-pressed={value === 'errors'} className={value === 'errors' ? 'active' : ''} onClick={() => setValue('errors')}>Errors / stderr <span>{errors}</span></button></div>
+}
+
+function LogOutput({ content, stderr = '', filter = 'all', testId, className = 'log-view', elementRef }: { content: string; stderr?: string; filter?: LogFilter; testId: string; className?: string; elementRef?: React.Ref<HTMLPreElement> }) {
+  const lines = classifiedLogLines(content, stderr)
+  const visible = filter === 'errors' ? lines.filter(line => line.error) : lines
+  return <pre ref={elementRef} className={className} data-testid={testId}>{visible.length ? visible.map(item => <span key={item.index} className={item.error ? 'log-line log-line-error' : 'log-line'}>{item.line || ' '}{'\n'}</span>) : <span className="log-filter-empty">$ no error or stderr lines in the last 300 lines</span>}</pre>
+}
 
 function Status({ value = 'unknown' }: { value?: string }) {
   return <span className={`status status-${value}`}><i />{value.replace('_', ' ')}</span>
@@ -180,6 +209,8 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
   const [collectionScope, setCollectionScope] = useState('all')
   const [selectedKey, setSelectedKey] = useState('')
   const [content, setContent] = useState('')
+  const [stderr, setStderr] = useState('')
+  const [logFilter, setLogFilter] = useState<LogFilter>('all')
   const [logError, setLogError] = useState('')
   const [loading, setLoading] = useState(false)
   const [live, setLive] = useState(true)
@@ -224,18 +255,18 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
     if (!collectionTabs.some(tab => tab.id === collectionScope)) setCollectionScope('all')
   }, [collectionScope, projectScope, collectionTabs.map(tab => tab.id).join('|')])
   useEffect(() => {
-    if (!selectedRunID) { setContent(''); setLogError(''); setLoading(false); return }
+    if (!selectedRunID) { setContent(''); setStderr(''); setLogError(''); setLoading(false); return }
     let cancelled = false
     const load = async (initial = false) => {
       if (initial) setLoading(true)
       try {
-        const response = await api.getLogs(selectedRunID)
-        if (!cancelled) { setContent(response.content); setLogError(''); setUpdatedAt(new Date()) }
+        const [response, errorResponse] = await Promise.all([api.getLogs(selectedRunID), api.getLogs(selectedRunID, 'stderr').catch(() => ({ content: '' }))])
+        if (!cancelled) { setContent(response.content); setStderr(errorResponse.content); setLogError(''); setUpdatedAt(new Date()) }
       } catch (error) {
         if (!cancelled) setLogError(error instanceof Error ? error.message : 'Unable to read logs')
       } finally { if (!cancelled && initial) setLoading(false) }
     }
-    setContent(''); setLogError(''); load(true)
+    setContent(''); setStderr(''); setLogError(''); load(true)
     const timer = live ? window.setInterval(() => load(), 1000) : undefined
     return () => { cancelled = true; if (timer) window.clearInterval(timer) }
   }, [api, selectedRunID, live, refreshToken])
@@ -250,9 +281,9 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
     {!entries.length ? <div className="logs-empty"><Empty title="No open port logs" detail="Start a service with a listening port to follow its shell output here." /></div> : !visibleEntries.length ? <div className="logs-empty"><Empty title="No ports in this scope" detail="Choose another project or collection." /></div> : <>
       <div className="port-log-tabs" role="tablist" aria-label="Open port logs">{visibleEntries.map(entry => <button key={entry.key} role="tab" aria-selected={selected?.key === entry.key} className={selected?.key === entry.key ? 'active' : ''} onClick={() => setSelectedKey(entry.key)}><span className="live-dot" /><strong>:{entry.port.port}</strong><span>{entry.port.name ?? entry.run.label}</span><small>{entry.projectName} · {entry.collectionName}</small></button>)}</div>
       {selected && <div className="terminal-shell">
-        <header><div className="terminal-title"><span className="terminal-lights"><i /><i /><i /></span><div><strong>{selected.run.label}</strong><small>{selected.projectName} / {selected.collectionName} / :{selected.port.port}</small></div></div><div className="terminal-actions"><label><input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> Follow output</label><button className={`button small ${live ? 'live-active' : ''}`} onClick={() => setLive(value => !value)}><Activity /> {live ? 'Live' : 'Paused'}</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton></div></header>
-        <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">{loading ? '$ attaching to combined stdout/stderr…' : logError ? `$ log stream error: ${logError}` : content || '$ connected — waiting for process output…'}</pre>
-        <footer><code>$ {selected.run.command}</code><span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Connecting…'} · combined stdout/stderr · last 300 lines</span></footer>
+        <header><div className="terminal-title"><span className="terminal-lights"><i /><i /><i /></span><div><strong>{selected.run.label}</strong><small>{selected.projectName} / {selected.collectionName} / :{selected.port.port}</small></div></div><div className="terminal-actions"><LogFilterControls value={logFilter} setValue={setLogFilter} errors={classifiedLogLines(content, stderr).filter(line => line.error).length} /><label><input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> Follow output</label><button className={`button small ${live ? 'live-active' : ''}`} onClick={() => setLive(value => !value)}><Activity /> {live ? 'Live' : 'Paused'}</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton></div></header>
+        {loading ? <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ attaching to combined stdout/stderr…</pre> : logError ? <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ log stream error: {logError}</pre> : content ? <LogOutput content={content} stderr={stderr} filter={logFilter} elementRef={terminal} className="live-terminal" testId="live-log-terminal" /> : <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ connected — waiting for process output…</pre>}
+        <footer><code>$ {selected.run.command}</code><span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Connecting…'} · Errors includes stderr and explicit error severity · last 300 lines</span></footer>
       </div>}
     </>}
   </section>
@@ -458,6 +489,44 @@ function CollectionDialog({ project, close, submit, busy }: { project?: Project;
   return <><button className="modal-scrim" aria-label="Cancel collection" onClick={close} /><form className="modal collection-modal" role="dialog" aria-modal="true" aria-labelledby="collection-title" onSubmit={event => { event.preventDefault(); submit(name.trim()) }}><span className="modal-icon"><Layers3 /></span><h2 id="collection-title">New collection</h2><p>One level inside {project?.name ?? 'the global catalog'}.</p><label>Name<input autoFocus value={name} onChange={event => setName(event.target.value)} required /></label><footer><button type="button" className="button" onClick={close}>Cancel</button><button className="button primary" data-testid="confirm-collection" disabled={busy || !name.trim()}><Plus /> Create</button></footer></form></>
 }
 
+function ParameterDialog({ request, close }: { request: ParameterRequest; close: () => void }) {
+  const fieldKey = (command: SavedCommand, parameter: CommandParameter) => command.id + ':' + parameter.key
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(request.commands.flatMap(command => (command.parameters ?? []).flatMap(parameter => {
+    const initial = parameter.default ?? (parameter.type === 'boolean' ? 'false' : '')
+    return initial !== '' || parameter.type === 'boolean' ? [[fieldKey(command, parameter), initial]] : []
+  }))))
+  const [validation, setValidation] = useState('')
+  const setValue = (key: string, value: string) => setValues(current => ({ ...current, [key]: value }))
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault()
+    const payload: Record<string, Record<string, string>> = {}
+    for (const command of request.commands) {
+      for (const parameter of command.parameters ?? []) {
+        const value = values[fieldKey(command, parameter)]
+        if (parameter.required && (value === undefined || value === '')) {
+          setValidation(parameter.label + ' is required.')
+          return
+        }
+        if (value !== undefined && (value !== '' || parameter.type === 'boolean')) {
+          payload[command.id] ??= {}
+          payload[command.id][parameter.key] = value
+        }
+      }
+    }
+    setValidation('')
+    close()
+    request.submit(payload)
+  }
+  const control = (command: SavedCommand, parameter: CommandParameter) => {
+    const key = fieldKey(command, parameter)
+    const value = values[key] ?? ''
+    if (parameter.type === 'choice') return <select id={key} value={value} onChange={event => setValue(key, event.target.value)} required={parameter.required}><option value="">Select…</option>{parameter.options?.map(option => <option key={option} value={option}>{option}</option>)}</select>
+    if (parameter.type === 'boolean') return <input id={key} type="checkbox" checked={value === 'true'} onChange={event => setValue(key, event.target.checked ? 'true' : 'false')} />
+    return <input id={key} type={parameter.type === 'secret' ? 'password' : parameter.type === 'number' ? 'number' : 'text'} value={value} onChange={event => setValue(key, event.target.value)} placeholder={parameter.placeholder} required={parameter.required} autoComplete={parameter.type === 'secret' ? 'off' : undefined} spellCheck={parameter.type === 'secret' ? false : undefined} />
+  }
+  return <><button className="modal-scrim" aria-label="Cancel runtime input" onClick={close} /><form className="modal parameter-modal" role="dialog" aria-modal="true" aria-labelledby="parameter-title" data-testid="parameter-dialog" onSubmit={submit}><span className="modal-icon"><Terminal /></span><h2 id="parameter-title">{request.title}</h2><p>Enter values for this execution. Secret fields are sent directly to the child process and are not saved in the launcher, Run, History, database, or logs.</p><div className="parameter-command-list">{request.commands.map(command => <fieldset key={command.id}><legend>{command.name}</legend>{command.parameters?.map(parameter => <div className={'parameter-field ' + (parameter.type === 'boolean' ? 'parameter-boolean' : '')} key={parameter.key}><label htmlFor={fieldKey(command, parameter)}>{parameter.label}{parameter.required && <span>Required</span>}</label>{control(command, parameter)}{parameter.description && <small>{parameter.description}</small>}<em>{parameter.binding === 'stdin' ? 'stdin' + (parameter.append_newline ? ' + newline' : '') : 'temporary env · ' + parameter.env_var}</em></div>)}</fieldset>)}</div>{validation && <p className="inline-error" role="alert">{validation}</p>}<div className="secret-notice"><Check /> Values exist only for this start attempt. AgentShell never reuses them on restart.</div><footer><button type="button" className="button" onClick={close}>Cancel</button><button className="button primary" data-testid="submit-parameters"><Play /> Continue</button></footer></form></>
+}
+
 function StackDialog({ commands, projects, collections, close, submit, busy }: { commands: SavedCommand[]; projects: Project[]; collections: Collection[]; close: () => void; submit: (input: StackInput) => void; busy: boolean }) {
 	const [name, setName] = useState('')
 	const [description, setDescription] = useState('')
@@ -482,8 +551,10 @@ function PromotionReceipt({ result, project, onView, close }: { result: PromoteR
   return <div className="receipt" role="status" data-testid="promotion-receipt"><span className="receipt-icon"><Check /></span><div><strong>{result.action === 'reused' ? 'Existing launcher reused' : 'Launcher saved'}</strong><p>{result.command.name}{project ? ` · ${project.name}` : ' · Global catalog'}</p></div><button className="button small" onClick={onView}>View {project ? 'project' : 'global'} <ArrowRight /></button><IconButton label="Dismiss receipt" onClick={close}><X /></IconButton></div>
 }
 
-function RunLogPanel({ api, runs, runID, setRunID, testId }: { api: AgentShellApi; runs: Run[]; runID: string; setRunID: (id: string) => void; testId: string }) {
+function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false }: { api: AgentShellApi; runs: Run[]; runID: string; setRunID: (id: string) => void; testId: string; hideRunSelect?: boolean }) {
   const [content, setContent] = useState('Select a Run to inspect its combined output.')
+  const [stderr, setStderr] = useState('')
+  const [logFilter, setLogFilter] = useState<LogFilter>('all')
   const [loading, setLoading] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
   const [follow, setFollow] = useState(true)
@@ -494,17 +565,22 @@ function RunLogPanel({ api, runs, runID, setRunID, testId }: { api: AgentShellAp
   useEffect(() => {
     if (!runID) {
       setContent('Select a Run to inspect its combined output.')
+      setStderr('')
       return
     }
     let cancelled = false
     let first = true
-    const load = () => {
+    const load = async () => {
       if (first) setLoading(true)
-      api.getLogs(runID)
-        .then(result => { if (!cancelled) setContent(result.content || 'This Run produced no output.') })
-        .catch(error => { if (!cancelled) setContent(`Unable to load logs: ${error.message}`) })
-        .finally(() => { if (!cancelled) setLoading(false); first = false })
+      try {
+        const [result, errorResult] = await Promise.all([api.getLogs(runID), api.getLogs(runID, 'stderr').catch(() => ({ content: '' }))])
+        if (!cancelled) { setContent(result.content); setStderr(errorResult.content) }
+      } catch (error) {
+        if (!cancelled) { setContent(`Unable to load logs: ${error instanceof Error ? error.message : 'Unknown error'}`); setStderr('') }
+      } finally { if (!cancelled) setLoading(false); first = false }
     }
+    setContent('')
+    setStderr('')
     load()
     const timer = live ? window.setInterval(load, 1200) : undefined
     return () => { cancelled = true; if (timer) window.clearInterval(timer) }
@@ -512,15 +588,17 @@ function RunLogPanel({ api, runs, runID, setRunID, testId }: { api: AgentShellAp
 
   useEffect(() => {
     if (follow && terminal.current) terminal.current.scrollTop = terminal.current.scrollHeight
-  }, [content, follow])
+  }, [content, stderr, logFilter, follow])
 
   if (!runs.length) return <Empty title="No Runs yet" detail="Start this launcher to capture stdout and stderr here." />
+  const errorCount = classifiedLogLines(content, stderr).filter(line => line.error).length
   return <div className="drawer-log-panel">
     <div className="drawer-log-toolbar">
-      <label className="run-log-select">Run<select value={runID} onChange={event => setRunID(event.target.value)}><option value="">Select a Run</option>{runs.map(run => <option key={run.id} value={run.id}>{new Date(run.created_at ?? run.started_at ?? Date.now()).toLocaleString()} · {run.lifecycle_action ?? 'run'} · {run.status}</option>)}</select></label>
+      {!hideRunSelect && <label className="run-log-select">Run<select value={runID} onChange={event => setRunID(event.target.value)}><option value="">Select a Run</option>{runs.map(run => <option key={run.id} value={run.id}>{new Date(run.created_at ?? run.started_at ?? Date.now()).toLocaleString()} · {run.lifecycle_action ?? 'run'} · {run.status}</option>)}</select></label>}
       <div className="drawer-log-controls"><span className={live ? 'log-live' : 'log-saved'}><i />{live ? 'Live' : 'Saved output'}</span><button className="button small" aria-pressed={follow} onClick={() => setFollow(value => !value)}><ArrowRight /> Follow</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton></div>
     </div>
-    <pre ref={terminal} className="log-view" data-testid={testId}>{loading && !content ? 'Loading logs…' : content}</pre>
+    <LogFilterControls value={logFilter} setValue={setLogFilter} errors={errorCount} />
+    {loading && !content ? <pre ref={terminal} className="log-view" data-testid={testId}>Loading logs…</pre> : content ? <LogOutput content={content} stderr={stderr} filter={logFilter} elementRef={terminal} testId={testId} /> : <pre ref={terminal} className="log-view" data-testid={testId}>This Run produced no output.</pre>}
   </div>
 }
 
@@ -548,7 +626,7 @@ function CommandDrawer({ command, project, collection, api, close, action, remov
   if (command.lifecycle_mode === 'external') overviewRows.push(['Stop command', command.stop_command ?? '—'], ['Restart command', command.restart_command || 'Stop, then start'])
   overviewRows.push(['Directory', command.cwd], ['Project', project?.name ?? 'Global catalog'], ['Collection', collection?.name ?? 'Project root'], ['Kind', command.kind], ['Lifecycle', command.lifecycle_mode ?? 'managed'], ['Shell', command.shell || '/bin/sh'], ['Concurrency', command.concurrency_policy ?? 'forbid'], ['Previous Runs', String(command.run_count ?? runs.length)])
   return <><button className="drawer-scrim" aria-label="Close launcher details" onClick={close} /><aside className="drawer command-drawer" data-testid="command-detail-drawer" aria-label={`${command.name} launcher details`}><header className="drawer-head"><div><h2>{command.name}</h2><Status value={command.status} /></div><IconButton label="Close launcher details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`command-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
-    {tab === 'Overview' && <><Definition rows={overviewRows} />{detailError && <div className="detail-note"><strong>Details unavailable</strong><span>{detailError}</span></div>}{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
+    {tab === 'Overview' && <><Definition rows={overviewRows} />{!!command.parameters?.length && <><h3>Runtime inputs</h3><div className="parameter-schema">{command.parameters.map(parameter => <div key={parameter.key}><span className={parameter.type === 'secret' ? 'secret' : ''}>{parameter.type === 'secret' ? '•••' : parameter.type}</span><strong>{parameter.label}</strong><small>{parameter.required ? 'Required' : 'Optional'} · {parameter.binding === 'stdin' ? 'stdin' : 'temporary ' + parameter.env_var}</small>{parameter.description && <p>{parameter.description}</p>}</div>)}</div><p className="port-verification-note">Only field definitions are saved. Values are requested again for every start or restart.</p></>}{detailError && <div className="detail-note"><strong>Details unavailable</strong><span>{detailError}</span></div>}{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
     {tab === 'Runs' && (loading ? <Empty title="Loading Runs" detail="Reading launcher history." /> : runs.length ? <div className="command-runs">{runs.map(run => <button key={run.id} onClick={() => { setRunID(run.id); setTab('Logs') }}><div><strong>{run.lifecycle_action ? `${run.lifecycle_action} · ` : ''}{run.command}</strong><small>{run.started_at ? new Date(run.started_at).toLocaleString() : 'Not started'} · {duration(run.started_at, run.ended_at)}</small></div><Status value={run.status} /><ScrollText /></button>)}</div> : <Empty title="No previous Runs" detail="This launcher has not been started through AgentShell yet." />)}
     {tab === 'Logs' && <RunLogPanel api={api} runs={runs} runID={runID} setRunID={setRunID} testId="command-log-panel" />}
     {tab === 'Script' && <><div className="script-heading"><div><strong>{source.path}</strong><small>Read-only · loaded from the launcher working directory</small></div>{source.truncated && <span>First 512 KiB</span>}</div><pre className="script-view" data-testid="command-script-panel">{source.content || '# Empty script'}</pre></>}
@@ -646,12 +724,10 @@ function StackDrawer({ stack, commands, project, collection, api, close, action,
 }
 
 function DetailDrawer({ run, tab, setTab, close, api, action, busy, accepting }: { run: Run; tab: DetailTab; setTab: (t: DetailTab) => void; close: () => void; api: AgentShellApi; action: (a: 'stop' | 'restart') => void; busy: boolean; accepting: boolean }) {
-  const [logs, setLogs] = useState('Loading logs…')
-  useEffect(() => { if (tab === 'Logs') api.getLogs(run.id).then(r => setLogs(r.content)).catch(e => setLogs(`Unable to load logs: ${e.message}`)) }, [api, run.id, tab])
   const listeners = run.listeners ?? []
   return <><button className="drawer-scrim" aria-label="Close run details" onClick={close} /><aside className="drawer" data-testid="run-detail-drawer" aria-label={`${run.label} details`}><header className="drawer-head"><div><h2>{run.label}</h2><Status value={run.status} /></div><IconButton label="Close run details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{(['Overview', 'Logs', 'Processes', 'Ports', 'Details'] as DetailTab[]).map(name => <button data-testid={`detail-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
     {tab === 'Overview' && <><Definition rows={[['Command', run.command], ['Directory', run.cwd], ['Started', run.started_at ? new Date(run.started_at).toLocaleString() : '—'], ['Source', run.source ?? 'User'], ['Shell', run.shell ?? 'default'], ['Exit Code', run.exit_code?.toString() ?? '—']]} /><h3>Ports ({listeners.length})</h3><div className="port-list">{listeners.map(p => <div key={p.port}><strong>{p.port}</strong><span>{p.name ?? p.protocol}</span><Status value={p.status ?? 'listening'} /><PortAction port={p} /></div>)}</div><h3>Resource usage</h3><Metric label="CPU" value={`${run.cpu_percent?.toFixed(1) ?? 0}%`} percent={run.cpu_percent ?? 0} /><Metric label="Memory" value={humanBytes(run.memory_bytes)} percent={Math.min(100, (run.memory_bytes ?? 0) / 5_000_000)} /></>}
-    {tab === 'Logs' && <pre className="log-view" data-testid="log-panel">{logs}</pre>}
+    {tab === 'Logs' && <RunLogPanel api={api} runs={[run]} runID={run.id} setRunID={() => undefined} testId="log-panel" hideRunSelect />}
     {tab === 'Processes' && <div className="process-list">{run.processes?.map(p => <div key={p.pid}><strong>PID {p.pid}</strong><code>{p.command ?? run.command}</code><span>{p.cpu_percent?.toFixed(1) ?? 0}% CPU</span><span>{humanBytes(p.memory_bytes)}</span></div>) ?? <Empty title="No process data" detail="Process discovery is still running." />}</div>}
     {tab === 'Ports' && <PortsTable ports={listeners} full />}
     {tab === 'Details' && <Definition rows={[['Run ID', run.id], ['Root PID', run.root_pid?.toString() ?? '—'], ['Process Group', run.process_group_id?.toString() ?? '—'], ['Kind', run.kind ?? 'service'], ['Readiness', run.readiness ?? 'unknown'], ['Command Definition', run.command_definition_id ?? '—'], ['Stack Run', run.stack_run_id ?? '—']]} />}
@@ -713,6 +789,7 @@ export default function App() {
   const [collectionOpen, setCollectionOpen] = useState(false)
 	const [stackOpen, setStackOpen] = useState(false)
 	const [editStackID, setEditStackID] = useState('')
+  const [parameterRequest, setParameterRequest] = useState<ParameterRequest | null>(null)
   const shutdownPollFailures = useRef(0)
 
   useEffect(() => {
@@ -732,13 +809,67 @@ export default function App() {
 
   const perform = async (id: string, call: () => Promise<void>) => { setBusy(id); try { await call(); await reload() } catch (e) { setError(e instanceof Error ? e.message : 'Action failed') } finally { setBusy('') } }
   const accepting = runtime?.status === 'running'
-  const runAction = (run: Run, action: 'stop' | 'restart') => api && (action === 'stop' || accepting) && perform(run.id, () => action === 'stop' ? api.stopRun(run.id) : api.restartRun(run.id))
-  const runAgain = (run: Run) => api && accepting && perform(run.id, () => api.restartRun(run.id))
   const favoriteCommand = (command: SavedCommand) => api && perform(command.id, () => api.updateCommand(command.id, { favorite: !command.favorite }).then(() => undefined))
   const favoriteStack = (stack: Stack) => api && perform(stack.id, () => api.updateStack(stack.id, { favorite: !stack.favorite }).then(() => undefined))
 	const saveStack = (stack: Stack, input: Partial<Stack>) => api && perform(stack.id, () => api.updateStack(stack.id, input).then(() => undefined))
-  const commandAction = (command: SavedCommand, action: 'start' | 'stop' | 'restart') => api && (action === 'stop' || accepting) && perform(command.id, () => api.commandAction(command.id, action))
-  const stackAction = (stack: Stack, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) => api && (action === 'stop' || accepting) && perform(stack.id, () => api.stackAction(stack.id, action, commandIDs))
+  const commandAction = (command: SavedCommand, action: 'start' | 'stop' | 'restart') => {
+    if (!api || (action !== 'stop' && !accepting)) return
+    const execute = (parameters?: Record<string, string>) => perform(command.id, () => api.commandAction(command.id, action, parameters))
+    if (action !== 'stop' && command.parameters?.length) {
+      setParameterRequest({ title: (action === 'restart' ? 'Restart ' : command.kind === 'task' ? 'Run ' : 'Start ') + command.name, commands: [command], submit: values => execute(values[command.id]) })
+      return
+    }
+    execute()
+  }
+  const stackParameterCommands = (stack: Stack, action: 'start' | 'restart', commandIDs?: string[]) => {
+    const members = stack.members ?? stack.commands ?? []
+    const byID = new Map(members.map(member => [member.command_id, member]))
+    const included = new Set<string>()
+    const include = (id: string) => {
+      if (included.has(id)) return
+      included.add(id)
+      byID.get(id)?.depends_on?.forEach(include)
+    }
+    ;(commandIDs ?? members.map(member => member.command_id)).forEach(include)
+    return [...included].flatMap(id => {
+      const command = data.commands.find(candidate => candidate.id === id)
+      const member = byID.get(id)
+      const active = member?.can_stop ?? running(member?.status ?? command?.status)
+      return command?.parameters?.length && (action === 'restart' || !active) ? [command] : []
+    })
+  }
+  const stackAction = (stack: Stack, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) => {
+    if (!api || (action !== 'stop' && !accepting)) return
+    const execute = (parameters?: Record<string, Record<string, string>>) => perform(stack.id, () => api.stackAction(stack.id, action, commandIDs, parameters))
+    if (action !== 'stop') {
+      const parameterCommands = stackParameterCommands(stack, action, commandIDs)
+      if (parameterCommands.length) {
+        setParameterRequest({ title: (action === 'restart' ? 'Restart ' : 'Start ') + stack.name, commands: parameterCommands, submit: execute })
+        return
+      }
+    }
+    execute()
+  }
+  const runAction = (run: Run, action: 'stop' | 'restart') => {
+    if (!api || (action !== 'stop' && !accepting)) return
+    if (action === 'restart' && run.command_definition_id) {
+      const command = data.commands.find(candidate => candidate.id === run.command_definition_id)
+      if (command?.parameters?.length) {
+        commandAction(command, 'restart')
+        return
+      }
+    }
+    perform(run.id, () => action === 'stop' ? api.stopRun(run.id) : api.restartRun(run.id))
+  }
+  const runAgain = (run: Run) => {
+    if (!api || !accepting) return
+    const command = data.commands.find(candidate => candidate.id === run.command_definition_id)
+    if (command?.parameters?.length) {
+      commandAction(command, 'restart')
+      return
+    }
+    perform(run.id, () => api.restartRun(run.id))
+  }
 	const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => setSelectedCommandID(command.id), openStack: stack => setSelectedStackID(stack.id), deleteStack: stack => setDeleteTarget({ type: 'stack', item: stack }) }
 	const deleteSaved = async () => {
 		if (!api || !deleteTarget) return
@@ -838,5 +969,6 @@ export default function App() {
     {promotionReceipt && <PromotionReceipt result={promotionReceipt} project={data.projects.find(item => item.id === promotionReceipt.command.project_id)} onView={() => { setPage('projects'); setSelectedProject(promotionReceipt.command.project_id ?? 'global'); setPromotionReceipt(null) }} close={() => setPromotionReceipt(null)} />}
 	{shutdownOpen && api && <ShutdownDialog data={data} close={() => setShutdownOpen(false)} confirm={shutdown} busy={busy === 'runtime-shutdown'} mode={api.mode} />}
 	{deleteTarget && <DeleteSavedDialog target={deleteTarget} close={() => setDeleteTarget(null)} confirm={deleteSaved} busy={busy === deleteTarget.item.id} />}
+    {parameterRequest && <ParameterDialog request={parameterRequest} close={() => setParameterRequest(null)} />}
   </div>
 }

@@ -3,6 +3,10 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -132,31 +136,49 @@ type Collection struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// CommandParameter describes a value that must be supplied when a saved
+// launcher starts. Definitions are durable catalog metadata; parameter values
+// are deliberately transient and must never be persisted on a Command or Run.
+type CommandParameter struct {
+	Key           string   `json:"key"`
+	Label         string   `json:"label"`
+	Description   string   `json:"description,omitempty"`
+	Type          string   `json:"type"`
+	Required      bool     `json:"required,omitempty"`
+	Default       string   `json:"default,omitempty"`
+	Placeholder   string   `json:"placeholder,omitempty"`
+	Options       []string `json:"options,omitempty"`
+	Binding       string   `json:"binding"`
+	EnvVar        string   `json:"env_var,omitempty"`
+	AppendNewline bool     `json:"append_newline,omitempty"`
+}
+
 type CommandDefinition struct {
-	ID                string            `json:"id"`
-	ProjectID         string            `json:"project_id,omitempty"`
-	CollectionID      string            `json:"collection_id,omitempty"`
-	Name              string            `json:"name"`
-	Description       string            `json:"description,omitempty"`
-	Command           string            `json:"command"`
-	Cwd               string            `json:"cwd"`
-	Shell             string            `json:"shell,omitempty"`
-	Kind              string            `json:"kind"`
-	ConcurrencyPolicy string            `json:"concurrency_policy"`
-	Env               map[string]string `json:"env,omitempty"`
-	ExpectedPorts     []ExpectedPort    `json:"expected_ports,omitempty"`
-	Tags              []string          `json:"tags,omitempty"`
-	Favorite          bool              `json:"favorite"`
-	CreatedBy         string            `json:"created_by,omitempty"`
-	CreatedFromRunID  string            `json:"created_from_run_id,omitempty"`
-	DiscoverySource   string            `json:"discovery_source,omitempty"`
-	Fingerprint       string            `json:"fingerprint,omitempty"`
-	StableKey         string            `json:"stable_key,omitempty"`
-	LifecycleMode     string            `json:"lifecycle_mode,omitempty"`
-	StopCommand       string            `json:"stop_command,omitempty"`
-	RestartCommand    string            `json:"restart_command,omitempty"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
+	ID                string             `json:"id"`
+	ProjectID         string             `json:"project_id,omitempty"`
+	CollectionID      string             `json:"collection_id,omitempty"`
+	Name              string             `json:"name"`
+	Description       string             `json:"description,omitempty"`
+	Command           string             `json:"command"`
+	Cwd               string             `json:"cwd"`
+	Shell             string             `json:"shell,omitempty"`
+	Kind              string             `json:"kind"`
+	ConcurrencyPolicy string             `json:"concurrency_policy"`
+	Env               map[string]string  `json:"env,omitempty"`
+	ExpectedPorts     []ExpectedPort     `json:"expected_ports,omitempty"`
+	Tags              []string           `json:"tags,omitempty"`
+	Favorite          bool               `json:"favorite"`
+	CreatedBy         string             `json:"created_by,omitempty"`
+	CreatedFromRunID  string             `json:"created_from_run_id,omitempty"`
+	DiscoverySource   string             `json:"discovery_source,omitempty"`
+	Fingerprint       string             `json:"fingerprint,omitempty"`
+	StableKey         string             `json:"stable_key,omitempty"`
+	LifecycleMode     string             `json:"lifecycle_mode,omitempty"`
+	StopCommand       string             `json:"stop_command,omitempty"`
+	RestartCommand    string             `json:"restart_command,omitempty"`
+	Parameters        []CommandParameter `json:"parameters,omitempty"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
 type StackMember struct {
@@ -198,6 +220,166 @@ type StartSpec struct {
 	RunTimeoutMS        *int              `json:"run_timeout_ms,omitempty"`
 	ProjectID           string            `json:"project_id,omitempty"`
 	LifecycleAction     string            `json:"lifecycle_action,omitempty"`
+	TransientEnv        map[string]string `json:"-"`
+	Stdin               []byte            `json:"-"`
+}
+
+var (
+	ErrInvalidCommandParameters = errors.New("invalid command parameters")
+	parameterKeyPattern         = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	envVarPattern               = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+// ValidateCommandParameters validates only the durable schema. Secret values
+// never belong in this schema: secret defaults are explicitly rejected.
+func ValidateCommandParameters(parameters []CommandParameter) error {
+	seen := make(map[string]struct{}, len(parameters))
+	stdinCount := 0
+	for i, parameter := range parameters {
+		prefix := fmt.Sprintf("parameters[%d]", i)
+		if !parameterKeyPattern.MatchString(parameter.Key) {
+			return fmt.Errorf("%s.key must match %s", prefix, parameterKeyPattern.String())
+		}
+		if _, exists := seen[parameter.Key]; exists {
+			return fmt.Errorf("%s.key %q is duplicated", prefix, parameter.Key)
+		}
+		seen[parameter.Key] = struct{}{}
+		if strings.TrimSpace(parameter.Label) == "" {
+			return fmt.Errorf("%s.label is required", prefix)
+		}
+		switch parameter.Type {
+		case "text", "secret", "number", "boolean", "choice":
+		default:
+			return fmt.Errorf("%s.type must be text, secret, number, boolean, or choice", prefix)
+		}
+		if parameter.Type == "secret" && parameter.Default != "" {
+			return fmt.Errorf("%s.default is forbidden for secret parameters", prefix)
+		}
+		if len(parameter.Default) > 64<<10 {
+			return fmt.Errorf("%s.default is too large", prefix)
+		}
+		if parameter.Type == "choice" {
+			if len(parameter.Options) == 0 {
+				return fmt.Errorf("%s.options is required for choice parameters", prefix)
+			}
+			options := map[string]struct{}{}
+			for _, option := range parameter.Options {
+				if option == "" {
+					return fmt.Errorf("%s.options must not contain empty values", prefix)
+				}
+				if _, exists := options[option]; exists {
+					return fmt.Errorf("%s.options contains duplicate %q", prefix, option)
+				}
+				options[option] = struct{}{}
+			}
+			if parameter.Default != "" {
+				if _, exists := options[parameter.Default]; !exists {
+					return fmt.Errorf("%s.default must be one of options", prefix)
+				}
+			}
+		} else if len(parameter.Options) > 0 {
+			return fmt.Errorf("%s.options is only valid for choice parameters", prefix)
+		}
+		if parameter.Default != "" {
+			if err := validateCommandParameterValue(parameter, parameter.Default); err != nil {
+				return fmt.Errorf("%s.default: %w", prefix, err)
+			}
+		}
+		switch parameter.Binding {
+		case "env":
+			if !envVarPattern.MatchString(parameter.EnvVar) {
+				return fmt.Errorf("%s.env_var must be a valid environment variable name", prefix)
+			}
+			if parameter.AppendNewline {
+				return fmt.Errorf("%s.append_newline is only valid for stdin binding", prefix)
+			}
+		case "stdin":
+			stdinCount++
+			if stdinCount > 1 {
+				return fmt.Errorf("only one stdin-bound parameter is supported")
+			}
+			if parameter.EnvVar != "" {
+				return fmt.Errorf("%s.env_var is only valid for env binding", prefix)
+			}
+		case "":
+			return fmt.Errorf("%s.binding is required", prefix)
+		default:
+			return fmt.Errorf("%s.binding must be env or stdin", prefix)
+		}
+	}
+	return nil
+}
+
+// ResolveCommandParameters validates start-time values and turns them into
+// process-only environment and stdin data. Callers must discard both after
+// starting the child and must never attach them to a Run or log message.
+func ResolveCommandParameters(parameters []CommandParameter, values map[string]string) (map[string]string, []byte, error) {
+	if err := ValidateCommandParameters(parameters); err != nil {
+		return nil, nil, err
+	}
+	allowed := make(map[string]struct{}, len(parameters))
+	transientEnv := map[string]string{}
+	var stdin []byte
+	for _, parameter := range parameters {
+		allowed[parameter.Key] = struct{}{}
+		value, provided := values[parameter.Key]
+		if !provided && parameter.Default != "" {
+			value, provided = parameter.Default, true
+		}
+		if !provided {
+			if parameter.Required {
+				return nil, nil, fmt.Errorf("parameter %q is required", parameter.Key)
+			}
+			continue
+		}
+		if len(value) > 64<<10 {
+			return nil, nil, fmt.Errorf("parameter %q is too large", parameter.Key)
+		}
+		if parameter.Required && value == "" {
+			return nil, nil, fmt.Errorf("parameter %q must not be empty", parameter.Key)
+		}
+		if err := validateCommandParameterValue(parameter, value); err != nil {
+			return nil, nil, fmt.Errorf("parameter %q: %w", parameter.Key, err)
+		}
+		if parameter.Binding == "stdin" {
+			stdin = []byte(value)
+			if parameter.AppendNewline {
+				stdin = append(stdin, '\n')
+			}
+		} else {
+			transientEnv[parameter.EnvVar] = value
+		}
+	}
+	for key := range values {
+		if _, exists := allowed[key]; !exists {
+			return nil, nil, fmt.Errorf("unknown parameter %q", key)
+		}
+	}
+	if len(transientEnv) == 0 {
+		transientEnv = nil
+	}
+	return transientEnv, stdin, nil
+}
+
+func validateCommandParameterValue(parameter CommandParameter, value string) error {
+	switch parameter.Type {
+	case "number":
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return errors.New("must be a number")
+		}
+	case "boolean":
+		if value != "true" && value != "false" {
+			return errors.New("must be true or false")
+		}
+	case "choice":
+		for _, option := range parameter.Options {
+			if value == option {
+				return nil
+			}
+		}
+		return errors.New("must be one of the configured options")
+	}
+	return nil
 }
 
 // CommandFingerprint is stable across display-only catalog edits. Environment

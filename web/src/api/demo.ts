@@ -13,7 +13,7 @@ const runs: Run[] = [
 const history: Run[] = [
   ...runs,
   { id: 'hist-test', label: 'Go tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', kind: 'task', source: 'AI', status: 'completed', exit_code: 0, started_at: iso(29), ended_at: iso(28.95) },
-  { id: 'hist-build', label: 'Web build', command: 'npm run build', cwd: '~/projects/butcembu-web', kind: 'task', source: 'AI', status: 'failed', exit_code: 1, started_at: iso(36), ended_at: iso(35.75) },
+  { id: 'hist-build', label: 'Web build', command: 'npm run build', cwd: '~/projects/butcembu-web', kind: 'task', source: 'AI', status: 'failed', exit_code: 1, command_definition_id: 'cmd-build', started_at: iso(36), ended_at: iso(35.75) },
 ]
 
 const commands: SavedCommand[] = [
@@ -22,6 +22,7 @@ const commands: SavedCommand[] = [
   { id: 'cmd-worker', name: 'Notification Worker', command: './scripts/worker.sh', cwd: '~/projects/notification', project_id: 'project-api', collection_id: 'collection-workers', kind: 'service', tags: ['internal', 'worker'], status: 'stopped', created_by: 'AI', discovery_source: 'scripts/worker.sh' },
   { id: 'cmd-test', name: 'Backend Tests', command: 'go test ./...', cwd: '~/projects/butcembu-api', project_id: 'project-api', collection_id: 'collection-quality', kind: 'task', tags: ['test'], status: 'completed', last_run: history[3], created_from_run_id: 'hist-test', created_by: 'User' },
   { id: 'cmd-build', name: 'Frontend Build', command: 'npm run build', cwd: '~/projects/butcembu-web', project_id: 'project-web', collection_id: 'collection-web-dev', kind: 'task', tags: ['build'], status: 'failed', last_run: history[4], created_by: 'Cursor', discovery_source: 'package.json' },
+  { id: 'cmd-vault-unseal', name: 'Vault unseal', command: 'docker exec -i hotel-vault vault operator unseal -', cwd: '~/projects/shared', kind: 'task', tags: ['vault', 'security'], status: 'stopped', created_by: 'Claude Code', parameters: [{ key: 'unseal_key', label: 'Vault unseal key', description: 'Used once through stdin for this Run.', type: 'secret', required: true, binding: 'stdin', placeholder: 'Enter the unseal key' }] },
   { id: 'cmd-global-db', name: 'Local PostgreSQL', command: 'docker compose up -d postgres', stop_command: 'docker compose stop postgres', lifecycle_mode: 'external', expected_ports: [{ port: 5432, name: 'PostgreSQL', service: 'postgresql' }], cwd: '~/projects/shared', kind: 'service', tags: ['global', 'database'], status: 'stopped', favorite: true, created_by: 'User' },
 ]
 
@@ -53,13 +54,18 @@ export class DemoApi implements AgentShellApi {
   }
   async shutdownRuntime() { this.runtimeStatus = 'stopped' as const; this.emit(); return { status: 'shutting_down' as const } }
   async getRun(id: string) { const run = runs.find(r => r.id === id) ?? history.find(r => r.id === id); if (!run) throw new Error('Run not found'); return structuredClone(run) }
-  async getLogs(id: string) { return { run_id: id, stream: 'combined', content: `[19:42:11] starting ${runs.find(r => r.id === id)?.command ?? 'command'}\n[19:42:12] connected to database\n[19:42:12] server listening and ready\n[19:42:13] GET /health 200 1.8ms\n` } }
+  async getLogs(id: string, stream: 'combined' | 'stdout' | 'stderr' = 'combined') {
+    const run = runs.find(item => item.id === id) ?? history.find(item => item.id === id)
+    const stdout = `[19:42:11] starting ${run?.command ?? 'command'}\n[19:42:12] connected to database\n[19:42:12] server listening and ready\n[19:42:13] GET /health 200 1.8ms\n`
+    const stderr = id === 'hist-build' ? '[19:42:14] ERROR build failed: module not found\n' : ''
+    return { run_id: id, stream, content: stream === 'stderr' ? stderr : stream === 'stdout' ? stdout : stdout + stderr }
+  }
 	async getCommandRuns(id: string) { return structuredClone(history.filter(run => commands.find(command => command.id === id)?.active_run_id === run.id || run.command_definition_id === id)) }
 	async getCommandSource(id: string) { const command = commands.find(item => item.id === id); return command?.command.endsWith('.sh') ? { available: true, path: command.command.replace(/^exec\s+/, ''), content: '#!/usr/bin/env bash\nset -euo pipefail\n\necho "Demo script source"\n' } : { available: false, reason: 'This launcher does not directly reference a .sh file.' } }
   async stopRun(id: string) { const run = runs.find(r => r.id === id); if (run) run.status = 'stopped'; commands.filter(c => c.active_run_id === id).forEach(c => { c.status = 'stopped'; c.active_run_id = undefined }); this.emit() }
   async restartRun(id: string) { const run = runs.find(r => r.id === id); if (run) { run.status = 'running'; run.started_at = new Date().toISOString() } this.emit() }
-  async commandAction(id: string, action: 'start' | 'stop' | 'restart') { const item = commands.find(c => c.id === id); if (!item) return; item.status = action === 'stop' ? 'stopped' : 'running'; if (action !== 'stop') item.active_run_id = item.active_run_id ?? `demo-${id}`; else item.active_run_id = undefined; this.emit() }
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) {
+  async commandAction(id: string, action: 'start' | 'stop' | 'restart', _parameters?: Record<string, string>) { const item = commands.find(c => c.id === id); if (!item) return; item.status = action === 'stop' ? 'stopped' : 'running'; if (action !== 'stop') item.active_run_id = item.active_run_id ?? `demo-${id}`; else item.active_run_id = undefined; this.emit() }
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], _parameters?: Record<string, Record<string, string>>) {
 		const stack = stacks.find(s => s.id === id); if (!stack) return
 		const selected = action === 'start' && commandIDs ? new Set(commandIDs) : undefined
 		stack.members?.forEach(member => {

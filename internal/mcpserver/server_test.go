@@ -167,10 +167,12 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 			"dry_run":     true,
 			"project":     map[string]any{"name": "Internal", "root_path": "/tmp/internal"},
 			"collections": []any{map[string]any{"key": "services", "name": "Services"}},
-			"commands":    []any{map[string]any{"key": "api", "name": "API", "command": "make go", "cwd": "/tmp/internal/api", "kind": "service", "collection_key": "services", "expected_ports": []any{map[string]any{"port": 8080, "service": "http"}}}},
+			"commands":    []any{map[string]any{"key": "api", "name": "API", "command": "make go", "cwd": "/tmp/internal/api", "kind": "service", "collection_key": "services", "expected_ports": []any{map[string]any{"port": 8080, "service": "http"}}, "parameters": []any{map[string]any{"key": "token", "label": "Token", "type": "secret", "required": true, "binding": "stdin"}}}},
 			"stacks":      []any{map[string]any{"key": "all", "name": "Internal", "command_keys": []any{"api"}}},
 		}},
-		{Name: "start_stack", Arguments: map[string]any{"id": "stack-1", "command_ids": []any{"command-1", "command-2"}}},
+		{Name: "save_command", Arguments: map[string]any{"name": "Vault", "command": "vault operator unseal -", "cwd": "/tmp/internal", "kind": "task", "parameters": []any{map[string]any{"key": "unseal_key", "label": "Vault key", "type": "secret", "required": true, "binding": "stdin"}}}},
+		{Name: "start_command", Arguments: map[string]any{"id": "command-param", "parameters": map[string]any{"unseal_key": "one-shot-only"}}},
+		{Name: "start_stack", Arguments: map[string]any{"id": "stack-1", "command_ids": []any{"command-1", "command-2"}, "parameters": map[string]any{"command-2": map[string]any{"token": "transient-only"}}}},
 	}
 	for _, call := range calls {
 		result, callErr := session.CallTool(ctx, call)
@@ -187,6 +189,8 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 		{http.MethodDelete, "/api/collections/col-2"},
 		{http.MethodPost, "/api/runs/run-1/promote"},
 		{http.MethodPost, "/api/catalog/apply"},
+		{http.MethodPost, "/api/commands"},
+		{http.MethodPost, "/api/commands/command-param/start"},
 		{http.MethodPost, "/api/stacks/stack-1/start"},
 	}
 	if len(requests) != len(wantRequests) {
@@ -216,9 +220,23 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 	if command["expected_ports"].([]any)[0].(map[string]any)["service"] != "http" {
 		t.Errorf("apply payload lost service: %#v", apply)
 	}
-	start := requests[7].Body
+	if command["parameters"].([]any)[0].(map[string]any)["binding"] != "stdin" {
+		t.Errorf("apply payload lost parameter schema: %#v", apply)
+	}
+	savedCommand := requests[7].Body
+	if savedCommand["parameters"].([]any)[0].(map[string]any)["binding"] != "stdin" {
+		t.Errorf("save_command parameter schema = %#v", savedCommand)
+	}
+	startCommand := requests[8].Body
+	if startCommand["parameters"].(map[string]any)["unseal_key"] != "one-shot-only" {
+		t.Errorf("start_command transient parameters = %#v", startCommand)
+	}
+	start := requests[9].Body
 	if ids, ok := start["command_ids"].([]any); !ok || len(ids) != 2 || ids[1] != "command-2" {
 		t.Errorf("start_stack subset payload = %#v", start)
+	}
+	if start["parameters"].(map[string]any)["command-2"].(map[string]any)["token"] != "transient-only" {
+		t.Errorf("start_stack transient parameters = %#v", start)
 	}
 }
 

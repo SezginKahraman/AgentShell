@@ -2,6 +2,7 @@ export type RunStatus = 'starting' | 'running' | 'stopping' | 'completed' | 'fai
 export type Readiness = 'unknown' | 'waiting' | 'ready' | 'degraded' | 'unavailable'
 
 export interface ExpectedPort { port: number; name?: string; protocol?: string; service?: string }
+export interface CommandParameter { key: string; label: string; description?: string; type: 'text' | 'secret' | 'number' | 'boolean' | 'choice'; required?: boolean; default?: string; placeholder?: string; options?: string[]; binding: 'env' | 'stdin'; env_var?: string; append_newline?: boolean }
 export interface PortVerification { port: number; name?: string; protocol?: string; service?: string; before: 'closed' | 'listening'; after?: 'closed' | 'listening'; current?: 'closed' | 'listening'; status: 'pending' | 'verified' | 'preexisting' | 'unavailable' | 'stopped' | 'still_listening'; confidence?: 'high'; checked_at: string }
 export interface Listener { port: number; address?: string; protocol?: string; name?: string; pid?: number; run_id?: string; run_label?: string; status?: string; attribution?: 'managed' | 'external'; confidence?: 'exact' | 'high' }
 export interface ProcessInfo { pid: number; ppid?: number; command?: string; cpu_percent?: number; memory_bytes?: number }
@@ -60,6 +61,7 @@ export interface SavedCommand {
 	lifecycle_mode?: 'managed' | 'external'
 	stop_command?: string
 	restart_command?: string
+	parameters?: CommandParameter[]
 	can_stop?: boolean
 	state_detail?: string
 	port_verifications?: PortVerification[]

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -163,7 +164,10 @@ func (m *Manager) Start(ctx context.Context, spec domain.StartSpec) (*domain.Run
 	locked := &lockedWriter{w: combined}
 	cmd := exec.Command(shell, "-lc", spec.Command)
 	cmd.Dir = cwd
-	cmd.Env = mergeEnv(spec.Env)
+	cmd.Env = mergeEnv(spec.Env, spec.TransientEnv)
+	if len(spec.Stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(spec.Stdin)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = io.MultiWriter(out, locked)
 	cmd.Stderr = io.MultiWriter(errFile, locked)
@@ -260,16 +264,18 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 	return w.w.Write(p)
 }
 
-func mergeEnv(extra map[string]string) []string {
+func mergeEnv(groups ...map[string]string) []string {
 	values := make(map[string]string)
 	for _, item := range os.Environ() {
 		if i := strings.IndexByte(item, '='); i > 0 {
 			values[item[:i]] = item[i+1:]
 		}
 	}
-	for k, v := range extra {
-		if validEnvKey(k) {
-			values[k] = v
+	for _, extra := range groups {
+		for k, v := range extra {
+			if validEnvKey(k) {
+				values[k] = v
+			}
 		}
 	}
 	keys := make([]string, 0, len(values))
@@ -425,6 +431,11 @@ func (m *Manager) Restart(ctx context.Context, id string) (*domain.Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if old.CommandDefinitionID != "" {
+		if command, commandErr := m.store.Command(ctx, old.CommandDefinitionID); commandErr == nil && len(command.Parameters) > 0 {
+			return nil, errors.New("saved launcher requires runtime parameters; restart it through the command action")
+		}
+	}
 	if old.Active() {
 		_, _ = m.Stop(ctx, id)
 		deadline := time.Now().Add(m.cfg.StopGrace + 2*time.Second)
@@ -445,12 +456,16 @@ func (m *Manager) Restart(ctx context.Context, id string) (*domain.Run, error) {
 }
 
 func (m *Manager) StartCommand(ctx context.Context, id string, stackRunID string) (*domain.Run, error) {
-	m.commandMu.Lock()
-	defer m.commandMu.Unlock()
-	return m.startCommandLocked(ctx, id, stackRunID)
+	return m.StartCommandWithParameters(ctx, id, stackRunID, nil)
 }
 
-func (m *Manager) startCommandLocked(ctx context.Context, id string, stackRunID string) (*domain.Run, error) {
+func (m *Manager) StartCommandWithParameters(ctx context.Context, id string, stackRunID string, values map[string]string) (*domain.Run, error) {
+	m.commandMu.Lock()
+	defer m.commandMu.Unlock()
+	return m.startCommandLocked(ctx, id, stackRunID, values)
+}
+
+func (m *Manager) startCommandLocked(ctx context.Context, id string, stackRunID string, values map[string]string) (*domain.Run, error) {
 	c, err := m.store.Command(ctx, id)
 	if err != nil {
 		return nil, err
@@ -479,6 +494,10 @@ func (m *Manager) startCommandLocked(ctx context.Context, id string, stackRunID 
 			return nil, fmt.Errorf("invalid concurrency policy %q", policy)
 		}
 	}
+	transientEnv, stdin, err := domain.ResolveCommandParameters(c.Parameters, values)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidCommandParameters, err)
+	}
 	if lifecycleMode(c) == "external" {
 		started, last, e := m.externalStarted(ctx, c.ID)
 		if e != nil {
@@ -489,11 +508,11 @@ func (m *Manager) startCommandLocked(ctx context.Context, id string, stackRunID 
 			case "forbid":
 				return last, ErrAlreadyRunning
 			case "replace":
-				return m.startLifecycleAction(ctx, c, restartCommand(c), "restart", stackRunID)
+				return m.startLifecycleAction(ctx, c, restartCommand(c), "restart", stackRunID, transientEnv, stdin)
 			}
 		}
 	}
-	return m.startLifecycleAction(ctx, c, c.Command, "start", stackRunID)
+	return m.startLifecycleAction(ctx, c, c.Command, "start", stackRunID, transientEnv, stdin)
 }
 func (m *Manager) StopCommand(ctx context.Context, id string) ([]domain.Run, error) {
 	m.commandMu.Lock()
@@ -519,7 +538,7 @@ func (m *Manager) StopCommand(ctx context.Context, id string) ([]domain.Run, err
 				return nil, e
 			}
 		}
-		r, e := m.startLifecycleAction(ctx, c, c.StopCommand, "stop", "")
+		r, e := m.startLifecycleAction(ctx, c, c.StopCommand, "stop", "", nil, nil)
 		if e != nil {
 			return nil, e
 		}
@@ -528,11 +547,19 @@ func (m *Manager) StopCommand(ctx context.Context, id string) ([]domain.Run, err
 	return runs, nil
 }
 func (m *Manager) RestartCommand(ctx context.Context, id string) (*domain.Run, error) {
+	return m.RestartCommandWithParameters(ctx, id, nil)
+}
+
+func (m *Manager) RestartCommandWithParameters(ctx context.Context, id string, values map[string]string) (*domain.Run, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 	c, err := m.store.Command(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	transientEnv, stdin, err := domain.ResolveCommandParameters(c.Parameters, values)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", domain.ErrInvalidCommandParameters, err)
 	}
 	runs, err := m.store.ActiveRunsForCommand(ctx, id)
 	if err != nil {
@@ -547,9 +574,9 @@ func (m *Manager) RestartCommand(ctx context.Context, id string) (*domain.Run, e
 				return nil, err
 			}
 		}
-		return m.startLifecycleAction(ctx, c, restartCommand(c), "restart", "")
+		return m.startLifecycleAction(ctx, c, restartCommand(c), "restart", "", transientEnv, stdin)
 	}
-	return m.startCommandAfterStopLocked(ctx, id)
+	return m.startCommandAfterStopLocked(ctx, id, transientEnv, stdin)
 }
 
 func lifecycleMode(c domain.CommandDefinition) string {
@@ -566,7 +593,7 @@ func restartCommand(c domain.CommandDefinition) string {
 	return "(" + c.StopCommand + ") && (" + c.Command + ")"
 }
 
-func (m *Manager) startLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, stackRunID string) (*domain.Run, error) {
+func (m *Manager) startLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, stackRunID string, transientEnv map[string]string, stdin []byte) (*domain.Run, error) {
 	label := c.Name
 	kind := c.Kind
 	expected := c.ExpectedPorts
@@ -578,16 +605,16 @@ func (m *Manager) startLifecycleAction(ctx context.Context, c domain.CommandDefi
 		label += " · Restart"
 	}
 	if lifecycleMode(c) == "external" {
-		return m.startExternalLifecycleAction(ctx, c, command, action, label, kind, stackRunID)
+		return m.startExternalLifecycleAction(ctx, c, command, action, label, kind, stackRunID, transientEnv, stdin)
 	}
-	return m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, ExpectedPorts: expected, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action})
+	return m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, ExpectedPorts: expected, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action, TransientEnv: transientEnv, Stdin: stdin})
 }
 
-func (m *Manager) startExternalLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, label, kind, stackRunID string) (*domain.Run, error) {
+func (m *Manager) startExternalLifecycleAction(ctx context.Context, c domain.CommandDefinition, command, action, label, kind, stackRunID string, transientEnv map[string]string, stdin []byte) (*domain.Run, error) {
 	verifications := snapshotExternalPorts(c.ExpectedPorts, action)
 	// External lifecycle commands are allowed to encounter pre-existing ports;
 	// those ports are recorded as such rather than rejected or attributed.
-	r, err := m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action})
+	r, err := m.Start(ctx, domain.StartSpec{Command: command, Cwd: c.Cwd, Label: label, Shell: c.Shell, Env: c.Env, Kind: kind, Source: "catalog", CommandDefinitionID: c.ID, StackRunID: stackRunID, ProjectID: c.ProjectID, LifecycleAction: action, TransientEnv: transientEnv, Stdin: stdin})
 	if r == nil {
 		return nil, err
 	}
@@ -747,7 +774,7 @@ func (m *Manager) waitCommandStopped(ctx context.Context, id string) error {
 	}
 	return errors.New("timed out waiting for command to stop")
 }
-func (m *Manager) startCommandAfterStopLocked(ctx context.Context, id string) (*domain.Run, error) {
+func (m *Manager) startCommandAfterStopLocked(ctx context.Context, id string, transientEnv map[string]string, stdin []byte) (*domain.Run, error) {
 	if err := m.waitCommandStopped(ctx, id); err != nil {
 		return nil, err
 	}
@@ -755,15 +782,28 @@ func (m *Manager) startCommandAfterStopLocked(ctx context.Context, id string) (*
 	if e != nil {
 		return nil, e
 	}
-	return m.startLifecycleAction(ctx, c, c.Command, "start", "")
+	return m.startLifecycleAction(ctx, c, c.Command, "start", "", transientEnv, stdin)
 }
 
 func (m *Manager) RestartStack(ctx context.Context, id string) ([]domain.Run, error) {
-	if _, err := m.StopStack(ctx, id); err != nil {
-		return nil, err
-	}
+	return m.RestartStackWithParameters(ctx, id, nil)
+}
+
+func (m *Manager) RestartStackWithParameters(ctx context.Context, id string, values map[string]map[string]string) ([]domain.Run, error) {
 	stack, err := m.store.Stack(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	for _, member := range stack.Members {
+		command, commandErr := m.store.Command(ctx, member.CommandID)
+		if commandErr != nil {
+			return nil, commandErr
+		}
+		if _, _, commandErr = domain.ResolveCommandParameters(command.Parameters, values[member.CommandID]); commandErr != nil {
+			return nil, fmt.Errorf("%w: stack member %s: %v", domain.ErrInvalidCommandParameters, member.CommandID, commandErr)
+		}
+	}
+	if _, err := m.StopStack(ctx, id); err != nil {
 		return nil, err
 	}
 	for _, member := range stack.Members {
@@ -771,11 +811,11 @@ func (m *Manager) RestartStack(ctx context.Context, id string) ([]domain.Run, er
 			return nil, err
 		}
 	}
-	return m.StartStack(ctx, id)
+	return m.StartStackMembersWithParameters(ctx, id, nil, values)
 }
 
 func (m *Manager) StartStack(ctx context.Context, id string) ([]domain.Run, error) {
-	return m.StartStackMembers(ctx, id, nil)
+	return m.StartStackMembersWithParameters(ctx, id, nil, nil)
 }
 
 // StartStackMembers starts the selected subset and its transitive dependencies.
@@ -783,6 +823,10 @@ func (m *Manager) StartStack(ctx context.Context, id string) ([]domain.Run, erro
 // sequential stack starts one member at a time. A member only unlocks its
 // dependents after its configured spawn, ready, or exit condition succeeds.
 func (m *Manager) StartStackMembers(ctx context.Context, id string, commandIDs []string) ([]domain.Run, error) {
+	return m.StartStackMembersWithParameters(ctx, id, commandIDs, nil)
+}
+
+func (m *Manager) StartStackMembersWithParameters(ctx context.Context, id string, commandIDs []string, values map[string]map[string]string) ([]domain.Run, error) {
 	s, err := m.store.Stack(ctx, id)
 	if err != nil {
 		return nil, err
@@ -790,6 +834,33 @@ func (m *Manager) StartStackMembers(ctx context.Context, id string, commandIDs [
 	members, err := stackMembersForStart(s, commandIDs)
 	if err != nil {
 		return nil, err
+	}
+	// Preflight every selected member so a missing/invalid value cannot leave a
+	// stack partially started before the error is discovered.
+	for _, member := range members {
+		command, commandErr := m.store.Command(ctx, member.CommandID)
+		if commandErr != nil {
+			return nil, commandErr
+		}
+		active, activeErr := m.store.ActiveRunsForCommand(ctx, member.CommandID)
+		if activeErr != nil {
+			return nil, activeErr
+		}
+		if len(active) > 0 && command.ConcurrencyPolicy != "replace" && command.ConcurrencyPolicy != "allow" {
+			continue
+		}
+		if lifecycleMode(command) == "external" && command.ConcurrencyPolicy != "replace" && command.ConcurrencyPolicy != "allow" {
+			started, _, startedErr := m.externalStarted(ctx, command.ID)
+			if startedErr != nil {
+				return nil, startedErr
+			}
+			if started {
+				continue
+			}
+		}
+		if _, _, commandErr = domain.ResolveCommandParameters(command.Parameters, values[member.CommandID]); commandErr != nil {
+			return nil, fmt.Errorf("%w: stack member %s: %v", domain.ErrInvalidCommandParameters, member.CommandID, commandErr)
+		}
 	}
 	strategy := s.StartStrategy
 	if strategy == "" {
@@ -848,7 +919,7 @@ func (m *Manager) StartStackMembers(ctx context.Context, id string, commandIDs [
 		}
 		results := make([]result, 0, len(eligible))
 		for _, member := range eligible {
-			r, startErr := m.StartCommand(ctx, member.CommandID, stackRunID)
+			r, startErr := m.StartCommandWithParameters(ctx, member.CommandID, stackRunID, values[member.CommandID])
 			if r != nil {
 				out = append(out, *r)
 			}

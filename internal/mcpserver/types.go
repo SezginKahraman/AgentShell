@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"fmt"
 	"strings"
+
+	"github.com/agentshell/agentshell/internal/domain"
 )
 
 type EmptyInput struct{}
@@ -23,6 +25,47 @@ type ExpectedPort struct {
 	Name     string `json:"name,omitempty" jsonschema:"Human-readable purpose such as HTTP API or Metrics"`
 	Protocol string `json:"protocol,omitempty" jsonschema:"Transport protocol: tcp or udp; defaults to tcp"`
 	Service  string `json:"service,omitempty" jsonschema:"Application protocol hint such as http, https, postgres, or metrics"`
+}
+
+// CommandParameter is a durable input definition, never an input value. Secret
+// values belong only in start_command/restart_command/start_stack calls.
+type CommandParameter struct {
+	Key           string   `json:"key" jsonschema:"Stable lowercase key such as unseal_key"`
+	Label         string   `json:"label" jsonschema:"Human-readable field label shown by the dashboard"`
+	Description   string   `json:"description,omitempty" jsonschema:"Explain why the value is needed without including the value"`
+	Type          string   `json:"type" jsonschema:"Input type: text, secret, number, boolean, or choice"`
+	Required      bool     `json:"required,omitempty" jsonschema:"Require a value before the launcher can start"`
+	Default       string   `json:"default,omitempty" jsonschema:"Optional non-secret default; forbidden when type is secret"`
+	Placeholder   string   `json:"placeholder,omitempty" jsonschema:"Non-sensitive UI hint"`
+	Options       []string `json:"options,omitempty" jsonschema:"Allowed values when type is choice"`
+	Binding       string   `json:"binding" jsonschema:"Safe delivery mechanism: stdin or env"`
+	EnvVar        string   `json:"env_var,omitempty" jsonschema:"Environment variable name required when binding is env"`
+	AppendNewline bool     `json:"append_newline,omitempty" jsonschema:"Append a newline to stdin; use only when the target program requires it"`
+}
+
+func validateParameters(parameters []CommandParameter) error {
+	definitions := make([]domain.CommandParameter, len(parameters))
+	for i, parameter := range parameters {
+		definitions[i] = domain.CommandParameter{
+			Key: parameter.Key, Label: parameter.Label, Description: parameter.Description,
+			Type: parameter.Type, Required: parameter.Required, Default: parameter.Default,
+			Placeholder: parameter.Placeholder, Options: parameter.Options, Binding: parameter.Binding,
+			EnvVar: parameter.EnvVar, AppendNewline: parameter.AppendNewline,
+		}
+	}
+	return domain.ValidateCommandParameters(definitions)
+}
+
+func validateParameterValues(field string, values map[string]string) error {
+	for key, value := range values {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("%s contains an empty key", field)
+		}
+		if len(key) > 64 || len(value) > 64<<10 {
+			return fmt.Errorf("%s contains an oversized key or value", field)
+		}
+	}
+	return nil
 }
 
 type RunInput struct {
@@ -274,23 +317,24 @@ type ApplyCatalogCollection struct {
 }
 
 type ApplyCatalogCommand struct {
-	Key               string            `json:"key,omitempty" jsonschema:"Request-local key referenced by stack command_keys"`
-	Name              string            `json:"name" jsonschema:"Saved command name"`
-	Description       string            `json:"description,omitempty" jsonschema:"Human-readable command purpose"`
-	Command           string            `json:"command" jsonschema:"Shell command saved for later execution"`
-	CWD               string            `json:"cwd" jsonschema:"Absolute working directory"`
-	Shell             string            `json:"shell,omitempty" jsonschema:"Optional shell executable"`
-	Kind              string            `json:"kind" jsonschema:"Command kind: service or task"`
-	CollectionKey     string            `json:"collection_key,omitempty" jsonschema:"Request-local owning collection key"`
-	Env               map[string]string `json:"env,omitempty" jsonschema:"Environment variable overrides"`
-	ExpectedPorts     []ExpectedPort    `json:"expected_ports,omitempty" jsonschema:"Expected ports"`
-	Tags              []string          `json:"tags,omitempty" jsonschema:"Search and grouping tags"`
-	ConcurrencyPolicy string            `json:"concurrency_policy,omitempty" jsonschema:"forbid, replace, or allow"`
-	Favorite          bool              `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
-	DiscoverySource   string            `json:"discovery_source,omitempty" jsonschema:"Inspection evidence source such as package.json or Makefile"`
-	LifecycleMode     string            `json:"lifecycle_mode,omitempty" jsonschema:"Lifecycle ownership: managed for foreground processes or external for detached resources"`
-	StopCommand       string            `json:"stop_command,omitempty" jsonschema:"Required external stop action; keep it on the same launcher instead of creating a separate stop launcher"`
-	RestartCommand    string            `json:"restart_command,omitempty" jsonschema:"Optional external restart action; defaults to stop then start"`
+	Key               string             `json:"key,omitempty" jsonschema:"Request-local key referenced by stack command_keys"`
+	Name              string             `json:"name" jsonschema:"Saved command name"`
+	Description       string             `json:"description,omitempty" jsonschema:"Human-readable command purpose"`
+	Command           string             `json:"command" jsonschema:"Shell command saved for later execution"`
+	CWD               string             `json:"cwd" jsonschema:"Absolute working directory"`
+	Shell             string             `json:"shell,omitempty" jsonschema:"Optional shell executable"`
+	Kind              string             `json:"kind" jsonschema:"Command kind: service or task"`
+	CollectionKey     string             `json:"collection_key,omitempty" jsonschema:"Request-local owning collection key"`
+	Env               map[string]string  `json:"env,omitempty" jsonschema:"Environment variable overrides"`
+	ExpectedPorts     []ExpectedPort     `json:"expected_ports,omitempty" jsonschema:"Expected ports"`
+	Tags              []string           `json:"tags,omitempty" jsonschema:"Search and grouping tags"`
+	ConcurrencyPolicy string             `json:"concurrency_policy,omitempty" jsonschema:"forbid, replace, or allow"`
+	Favorite          bool               `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
+	DiscoverySource   string             `json:"discovery_source,omitempty" jsonschema:"Inspection evidence source such as package.json or Makefile"`
+	LifecycleMode     string             `json:"lifecycle_mode,omitempty" jsonschema:"Lifecycle ownership: managed for foreground processes or external for detached resources"`
+	StopCommand       string             `json:"stop_command,omitempty" jsonschema:"Required external stop action; keep it on the same launcher instead of creating a separate stop launcher"`
+	RestartCommand    string             `json:"restart_command,omitempty" jsonschema:"Optional external restart action; defaults to stop then start"`
+	Parameters        []CommandParameter `json:"parameters,omitempty" jsonschema:"Runtime input definitions only; never put real secret values or secret defaults here"`
 }
 
 type ApplyCatalogStack struct {
@@ -518,6 +562,9 @@ func validateApplyCommand(prefix string, in ApplyCatalogCommand, collectionKeys 
 	if err := validateLifecycle(prefix, in.Kind, in.LifecycleMode, in.StopCommand, in.RestartCommand); err != nil {
 		return err
 	}
+	if err := validateParameters(in.Parameters); err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
 	if in.CollectionKey != "" {
 		if _, ok := collectionKeys[in.CollectionKey]; !ok {
 			return fmt.Errorf("%s.collection_key references unknown key %q", prefix, in.CollectionKey)
@@ -596,21 +643,22 @@ func (in ListCommandsInput) validate() error {
 }
 
 type SaveCommandInput struct {
-	Name              string            `json:"name" jsonschema:"Unique human-readable launcher name"`
-	Command           string            `json:"command" jsonschema:"Shell command saved for later AgentShell execution"`
-	CWD               string            `json:"cwd" jsonschema:"Absolute working directory"`
-	Shell             string            `json:"shell,omitempty" jsonschema:"Optional shell executable; use the daemon default when omitted"`
-	Kind              string            `json:"kind" jsonschema:"Command kind: service for long-running processes or task for finite jobs"`
-	ProjectID         string            `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
-	CollectionID      string            `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
-	Env               map[string]string `json:"env,omitempty" jsonschema:"Environment variable overrides"`
-	ExpectedPorts     []ExpectedPort    `json:"expected_ports,omitempty" jsonschema:"Ports expected when the saved command runs"`
-	Tags              []string          `json:"tags,omitempty" jsonschema:"Search and grouping tags"`
-	ConcurrencyPolicy string            `json:"concurrency_policy,omitempty" jsonschema:"Behavior when already running: forbid, replace, or allow; services should normally use forbid"`
-	Favorite          bool              `json:"favorite,omitempty" jsonschema:"Show this launcher prominently in the dashboard"`
-	LifecycleMode     string            `json:"lifecycle_mode,omitempty" jsonschema:"managed for a foreground process; external for detached resources such as docker start or compose up -d"`
-	StopCommand       string            `json:"stop_command,omitempty" jsonschema:"Required stop action for external lifecycle; do not create a separate stop launcher"`
-	RestartCommand    string            `json:"restart_command,omitempty" jsonschema:"Optional restart action for external lifecycle; omitted means stop then start"`
+	Name              string             `json:"name" jsonschema:"Unique human-readable launcher name"`
+	Command           string             `json:"command" jsonschema:"Shell command saved for later AgentShell execution"`
+	CWD               string             `json:"cwd" jsonschema:"Absolute working directory"`
+	Shell             string             `json:"shell,omitempty" jsonschema:"Optional shell executable; use the daemon default when omitted"`
+	Kind              string             `json:"kind" jsonschema:"Command kind: service for long-running processes or task for finite jobs"`
+	ProjectID         string             `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
+	CollectionID      string             `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
+	Env               map[string]string  `json:"env,omitempty" jsonschema:"Environment variable overrides"`
+	ExpectedPorts     []ExpectedPort     `json:"expected_ports,omitempty" jsonschema:"Ports expected when the saved command runs"`
+	Tags              []string           `json:"tags,omitempty" jsonschema:"Search and grouping tags"`
+	ConcurrencyPolicy string             `json:"concurrency_policy,omitempty" jsonschema:"Behavior when already running: forbid, replace, or allow; services should normally use forbid"`
+	Favorite          bool               `json:"favorite,omitempty" jsonschema:"Show this launcher prominently in the dashboard"`
+	LifecycleMode     string             `json:"lifecycle_mode,omitempty" jsonschema:"managed for a foreground process; external for detached resources such as docker start or compose up -d"`
+	StopCommand       string             `json:"stop_command,omitempty" jsonschema:"Required stop action for external lifecycle; do not create a separate stop launcher"`
+	RestartCommand    string             `json:"restart_command,omitempty" jsonschema:"Optional restart action for external lifecycle; omitted means stop then start"`
+	Parameters        []CommandParameter `json:"parameters,omitempty" jsonschema:"Runtime input definitions. For secrets use type=secret and binding=stdin; never include a secret value or default"`
 }
 
 func (in SaveCommandInput) validate() error {
@@ -642,26 +690,30 @@ func (in SaveCommandInput) validate() error {
 	if err := validateLifecycle("command", in.Kind, in.LifecycleMode, in.StopCommand, in.RestartCommand); err != nil {
 		return err
 	}
-	return validatePorts(in.ExpectedPorts)
+	if err := validatePorts(in.ExpectedPorts); err != nil {
+		return err
+	}
+	return validateParameters(in.Parameters)
 }
 
 type UpdateCommandInput struct {
-	ID                string             `json:"id" jsonschema:"Saved command identifier"`
-	Name              *string            `json:"name,omitempty" jsonschema:"New human-readable launcher name"`
-	Command           *string            `json:"command,omitempty" jsonschema:"New shell command"`
-	CWD               *string            `json:"cwd,omitempty" jsonschema:"New absolute working directory"`
-	Shell             *string            `json:"shell,omitempty" jsonschema:"New shell executable"`
-	Kind              *string            `json:"kind,omitempty" jsonschema:"New kind: service or task"`
-	ProjectID         *string            `json:"project_id,omitempty" jsonschema:"New project identifier"`
-	CollectionID      *string            `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the launcher to the project root"`
-	Env               *map[string]string `json:"env,omitempty" jsonschema:"Replacement environment overrides"`
-	ExpectedPorts     *[]ExpectedPort    `json:"expected_ports,omitempty" jsonschema:"Replacement expected-port list"`
-	Tags              *[]string          `json:"tags,omitempty" jsonschema:"Replacement tag list"`
-	ConcurrencyPolicy *string            `json:"concurrency_policy,omitempty" jsonschema:"New concurrency policy: forbid, replace, or allow"`
-	Favorite          *bool              `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
-	LifecycleMode     *string            `json:"lifecycle_mode,omitempty" jsonschema:"New lifecycle ownership: managed or external"`
-	StopCommand       *string            `json:"stop_command,omitempty" jsonschema:"New external stop action"`
-	RestartCommand    *string            `json:"restart_command,omitempty" jsonschema:"New external restart action"`
+	ID                string              `json:"id" jsonschema:"Saved command identifier"`
+	Name              *string             `json:"name,omitempty" jsonschema:"New human-readable launcher name"`
+	Command           *string             `json:"command,omitempty" jsonschema:"New shell command"`
+	CWD               *string             `json:"cwd,omitempty" jsonschema:"New absolute working directory"`
+	Shell             *string             `json:"shell,omitempty" jsonschema:"New shell executable"`
+	Kind              *string             `json:"kind,omitempty" jsonschema:"New kind: service or task"`
+	ProjectID         *string             `json:"project_id,omitempty" jsonschema:"New project identifier"`
+	CollectionID      *string             `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the launcher to the project root"`
+	Env               *map[string]string  `json:"env,omitempty" jsonschema:"Replacement environment overrides"`
+	ExpectedPorts     *[]ExpectedPort     `json:"expected_ports,omitempty" jsonschema:"Replacement expected-port list"`
+	Tags              *[]string           `json:"tags,omitempty" jsonschema:"Replacement tag list"`
+	ConcurrencyPolicy *string             `json:"concurrency_policy,omitempty" jsonschema:"New concurrency policy: forbid, replace, or allow"`
+	Favorite          *bool               `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
+	LifecycleMode     *string             `json:"lifecycle_mode,omitempty" jsonschema:"New lifecycle ownership: managed or external"`
+	StopCommand       *string             `json:"stop_command,omitempty" jsonschema:"New external stop action"`
+	RestartCommand    *string             `json:"restart_command,omitempty" jsonschema:"New external restart action"`
+	Parameters        *[]CommandParameter `json:"parameters,omitempty" jsonschema:"Replacement runtime input definitions; an empty array removes prompts"`
 }
 
 func (in UpdateCommandInput) validate() error {
@@ -704,7 +756,12 @@ func (in UpdateCommandInput) validate() error {
 		}
 	}
 	if in.ExpectedPorts != nil {
-		return validatePorts(*in.ExpectedPorts)
+		if err := validatePorts(*in.ExpectedPorts); err != nil {
+			return err
+		}
+	}
+	if in.Parameters != nil {
+		return validateParameters(*in.Parameters)
 	}
 	return nil
 }
@@ -736,10 +793,11 @@ type EntityIDInput struct {
 func (in EntityIDInput) validate() error { return identifier("id", in.ID) }
 
 type StartCommandInput struct {
-	ID            string `json:"id" jsonschema:"Saved command identifier"`
-	WaitFor       string `json:"wait_for,omitempty" jsonschema:"MCP response policy: spawn, exit, or ready"`
-	WaitTimeoutMS *int   `json:"wait_timeout_ms,omitempty" jsonschema:"Maximum time this MCP call waits; does not stop the command"`
-	RunTimeoutMS  *int   `json:"run_timeout_ms,omitempty" jsonschema:"Maximum lifetime of the new command run"`
+	ID            string            `json:"id" jsonschema:"Saved command identifier"`
+	WaitFor       string            `json:"wait_for,omitempty" jsonschema:"MCP response policy: spawn, exit, or ready"`
+	WaitTimeoutMS *int              `json:"wait_timeout_ms,omitempty" jsonschema:"Maximum time this MCP call waits; does not stop the command"`
+	RunTimeoutMS  *int              `json:"run_timeout_ms,omitempty" jsonschema:"Maximum lifetime of the new command run"`
+	Parameters    map[string]string `json:"parameters,omitempty" jsonschema:"Transient runtime values keyed by the saved parameter key. Never save, repeat, log, or guess secret values"`
 }
 
 func (in StartCommandInput) validate() error {
@@ -752,7 +810,10 @@ func (in StartCommandInput) validate() error {
 	if err := nonNegative("wait_timeout_ms", in.WaitTimeoutMS); err != nil {
 		return err
 	}
-	return nonNegative("run_timeout_ms", in.RunTimeoutMS)
+	if err := nonNegative("run_timeout_ms", in.RunTimeoutMS); err != nil {
+		return err
+	}
+	return validateParameterValues("parameters", in.Parameters)
 }
 
 type StopCommandInput struct {
@@ -764,9 +825,10 @@ func (in StopCommandInput) validate() error {
 }
 
 type RestartCommandInput struct {
-	ID            string `json:"id" jsonschema:"Saved command identifier"`
-	WaitFor       string `json:"wait_for,omitempty" jsonschema:"MCP response policy for the replacement run: spawn, exit, or ready"`
-	WaitTimeoutMS *int   `json:"wait_timeout_ms,omitempty" jsonschema:"Maximum time this MCP call waits; it does not limit replacement run lifetime"`
+	ID            string            `json:"id" jsonschema:"Saved command identifier"`
+	WaitFor       string            `json:"wait_for,omitempty" jsonschema:"MCP response policy for the replacement run: spawn, exit, or ready"`
+	WaitTimeoutMS *int              `json:"wait_timeout_ms,omitempty" jsonschema:"Maximum time this MCP call waits; it does not limit replacement run lifetime"`
+	Parameters    map[string]string `json:"parameters,omitempty" jsonschema:"Transient runtime values required by the saved launcher"`
 }
 
 func (in RestartCommandInput) validate() error {
@@ -776,7 +838,10 @@ func (in RestartCommandInput) validate() error {
 	if err := oneOf("wait_for", in.WaitFor, "", "spawn", "exit", "ready"); err != nil {
 		return err
 	}
-	return nonNegative("wait_timeout_ms", in.WaitTimeoutMS)
+	if err := nonNegative("wait_timeout_ms", in.WaitTimeoutMS); err != nil {
+		return err
+	}
+	return validateParameterValues("parameters", in.Parameters)
 }
 
 type StackMemberInput struct {
@@ -956,8 +1021,9 @@ func validateStackMembers(field string, members []StackMemberInput) error {
 }
 
 type StartStackInput struct {
-	ID         string   `json:"id" jsonschema:"Stack identifier"`
-	CommandIDs []string `json:"command_ids,omitempty" jsonschema:"Optional non-empty subset of this stack's command identifiers to start; omitted starts all non-running members"`
+	ID         string                       `json:"id" jsonschema:"Stack identifier"`
+	CommandIDs []string                     `json:"command_ids,omitempty" jsonschema:"Optional non-empty subset of this stack's command identifiers to start; omitted starts all non-running members"`
+	Parameters map[string]map[string]string `json:"parameters,omitempty" jsonschema:"Transient values by command ID and then saved parameter key; include selected dependencies too"`
 }
 
 func (in StartStackInput) validate() error {
@@ -965,7 +1031,17 @@ func (in StartStackInput) validate() error {
 		return err
 	}
 	if len(in.CommandIDs) > 0 {
-		return uniqueNonEmpty("command_ids", in.CommandIDs)
+		if err := uniqueNonEmpty("command_ids", in.CommandIDs); err != nil {
+			return err
+		}
+	}
+	for commandID, values := range in.Parameters {
+		if err := identifier("parameters command id", commandID); err != nil {
+			return err
+		}
+		if err := validateParameterValues("parameters."+commandID, values); err != nil {
+			return err
+		}
 	}
 	return nil
 }

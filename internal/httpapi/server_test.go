@@ -87,6 +87,49 @@ func TestCommandListIncludesRuntimeState(t *testing.T) {
 	request(t, client, http.MethodPost, srv.URL+"/api/runs/"+run["id"].(string)+"/stop", map[string]any{}, &map[string]any{})
 }
 
+func TestParameterizedCommandRequiresAndConsumesTransientStdin(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	cwd := t.TempDir()
+	var command map[string]any
+	body := map[string]any{
+		"name": "Vault unseal", "command": "value=$(cat); printf '%s' \"$value\" > received",
+		"cwd": cwd, "kind": "task", "concurrency_policy": "allow",
+		"parameters": []map[string]any{{"key": "unseal_key", "label": "Vault unseal key", "type": "secret", "required": true, "binding": "stdin"}},
+	}
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/commands", body, &command); status != http.StatusCreated {
+		t.Fatalf("create status=%d body=%v", status, command)
+	}
+	id := command["id"].(string)
+	var failure map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/commands/"+id+"/start", map[string]any{}, &failure); status != http.StatusBadRequest {
+		t.Fatalf("missing parameter status=%d body=%v", status, failure)
+	}
+	const secret = "one-shot-api-secret"
+	var run map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/commands/"+id+"/start", map[string]any{"parameters": map[string]string{"unseal_key": secret}}, &run); status != http.StatusCreated {
+		t.Fatalf("start status=%d body=%v", status, run)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		value, err := os.ReadFile(filepath.Join(cwd, "received"))
+		if err == nil {
+			if string(value) != secret {
+				t.Fatalf("received=%q", value)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	encoded, _ := json.Marshal(run)
+	if bytes.Contains(encoded, []byte(secret)) {
+		t.Fatal("start response leaked transient secret")
+	}
+}
+
 func TestCatalogDeletionProtectsRunningAndReferencedLaunchers(t *testing.T) {
 	srv, _ := testServer(t)
 	client := srv.Client()

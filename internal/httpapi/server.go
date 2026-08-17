@@ -787,7 +787,7 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request, parts []string
 			if !decodeOptional(w, r, &opts) {
 				return
 			}
-			v, e := s.manager.StartCommand(ctx, id, "")
+			v, e := s.manager.StartCommandWithParameters(ctx, id, "", opts.Parameters)
 			if e == nil && v != nil {
 				if opts.RunTimeoutMS != nil {
 					s.manager.ScheduleTimeout(v.ID, durationMS(opts.RunTimeoutMS))
@@ -804,7 +804,14 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request, parts []string
 			if !s.accepting(w) {
 				return
 			}
-			v, e := s.manager.RestartCommand(ctx, id)
+			var opts actionOptions
+			if !decodeOptional(w, r, &opts) {
+				return
+			}
+			v, e := s.manager.RestartCommandWithParameters(ctx, id, opts.Parameters)
+			if e == nil && v != nil && opts.WaitFor != "" && opts.WaitFor != "spawn" {
+				v, e = s.manager.Wait(ctx, v.ID, opts.WaitFor, durationMS(opts.WaitTimeoutMS))
+			}
 			respondAction(w, v, e)
 		default:
 			writeError(w, 404, "not found")
@@ -956,7 +963,7 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 				writeError(w, http.StatusBadRequest, "command_ids must not be empty when provided")
 				return
 			}
-			v, e := s.manager.StartStackMembers(ctx, id, sliceValue(input.CommandIDs))
+			v, e := s.manager.StartStackMembersWithParameters(ctx, id, sliceValue(input.CommandIDs), input.Parameters)
 			respondAction(w, v, e)
 		case "stop":
 			v, e := s.manager.StopStack(ctx, id)
@@ -965,7 +972,11 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 			if !s.accepting(w) {
 				return
 			}
-			v, e := s.manager.RestartStack(ctx, id)
+			var input stackStartInput
+			if !decodeOptional(w, r, &input) {
+				return
+			}
+			v, e := s.manager.RestartStackWithParameters(ctx, id, input.Parameters)
 			respondAction(w, v, e)
 		default:
 			writeError(w, 404, "not found")
@@ -1372,14 +1383,16 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 type actionOptions struct {
-	WaitFor        string `json:"wait_for,omitempty"`
-	WaitTimeoutMS  *int   `json:"wait_timeout_ms,omitempty"`
-	RunTimeoutMS   *int   `json:"run_timeout_ms,omitempty"`
-	GraceTimeoutMS *int   `json:"grace_timeout_ms,omitempty"`
+	WaitFor        string            `json:"wait_for,omitempty"`
+	WaitTimeoutMS  *int              `json:"wait_timeout_ms,omitempty"`
+	RunTimeoutMS   *int              `json:"run_timeout_ms,omitempty"`
+	GraceTimeoutMS *int              `json:"grace_timeout_ms,omitempty"`
+	Parameters     map[string]string `json:"parameters,omitempty"`
 }
 
 type stackStartInput struct {
-	CommandIDs *[]string `json:"command_ids,omitempty"`
+	CommandIDs *[]string                    `json:"command_ids,omitempty"`
+	Parameters map[string]map[string]string `json:"parameters,omitempty"`
 }
 
 func sliceValue(value *[]string) []string {
@@ -1403,26 +1416,27 @@ func durationMS(v *int) time.Duration {
 }
 
 type commandPatch struct {
-	Name              *string                `json:"name,omitempty"`
-	Command           *string                `json:"command,omitempty"`
-	Cwd               *string                `json:"cwd,omitempty"`
-	Shell             *string                `json:"shell,omitempty"`
-	Kind              *string                `json:"kind,omitempty"`
-	ProjectID         *string                `json:"project_id,omitempty"`
-	CollectionID      *string                `json:"collection_id,omitempty"`
-	Description       *string                `json:"description,omitempty"`
-	CreatedBy         *string                `json:"created_by,omitempty"`
-	CreatedFromRunID  *string                `json:"created_from_run_id,omitempty"`
-	DiscoverySource   *string                `json:"discovery_source,omitempty"`
-	StableKey         *string                `json:"stable_key,omitempty"`
-	LifecycleMode     *string                `json:"lifecycle_mode,omitempty"`
-	StopCommand       *string                `json:"stop_command,omitempty"`
-	RestartCommand    *string                `json:"restart_command,omitempty"`
-	Env               *map[string]string     `json:"env,omitempty"`
-	ExpectedPorts     *[]domain.ExpectedPort `json:"expected_ports,omitempty"`
-	Tags              *[]string              `json:"tags,omitempty"`
-	ConcurrencyPolicy *string                `json:"concurrency_policy,omitempty"`
-	Favorite          *bool                  `json:"favorite,omitempty"`
+	Name              *string                    `json:"name,omitempty"`
+	Command           *string                    `json:"command,omitempty"`
+	Cwd               *string                    `json:"cwd,omitempty"`
+	Shell             *string                    `json:"shell,omitempty"`
+	Kind              *string                    `json:"kind,omitempty"`
+	ProjectID         *string                    `json:"project_id,omitempty"`
+	CollectionID      *string                    `json:"collection_id,omitempty"`
+	Description       *string                    `json:"description,omitempty"`
+	CreatedBy         *string                    `json:"created_by,omitempty"`
+	CreatedFromRunID  *string                    `json:"created_from_run_id,omitempty"`
+	DiscoverySource   *string                    `json:"discovery_source,omitempty"`
+	StableKey         *string                    `json:"stable_key,omitempty"`
+	LifecycleMode     *string                    `json:"lifecycle_mode,omitempty"`
+	StopCommand       *string                    `json:"stop_command,omitempty"`
+	RestartCommand    *string                    `json:"restart_command,omitempty"`
+	Parameters        *[]domain.CommandParameter `json:"parameters,omitempty"`
+	Env               *map[string]string         `json:"env,omitempty"`
+	ExpectedPorts     *[]domain.ExpectedPort     `json:"expected_ports,omitempty"`
+	Tags              *[]string                  `json:"tags,omitempty"`
+	ConcurrencyPolicy *string                    `json:"concurrency_policy,omitempty"`
+	Favorite          *bool                      `json:"favorite,omitempty"`
 }
 
 func (p commandPatch) apply(v *domain.CommandDefinition) {
@@ -1470,6 +1484,9 @@ func (p commandPatch) apply(v *domain.CommandDefinition) {
 	}
 	if p.RestartCommand != nil {
 		v.RestartCommand = *p.RestartCommand
+	}
+	if p.Parameters != nil {
+		v.Parameters = *p.Parameters
 	}
 	if p.Env != nil {
 		v.Env = *p.Env
@@ -1575,6 +1592,8 @@ func fail(w http.ResponseWriter, e error) {
 		status = 404
 	} else if errors.Is(e, store.ErrConflict) {
 		status = http.StatusConflict
+	} else if errors.Is(e, domain.ErrInvalidCommandParameters) {
+		status = http.StatusBadRequest
 	}
 	writeError(w, status, e.Error())
 }
@@ -1676,6 +1695,9 @@ func validateCommand(v *domain.CommandDefinition) error {
 		if p.Port < 1 || p.Port > 65535 {
 			return errors.New("invalid expected port")
 		}
+	}
+	if err := domain.ValidateCommandParameters(v.Parameters); err != nil {
+		return err
 	}
 	return nil
 }

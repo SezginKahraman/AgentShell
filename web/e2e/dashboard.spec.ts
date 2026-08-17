@@ -94,6 +94,11 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
 
 	await page.getByRole('button', { name: 'Tasks' }).click()
 	await page.getByTestId('command-card-cmd-build').click()
+	await page.getByTestId('command-tab-logs').click()
+	await expect(page.getByTestId('command-log-panel').locator('.log-line-error')).toContainText('ERROR build failed')
+	await page.getByTestId('command-detail-drawer').getByTestId('log-filter-errors').click()
+	await expect(page.getByTestId('command-log-panel')).toContainText('ERROR build failed')
+	await expect(page.getByTestId('command-log-panel')).not.toContainText('connected to database')
 	await page.getByTestId('delete-command-cmd-build').click()
 	await expect(page.getByTestId('delete-saved-dialog')).toContainText('Previous Runs, logs, and History entries are retained')
 	await page.getByTestId('confirm-delete-saved').click()
@@ -268,4 +273,29 @@ test('a stack can be created in the UI and opens directly in orchestration', asy
   await page.getByRole('button', { name: 'Save orchestration' }).click()
   await expect(editor).toHaveCount(0)
   await expect(page.getByTestId('stack-detail-drawer')).toContainText('after Backend API')
+})
+
+test('parameterized launcher prompts for one-shot secret input', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/agent_shell_logo.png')
+  expect((await page.request.get('/agent_shell_logo.png')).status()).toBe(200)
+
+  await page.getByRole('button', { name: 'Tasks', exact: true }).click()
+  const card = page.getByTestId('command-card-cmd-vault-unseal')
+  await card.getByTestId('start-command-cmd-vault-unseal').click()
+
+  const dialog = page.getByTestId('parameter-dialog')
+  await expect(dialog).toContainText('Run Vault unseal')
+  const secret = dialog.getByLabel('Vault unseal key')
+  await expect(secret).toHaveAttribute('type', 'password')
+  await expect(secret).toHaveValue('')
+  await secret.fill('one-shot-browser-secret')
+  await dialog.getByTestId('submit-parameters').click()
+
+  await expect(dialog).toHaveCount(0)
+  await expect(card).toContainText('running')
+  await expect(page.getByText('one-shot-browser-secret')).toHaveCount(0)
+
+  await card.getByTestId('restart-command-cmd-vault-unseal').click()
+  await expect(page.getByTestId('parameter-dialog').getByLabel('Vault unseal key')).toHaveValue('')
 })

@@ -21,6 +21,7 @@ func TestRevision3InputValidation(t *testing.T) {
 		{"external service without stop", (SaveCommandInput{Name: "Infra", Command: "docker compose up -d", CWD: "/tmp/p", Kind: "service", LifecycleMode: "external"}).validate(), "stop_command"},
 		{"external task", (SaveCommandInput{Name: "Task", Command: "true", StopCommand: "true", CWD: "/tmp/p", Kind: "task", LifecycleMode: "external"}).validate(), "kind=service"},
 		{"invalid command collection", (SaveCommandInput{Name: "Task", Command: "true", CWD: "/tmp/p", Kind: "task", CollectionID: "bad id"}).validate(), "collection_id"},
+		{"secret parameter default", (SaveCommandInput{Name: "Vault", Command: "vault operator unseal -", CWD: "/tmp/p", Kind: "task", Parameters: []CommandParameter{{Key: "unseal_key", Label: "Vault key", Type: "secret", Required: true, Default: "do-not-save", Binding: "stdin"}}}).validate(), "forbidden"},
 		{"duplicate stack subset", (StartStackInput{ID: "stack-1", CommandIDs: []string{"command-1", "command-1"}}).validate(), "duplicate"},
 		{"cyclic stack dependencies", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "db", DependsOn: []string{"api"}}, {CommandID: "api", DependsOn: []string{"db"}}}}).validate(), "cycle"},
 		{"unknown stack dependency", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "api", DependsOn: []string{"db"}}}}).validate(), "unknown"},

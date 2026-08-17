@@ -427,3 +427,50 @@ func TestMergeEnvOverridesWithoutDuplicates(t *testing.T) {
 		t.Fatalf("count=%d", count)
 	}
 }
+
+func TestCommandParameterStdinIsTransientAndNotPersisted(t *testing.T) {
+	m, s := testManager(t, 200*time.Millisecond)
+	ctx := context.Background()
+	cwd := t.TempDir()
+	marker := filepath.Join(cwd, "received")
+	secret := "vault-test-secret-should-never-persist"
+	now := time.Now().UTC()
+	command := domain.CommandDefinition{
+		ID: "parameter-command", Name: "Parameterized task",
+		Command: "value=$(cat); printf '%s' \"$value\" > received", Cwd: cwd,
+		Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now,
+		Parameters: []domain.CommandParameter{{Key: "unseal_key", Label: "Vault key", Type: "secret", Required: true, Binding: "stdin"}},
+	}
+	if err := s.SaveCommand(ctx, &command); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.StartCommandWithParameters(ctx, command.ID, "", nil); err == nil {
+		t.Fatal("missing required parameter must fail before starting")
+	}
+	run, err := m.StartCommandWithParameters(ctx, command.ID, "", map[string]string{"unseal_key": secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitInactive(t, s, run.ID)
+	received, err := os.ReadFile(marker)
+	if err != nil || string(received) != secret {
+		t.Fatalf("received=%q err=%v", received, err)
+	}
+	if finished.Command != command.Command || len(finished.Env) != 0 {
+		t.Fatalf("transient value leaked into Run: command=%q env=%v", finished.Command, finished.Env)
+	}
+	stored, err := s.Command(ctx, command.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Parameters[0].Default != "" {
+		t.Fatal("secret value leaked into parameter schema")
+	}
+	logs, err := m.Log(ctx, run.ID, "combined", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs, secret) {
+		t.Fatal("secret value leaked into logs")
+	}
+}

@@ -30,23 +30,24 @@ type catalogCollectionInput struct {
 	SortOrder int    `json:"sort_order,omitempty"`
 }
 type catalogCommandInput struct {
-	Key               string                `json:"key,omitempty"`
-	Name              string                `json:"name"`
-	Description       string                `json:"description,omitempty"`
-	Command           string                `json:"command"`
-	Cwd               string                `json:"cwd"`
-	Shell             string                `json:"shell,omitempty"`
-	Kind              string                `json:"kind"`
-	CollectionKey     string                `json:"collection_key,omitempty"`
-	Env               map[string]string     `json:"env,omitempty"`
-	ExpectedPorts     []domain.ExpectedPort `json:"expected_ports,omitempty"`
-	Tags              []string              `json:"tags,omitempty"`
-	ConcurrencyPolicy string                `json:"concurrency_policy,omitempty"`
-	Favorite          bool                  `json:"favorite,omitempty"`
-	DiscoverySource   string                `json:"discovery_source,omitempty"`
-	LifecycleMode     string                `json:"lifecycle_mode,omitempty"`
-	StopCommand       string                `json:"stop_command,omitempty"`
-	RestartCommand    string                `json:"restart_command,omitempty"`
+	Key               string                    `json:"key,omitempty"`
+	Name              string                    `json:"name"`
+	Description       string                    `json:"description,omitempty"`
+	Command           string                    `json:"command"`
+	Cwd               string                    `json:"cwd"`
+	Shell             string                    `json:"shell,omitempty"`
+	Kind              string                    `json:"kind"`
+	CollectionKey     string                    `json:"collection_key,omitempty"`
+	Env               map[string]string         `json:"env,omitempty"`
+	ExpectedPorts     []domain.ExpectedPort     `json:"expected_ports,omitempty"`
+	Tags              []string                  `json:"tags,omitempty"`
+	ConcurrencyPolicy string                    `json:"concurrency_policy,omitempty"`
+	Favorite          bool                      `json:"favorite,omitempty"`
+	DiscoverySource   string                    `json:"discovery_source,omitempty"`
+	LifecycleMode     string                    `json:"lifecycle_mode,omitempty"`
+	StopCommand       string                    `json:"stop_command,omitempty"`
+	RestartCommand    string                    `json:"restart_command,omitempty"`
+	Parameters        []domain.CommandParameter `json:"parameters,omitempty"`
 }
 type catalogStackInput struct {
 	Key           string                    `json:"key,omitempty"`
@@ -154,7 +155,7 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 		if !pathWithin(root, cwd) {
 			return out, errors.New("command cwd must be inside project.root_path")
 		}
-		c := domain.CommandDefinition{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), Command: strings.TrimSpace(v.Command), Cwd: cwd, Shell: strings.TrimSpace(v.Shell), Kind: strings.TrimSpace(v.Kind), ConcurrencyPolicy: strings.TrimSpace(v.ConcurrencyPolicy), Env: v.Env, ExpectedPorts: v.ExpectedPorts, Tags: v.Tags, Favorite: v.Favorite, DiscoverySource: strings.TrimSpace(v.DiscoverySource), LifecycleMode: strings.TrimSpace(v.LifecycleMode), StopCommand: strings.TrimSpace(v.StopCommand), RestartCommand: strings.TrimSpace(v.RestartCommand)}
+		c := domain.CommandDefinition{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), Command: strings.TrimSpace(v.Command), Cwd: cwd, Shell: strings.TrimSpace(v.Shell), Kind: strings.TrimSpace(v.Kind), ConcurrencyPolicy: strings.TrimSpace(v.ConcurrencyPolicy), Env: v.Env, ExpectedPorts: v.ExpectedPorts, Tags: v.Tags, Favorite: v.Favorite, DiscoverySource: strings.TrimSpace(v.DiscoverySource), LifecycleMode: strings.TrimSpace(v.LifecycleMode), StopCommand: strings.TrimSpace(v.StopCommand), RestartCommand: strings.TrimSpace(v.RestartCommand), Parameters: v.Parameters}
 		defaultsCommand(&c)
 		if err = validateCommand(&c); err != nil {
 			return out, err

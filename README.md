@@ -94,6 +94,37 @@ Example workflow:
 
 Saved service definitions default to duplicate protection. If a service is already active, AgentShell returns the existing Run instead of silently starting another copy.
 
+Saved launchers can also declare runtime input fields. The dashboard asks for
+those values only when Start/Run/Restart is pressed. Use a secret field with a
+stdin binding for credentials; AgentShell pipes the value directly to the child
+process and never stores it in the command, Run, History, database, or logs.
+Non-secret inputs can use a transient environment variable binding. MCP agents
+may create and update the field definitions, but must never put a real secret in
+the catalog or a secret default. Entering a secret in the dashboard is preferred
+because passing it to an MCP start call also exposes it to the AI client's
+conversation/tool-call memory.
+
+Example Vault-style definition:
+
+    {
+      "name": "Vault unseal",
+      "command": "docker exec -i hotel-vault vault operator unseal -",
+      "kind": "task",
+      "parameters": [
+        {
+          "key": "unseal_key",
+          "label": "Vault unseal key",
+          "type": "secret",
+          "required": true,
+          "binding": "stdin"
+        }
+      ]
+    }
+
+Parameter values are one-shot. A restart asks for them again, and a stack start
+collects values for every selected member and transitive dependency that needs
+input.
+
 Foreground services use the default `managed` lifecycle: AgentShell owns their
 process group and Stop sends a graceful signal before the forced-kill fallback.
 Detached resources such as `docker compose up -d` use `external` lifecycle and
