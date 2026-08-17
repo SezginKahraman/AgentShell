@@ -50,15 +50,16 @@ type catalogCommandInput struct {
 	Parameters        []domain.CommandParameter `json:"parameters,omitempty"`
 }
 type catalogStackInput struct {
-	Key           string                    `json:"key,omitempty"`
-	Name          string                    `json:"name"`
-	Description   string                    `json:"description,omitempty"`
-	CollectionKey string                    `json:"collection_key,omitempty"`
-	CommandKeys   []string                  `json:"command_keys,omitempty"`
-	Members       []catalogStackMemberInput `json:"members,omitempty"`
-	StartStrategy string                    `json:"start_strategy,omitempty"`
-	FailurePolicy string                    `json:"failure_policy,omitempty"`
-	Favorite      bool                      `json:"favorite,omitempty"`
+	Key             string                     `json:"key,omitempty"`
+	Name            string                     `json:"name"`
+	Description     string                     `json:"description,omitempty"`
+	CollectionKey   string                     `json:"collection_key,omitempty"`
+	CommandKeys     []string                   `json:"command_keys,omitempty"`
+	Members         []catalogStackMemberInput  `json:"members,omitempty"`
+	StartStrategy   string                     `json:"start_strategy,omitempty"`
+	FailurePolicy   string                     `json:"failure_policy,omitempty"`
+	Favorite        bool                       `json:"favorite,omitempty"`
+	DependsOnStacks []domain.StackPrerequisite `json:"depends_on_stacks,omitempty"`
 }
 type catalogStackMemberInput struct {
 	CommandKey    string   `json:"command_key"`
@@ -246,13 +247,16 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 				return out, err
 			}
 		}
-		st := domain.Stack{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), StartStrategy: strings.TrimSpace(v.StartStrategy), FailurePolicy: strings.TrimSpace(v.FailurePolicy), Favorite: v.Favorite}
+		st := domain.Stack{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), StartStrategy: strings.TrimSpace(v.StartStrategy), FailurePolicy: strings.TrimSpace(v.FailurePolicy), Favorite: v.Favorite, DependsOnStacks: v.DependsOnStacks}
 		defaultsStack(&st)
 		if st.StartStrategy != "parallel" && st.StartStrategy != "sequential" {
 			return out, errors.New("invalid stack start_strategy")
 		}
 		if st.FailurePolicy != "continue" && st.FailurePolicy != "stop" {
 			return out, errors.New("invalid stack failure_policy")
+		}
+		if err := validateStackPrerequisites(r.Context(), s.store, &st); err != nil {
+			return out, err
 		}
 		out.Stacks = append(out.Stacks, store.CatalogStack{Key: v.Key, CollectionKey: v.CollectionKey, CommandKeys: v.CommandKeys, Members: catalogMembers, Definition: st})
 	}

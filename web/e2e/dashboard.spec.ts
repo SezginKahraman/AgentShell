@@ -367,8 +367,11 @@ test('stack orchestration can be configured from the dashboard', async ({ page }
   await page.getByTestId('stack-card-stack-internal').click()
   const drawer = page.getByTestId('stack-detail-drawer')
   await expect(drawer.getByText(/after Backend API/)).toBeVisible()
+  await expect(page.getByTestId('stack-prereq-summary-stack-external')).toContainText('External infrastructure')
+  await expect(page.getByTestId('stack-prereq-summary-stack-external')).toContainText('90s')
   await page.getByTestId('edit-stack-orchestration-stack-internal').click()
   await expect(page.getByTestId('stack-orchestration-editor')).toBeVisible()
+  await expect(page.getByTestId('stack-prereq-stack-external')).toBeChecked()
 
   await page.getByLabel('Stack start strategy').selectOption('sequential')
   const worker = page.getByTestId('stack-member-config-cmd-worker')
@@ -383,6 +386,18 @@ test('stack orchestration can be configured from the dashboard', async ({ page }
   await page.getByTestId('edit-stack-orchestration-stack-internal').click()
   await expect(page.getByLabel('Stack start strategy')).toHaveValue('sequential')
   await expect(page.getByLabel('Notification Worker wait condition')).toHaveValue('ready')
+})
+
+test('starting a stack asks before starting prerequisite stacks', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Stacks' }).click()
+  await page.getByTestId('stop-stack-stack-external').click()
+  await page.getByTestId('start-stack-stack-internal').click()
+  const dialog = page.getByTestId('stack-prerequisites-dialog')
+  await expect(dialog).toContainText('External infrastructure')
+  await page.getByTestId('confirm-start-prerequisites').click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByTestId('stop-stack-stack-external')).toBeVisible()
 })
 
 test('a stack can be created in the UI and opens directly in orchestration', async ({ page }) => {

@@ -77,8 +77,10 @@ export interface SavedCommand {
 export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
 export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; status?: RunStatus; lifecycle_mode?: 'managed' | 'external'; observed_state?: 'running' | 'stopped' | 'checking' | 'unknown'; state_confidence?: 'high' | 'observed' | 'action' | 'unknown'; state_detail?: string; port_verifications?: PortVerification[]; active_run_id?: string; can_stop?: boolean }
-export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; status?: RunStatus | 'partial'; running_count?: number; unknown_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
-export interface StackInput { name: string; description?: string; project_id?: string; collection_id?: string; members: StackMember[]; favorite?: boolean; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
+export interface StackPrerequisite { stack_id: string; wait_timeout_ms?: number }
+export interface NeededStack { id: string; name: string; up_count: number; total_count: number; wait_timeout_ms: number }
+export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; depends_on_stacks?: StackPrerequisite[]; status?: RunStatus | 'partial'; running_count?: number; unknown_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
+export interface StackInput { name: string; description?: string; project_id?: string; collection_id?: string; members: StackMember[]; depends_on_stacks?: StackPrerequisite[]; favorite?: boolean; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop' }
 export interface LogResponse { run_id: string; stream: string; content: string }
 
 export interface CheckDefinition {

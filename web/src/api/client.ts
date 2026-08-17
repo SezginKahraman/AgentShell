@@ -1,4 +1,4 @@
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, LogResponse, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -17,7 +17,7 @@ export interface AgentShellApi {
   stopRun(id: string): Promise<void>
   restartRun(id: string): Promise<void>
   commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>): Promise<void>
-  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>): Promise<void>
+  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean): Promise<void>
   promoteRun(id: string, input: PromoteRunInput): Promise<PromoteRunResult>
   updateCommand(id: string, input: Partial<SavedCommand>): Promise<SavedCommand>
   updateStack(id: string, input: Partial<Stack>): Promise<Stack>
@@ -38,9 +38,15 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   })
   if (!response.ok) {
 	let detail = ''
-	try { detail = (await response.json() as { error?: string }).error ?? '' } catch { /* non-JSON error */ }
-	const error = new Error(detail || `${response.status} ${response.statusText}`) as Error & { status?: number }
+	let neededStacks: NeededStack[] | undefined
+	try {
+		const body = await response.json() as { error?: string; needed_stacks?: NeededStack[] }
+		detail = body.error ?? ''
+		neededStacks = body.needed_stacks
+	} catch { /* non-JSON error */ }
+	const error = new Error(detail || `${response.status} ${response.statusText}`) as Error & { status?: number; needed_stacks?: NeededStack[] }
 	error.status = response.status
+	error.needed_stacks = neededStacks
 	throw error
 	}
   if (response.status === 204) return undefined as T
@@ -80,8 +86,8 @@ export class HttpApi implements AgentShellApi {
   async stopRun(id: string) { await request(`/api/runs/${id}/stop`, { method: 'POST' }) }
   async restartRun(id: string) { await request(`/api/runs/${id}/restart`, { method: 'POST' }) }
   async commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>) { await request(`/api/commands/${id}/${action}`, { method: 'POST', body: parameters ? JSON.stringify({ parameters }) : undefined }) }
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>) {
-		const payload = { ...(action === 'start' && commandIDs ? { command_ids: commandIDs } : {}), ...(parameters ? { parameters } : {}) }
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean) {
+		const payload = { ...(action === 'start' && commandIDs ? { command_ids: commandIDs } : {}), ...(parameters ? { parameters } : {}), ...(startPrerequisites ? { start_prerequisites: true } : {}) }
 		await request(`/api/stacks/${id}/${action}`, { method: 'POST', body: Object.keys(payload).length ? JSON.stringify(payload) : undefined })
 	}
   promoteRun(id: string, input: PromoteRunInput) { return request<PromoteRunResult>(`/api/runs/${id}/promote`, { method: 'POST', body: JSON.stringify(input) }) }

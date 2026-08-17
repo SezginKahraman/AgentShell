@@ -41,7 +41,7 @@ const collections: Collection[] = [
 ]
 
 const stacks: Stack[] = [
-	{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 2, members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] },
+	{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 2, depends_on_stacks: [{ stack_id: 'stack-external', wait_timeout_ms: 90000 }], members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] },
 	{ id: 'stack-external', name: 'External infrastructure', description: 'Detached resources with port-based observed state.', status: 'running', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 1, members: [{ command_id: 'cmd-external-infra', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Detached infrastructure', status: 'external', lifecycle_mode: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'Expected MySQL port is listening; process ownership remains external.', port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], can_stop: true }] },
 ]
 
@@ -129,15 +129,43 @@ export class DemoApi implements AgentShellApi {
 		})
 		this.emit()
 	}
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], _parameters?: Record<string, Record<string, string>>) {
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], _parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean) {
 		const stack = stacks.find(s => s.id === id); if (!stack) return
+		const memberReady = (member: NonNullable<Stack['members']>[number]) => member.lifecycle_mode === 'external'
+			? member.observed_state === 'running' || member.observed_state === 'checking' || (member.observed_state === 'unknown' && !!member.can_stop)
+			: !!(member.can_stop ?? runningStatus(member.status))
+		if ((action === 'start' || action === 'restart') && !startPrerequisites) {
+			const needed = (stack.depends_on_stacks ?? []).flatMap(edge => {
+				const prereq = stacks.find(item => item.id === edge.stack_id)
+				if (!prereq) return []
+				const members = prereq.members ?? []
+				if (members.length > 0 && members.every(memberReady)) return []
+				return [{ id: prereq.id, name: prereq.name, up_count: prereq.running_count ?? 0, total_count: prereq.total_count ?? members.length, wait_timeout_ms: edge.wait_timeout_ms ?? 90000 }]
+			})
+			if (needed.length) {
+				const error = new Error('prerequisite stacks are not ready') as Error & { status: number; needed_stacks: typeof needed }
+				error.status = 409
+				error.needed_stacks = needed
+				throw error
+			}
+		}
+		if ((action === 'start' || action === 'restart') && startPrerequisites) {
+			for (const edge of stack.depends_on_stacks ?? []) {
+				await this.stackAction(edge.stack_id, 'start', undefined, undefined, true)
+			}
+		}
 		const selected = action === 'start' && commandIDs ? new Set(commandIDs) : undefined
 		stack.members?.forEach(member => {
 			if (selected && !selected.has(member.command_id)) return
 			member.status = action === 'stop' ? 'stopped' : 'running'
 			member.can_stop = action !== 'stop'
+			if (member.lifecycle_mode === 'external') {
+				member.observed_state = action === 'stop' ? 'stopped' : member.observed_state === 'running' ? 'running' : 'unknown'
+				member.can_stop = action !== 'stop'
+				if (action === 'stop') member.status = 'stopped'
+			}
 			const command = commands.find(item => item.id === member.command_id)
-			if (command) { command.status = member.status; command.can_stop = member.can_stop }
+			if (command) { command.status = member.status; command.can_stop = member.can_stop; if (command.lifecycle_mode === 'external') command.observed_state = member.observed_state }
 		})
 		stack.running_count = stack.members?.filter(member => runningStatus(member.status)).length ?? 0
 		stack.status = stack.running_count === 0 ? 'stopped' : stack.running_count === (stack.total_count ?? stack.members?.length ?? 0) ? 'running' : 'partial'

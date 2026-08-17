@@ -265,19 +265,92 @@ type StackMember struct {
 	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty"`
 }
 
+// StackPrerequisite is a start-time dependency on another stack, including
+// stacks owned by a different project.
+type StackPrerequisite struct {
+	StackID       string `json:"stack_id"`
+	WaitTimeoutMS int    `json:"wait_timeout_ms,omitempty"`
+}
+
+const DefaultStackPrerequisiteTimeoutMS = 90000
+
 type Stack struct {
-	ID            string        `json:"id"`
-	ProjectID     string        `json:"project_id,omitempty"`
-	CollectionID  string        `json:"collection_id,omitempty"`
-	StableKey     string        `json:"stable_key,omitempty"`
-	Name          string        `json:"name"`
-	Description   string        `json:"description,omitempty"`
-	StartStrategy string        `json:"start_strategy"`
-	FailurePolicy string        `json:"failure_policy"`
-	Favorite      bool          `json:"favorite"`
-	Members       []StackMember `json:"members"`
-	CreatedAt     time.Time     `json:"created_at"`
-	UpdatedAt     time.Time     `json:"updated_at"`
+	ID               string               `json:"id"`
+	ProjectID        string               `json:"project_id,omitempty"`
+	CollectionID     string               `json:"collection_id,omitempty"`
+	StableKey        string               `json:"stable_key,omitempty"`
+	Name             string               `json:"name"`
+	Description      string               `json:"description,omitempty"`
+	StartStrategy    string               `json:"start_strategy"`
+	FailurePolicy    string               `json:"failure_policy"`
+	Favorite         bool                 `json:"favorite"`
+	Members          []StackMember        `json:"members"`
+	DependsOnStacks  []StackPrerequisite  `json:"depends_on_stacks,omitempty"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+}
+
+// PrerequisiteMemberReady is the v1 gate for a prerequisite stack member.
+// started unverified (external unknown + canStop) counts as up enough.
+func PrerequisiteMemberReady(lifecycleMode, observedState string, canStop bool) bool {
+	if lifecycleMode != "external" {
+		return canStop
+	}
+	if observedState == "running" || observedState == "checking" {
+		return true
+	}
+	return observedState == "unknown" && canStop
+}
+
+func NormalizeStackPrerequisites(edges []StackPrerequisite) []StackPrerequisite {
+	out := make([]StackPrerequisite, 0, len(edges))
+	for _, edge := range edges {
+		id := strings.TrimSpace(edge.StackID)
+		if id == "" {
+			continue
+		}
+		if edge.WaitTimeoutMS == 0 {
+			edge.WaitTimeoutMS = DefaultStackPrerequisiteTimeoutMS
+		}
+		edge.StackID = id
+		out = append(out, edge)
+	}
+	return out
+}
+
+// StackPrerequisiteCycle reports a stack id that participates in a cycle, or empty.
+// graph maps existing stacks to their prerequisite ids. edges are the candidate
+// prerequisites of start.
+func StackPrerequisiteCycle(start string, edges []StackPrerequisite, graph map[string][]string) string {
+	deps := make(map[string][]string, len(graph)+1)
+	for id, next := range graph {
+		deps[id] = append([]string(nil), next...)
+	}
+	ids := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		ids = append(ids, edge.StackID)
+	}
+	deps[start] = ids
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) string
+	visit = func(id string) string {
+		if visiting[id] {
+			return id
+		}
+		if visited[id] {
+			return ""
+		}
+		visiting[id] = true
+		for _, next := range deps[id] {
+			if found := visit(next); found != "" {
+				return found
+			}
+		}
+		delete(visiting, id)
+		visited[id] = true
+		return ""
+	}
+	return visit(start)
 }
 
 // CheckDefinition is an executable verification attached to a saved stack,

@@ -1016,7 +1016,7 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 				writeError(w, http.StatusBadRequest, "command_ids must not be empty when provided")
 				return
 			}
-			v, e := s.manager.StartStackMembersWithParameters(ctx, id, sliceValue(input.CommandIDs), input.Parameters)
+			v, e := s.manager.StartStackMembersWithPrerequisites(ctx, id, sliceValue(input.CommandIDs), input.Parameters, input.StartPrerequisites)
 			respondAction(w, v, e)
 		case "stop":
 			v, e := s.manager.StopStack(ctx, id)
@@ -1029,7 +1029,7 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 			if !decodeOptional(w, r, &input) {
 				return
 			}
-			v, e := s.manager.RestartStackWithParameters(ctx, id, input.Parameters)
+			v, e := s.manager.RestartStackWithPrerequisites(ctx, id, input.Parameters, input.StartPrerequisites)
 			respondAction(w, v, e)
 		default:
 			writeError(w, 404, "not found")
@@ -1332,22 +1332,23 @@ type stackMemberView struct {
 	CanStop           bool                      `json:"can_stop"`
 }
 type stackView struct {
-	ID            string            `json:"id"`
-	ProjectID     string            `json:"project_id,omitempty"`
-	CollectionID  string            `json:"collection_id,omitempty"`
-	StableKey     string            `json:"stable_key,omitempty"`
-	Name          string            `json:"name"`
-	Description   string            `json:"description,omitempty"`
-	StartStrategy string            `json:"start_strategy"`
-	FailurePolicy string            `json:"failure_policy"`
-	Favorite      bool              `json:"favorite"`
-	Members       []stackMemberView `json:"members"`
-	RunningCount  int               `json:"running_count"`
-	TotalCount    int               `json:"total_count"`
-	UnknownCount  int               `json:"unknown_count,omitempty"`
-	Status        string            `json:"status"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	ID              string                     `json:"id"`
+	ProjectID       string                     `json:"project_id,omitempty"`
+	CollectionID    string                     `json:"collection_id,omitempty"`
+	StableKey       string                     `json:"stable_key,omitempty"`
+	Name            string                     `json:"name"`
+	Description     string                     `json:"description,omitempty"`
+	StartStrategy   string                     `json:"start_strategy"`
+	FailurePolicy   string                     `json:"failure_policy"`
+	Favorite        bool                       `json:"favorite"`
+	Members         []stackMemberView          `json:"members"`
+	DependsOnStacks []domain.StackPrerequisite `json:"depends_on_stacks,omitempty"`
+	RunningCount    int                        `json:"running_count"`
+	TotalCount      int                        `json:"total_count"`
+	UnknownCount    int                        `json:"unknown_count,omitempty"`
+	Status          string                     `json:"status"`
+	CreatedAt       time.Time                  `json:"created_at"`
+	UpdatedAt       time.Time                  `json:"updated_at"`
 }
 
 func (s *Server) stackViews(ctx context.Context) ([]stackView, error) {
@@ -1388,7 +1389,7 @@ func (s *Server) stackView(ctx context.Context, id string) (stackView, error) {
 	return makeStackView(st, byID), nil
 }
 func makeStackView(st domain.Stack, commands map[string]commandView) stackView {
-	v := stackView{ID: st.ID, ProjectID: st.ProjectID, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
+	v := stackView{ID: st.ID, ProjectID: st.ProjectID, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, DependsOnStacks: append([]domain.StackPrerequisite(nil), st.DependsOnStacks...), TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
 	for _, m := range st.Members {
 		c := commands[m.CommandID]
 		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, DependsOn: m.DependsOn, WaitFor: m.WaitFor, WaitTimeoutMS: m.WaitTimeoutMS, Name: c.Name, Status: c.Status, LifecycleMode: c.LifecycleMode, ObservedState: c.ObservedState, StateConfidence: c.StateConfidence, StateDetail: c.StateDetail, PortVerifications: append([]domain.PortVerification(nil), c.PortVerifications...), ActiveRunID: c.ActiveRunID, CanStop: c.CanStop}
@@ -1468,8 +1469,9 @@ type actionOptions struct {
 }
 
 type stackStartInput struct {
-	CommandIDs *[]string                    `json:"command_ids,omitempty"`
-	Parameters map[string]map[string]string `json:"parameters,omitempty"`
+	CommandIDs         *[]string                    `json:"command_ids,omitempty"`
+	Parameters         map[string]map[string]string `json:"parameters,omitempty"`
+	StartPrerequisites bool                         `json:"start_prerequisites,omitempty"`
 }
 
 func sliceValue(value *[]string) []string {
@@ -1583,16 +1585,17 @@ func (p commandPatch) apply(v *domain.CommandDefinition) {
 }
 
 type stackInput struct {
-	ProjectID     string               `json:"project_id,omitempty"`
-	CollectionID  string               `json:"collection_id,omitempty"`
-	StableKey     string               `json:"stable_key,omitempty"`
-	Name          string               `json:"name"`
-	Description   string               `json:"description,omitempty"`
-	CommandIDs    []string             `json:"command_ids,omitempty"`
-	Members       []domain.StackMember `json:"members,omitempty"`
-	StartStrategy string               `json:"start_strategy,omitempty"`
-	FailurePolicy string               `json:"failure_policy,omitempty"`
-	Favorite      bool                 `json:"favorite,omitempty"`
+	ProjectID       string                     `json:"project_id,omitempty"`
+	CollectionID    string                     `json:"collection_id,omitempty"`
+	StableKey       string                     `json:"stable_key,omitempty"`
+	Name            string                     `json:"name"`
+	Description     string                     `json:"description,omitempty"`
+	CommandIDs      []string                   `json:"command_ids,omitempty"`
+	Members         []domain.StackMember       `json:"members,omitempty"`
+	StartStrategy   string                     `json:"start_strategy,omitempty"`
+	FailurePolicy   string                     `json:"failure_policy,omitempty"`
+	Favorite        bool                       `json:"favorite,omitempty"`
+	DependsOnStacks []domain.StackPrerequisite `json:"depends_on_stacks,omitempty"`
 }
 
 func (v stackInput) stack() domain.Stack {
@@ -1603,20 +1606,21 @@ func (v stackInput) stack() domain.Stack {
 			members[i] = domain.StackMember{CommandID: id, Position: i}
 		}
 	}
-	return domain.Stack{ProjectID: v.ProjectID, CollectionID: v.CollectionID, StableKey: v.StableKey, Name: v.Name, Description: v.Description, Members: members, StartStrategy: v.StartStrategy, FailurePolicy: v.FailurePolicy, Favorite: v.Favorite}
+	return domain.Stack{ProjectID: v.ProjectID, CollectionID: v.CollectionID, StableKey: v.StableKey, Name: v.Name, Description: v.Description, Members: members, StartStrategy: v.StartStrategy, FailurePolicy: v.FailurePolicy, Favorite: v.Favorite, DependsOnStacks: v.DependsOnStacks}
 }
 
 type stackPatch struct {
-	ProjectID     *string               `json:"project_id,omitempty"`
-	CollectionID  *string               `json:"collection_id,omitempty"`
-	StableKey     *string               `json:"stable_key,omitempty"`
-	Name          *string               `json:"name,omitempty"`
-	Description   *string               `json:"description,omitempty"`
-	CommandIDs    *[]string             `json:"command_ids,omitempty"`
-	Members       *[]domain.StackMember `json:"members,omitempty"`
-	StartStrategy *string               `json:"start_strategy,omitempty"`
-	FailurePolicy *string               `json:"failure_policy,omitempty"`
-	Favorite      *bool                 `json:"favorite,omitempty"`
+	ProjectID       *string                     `json:"project_id,omitempty"`
+	CollectionID    *string                     `json:"collection_id,omitempty"`
+	StableKey       *string                     `json:"stable_key,omitempty"`
+	Name            *string                     `json:"name,omitempty"`
+	Description     *string                     `json:"description,omitempty"`
+	CommandIDs      *[]string                   `json:"command_ids,omitempty"`
+	Members         *[]domain.StackMember       `json:"members,omitempty"`
+	StartStrategy   *string                     `json:"start_strategy,omitempty"`
+	FailurePolicy   *string                     `json:"failure_policy,omitempty"`
+	Favorite        *bool                       `json:"favorite,omitempty"`
+	DependsOnStacks *[]domain.StackPrerequisite `json:"depends_on_stacks,omitempty"`
 }
 
 func (p stackPatch) apply(v *domain.Stack) {
@@ -1653,6 +1657,9 @@ func (p stackPatch) apply(v *domain.Stack) {
 	if p.Favorite != nil {
 		v.Favorite = *p.Favorite
 	}
+	if p.DependsOnStacks != nil {
+		v.DependsOnStacks = *p.DependsOnStacks
+	}
 }
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -1684,6 +1691,11 @@ func respond(w http.ResponseWriter, v any, e error) {
 func respondAction(w http.ResponseWriter, v any, e error) {
 	if errors.Is(e, runtimepkg.ErrAlreadyRunning) {
 		writeJSON(w, 409, map[string]any{"error": e.Error(), "run": v})
+		return
+	}
+	var prereq *runtimepkg.ErrPrerequisites
+	if errors.As(e, &prereq) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": prereq.Error(), "needed_stacks": prereq.Needed})
 		return
 	}
 	if e != nil {
@@ -1823,6 +1835,7 @@ func defaultsStack(v *domain.Stack) {
 			v.Members[i].WaitTimeoutMS = 30000
 		}
 	}
+	v.DependsOnStacks = domain.NormalizeStackPrerequisites(v.DependsOnStacks)
 }
 func validateStack(ctx context.Context, s *store.Store, v *domain.Stack) error {
 	v.Name = strings.TrimSpace(v.Name)
@@ -1907,6 +1920,45 @@ func validateStack(ctx context.Context, s *store.Store, v *domain.Stack) error {
 		if err := visit(id); err != nil {
 			return err
 		}
+	}
+	return validateStackPrerequisites(ctx, s, v)
+}
+
+func validateStackPrerequisites(ctx context.Context, s *store.Store, v *domain.Stack) error {
+	v.DependsOnStacks = domain.NormalizeStackPrerequisites(v.DependsOnStacks)
+	seen := map[string]bool{}
+	for _, edge := range v.DependsOnStacks {
+		if v.ID != "" && edge.StackID == v.ID {
+			return errors.New("stack cannot depend on itself")
+		}
+		if seen[edge.StackID] {
+			return fmt.Errorf("duplicate prerequisite stack %s", edge.StackID)
+		}
+		seen[edge.StackID] = true
+		if edge.WaitTimeoutMS < 100 || edge.WaitTimeoutMS > 600000 {
+			return fmt.Errorf("prerequisite stack %s wait_timeout_ms must be between 100 and 600000", edge.StackID)
+		}
+		if _, err := s.Stack(ctx, edge.StackID); err != nil {
+			return fmt.Errorf("unknown prerequisite stack %s", edge.StackID)
+		}
+	}
+	all, err := s.Stacks(ctx)
+	if err != nil {
+		return err
+	}
+	graph := make(map[string][]string, len(all))
+	for _, item := range all {
+		if item.ID == v.ID {
+			continue
+		}
+		ids := make([]string, 0, len(item.DependsOnStacks))
+		for _, edge := range domain.NormalizeStackPrerequisites(item.DependsOnStacks) {
+			ids = append(ids, edge.StackID)
+		}
+		graph[item.ID] = ids
+	}
+	if id := domain.StackPrerequisiteCycle(v.ID, v.DependsOnStacks, graph); id != "" {
+		return fmt.Errorf("stack prerequisite cycle includes %s", id)
 	}
 	return nil
 }

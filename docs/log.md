@@ -1,0 +1,13 @@
+---
+type: Changelog
+doc_kind: reference
+title: Documentation log
+description: Dated one-line summaries of significant documentation changes.
+tags: [docs]
+timestamp: 2026-08-17T17:20:00Z
+---
+
+# Documentation log
+
+- 2026-08-17: Documented stack-to-stack `depends_on_stacks` start gate in the orchestration reference.
+- 2026-08-17: Added stack prerequisite design spec (`depends_on_stacks`).

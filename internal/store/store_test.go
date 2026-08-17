@@ -119,6 +119,31 @@ func TestDeleteCommandRejectsStackMember(t *testing.T) {
 	}
 }
 
+func TestSaveStackPersistsPrerequisites(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "prereq.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	infra := domain.Stack{ID: "stack-infra", Name: "Infra", StartStrategy: "parallel", FailurePolicy: "continue", CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveStack(ctx, &infra); err != nil {
+		t.Fatal(err)
+	}
+	app := domain.Stack{ID: "stack-app", Name: "App", StartStrategy: "parallel", FailurePolicy: "stop", DependsOnStacks: []domain.StackPrerequisite{{StackID: infra.ID, WaitTimeoutMS: 90000}}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveStack(ctx, &app); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Stack(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DependsOnStacks) != 1 || got.DependsOnStacks[0].StackID != infra.ID || got.DependsOnStacks[0].WaitTimeoutMS != 90000 {
+		t.Fatalf("prereqs=%+v", got.DependsOnStacks)
+	}
+}
+
 func TestStoreCatalogAndRunRoundTrip(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "state", "test.db"))
 	if err != nil {

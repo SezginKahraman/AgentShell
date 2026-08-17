@@ -553,6 +553,26 @@ Basit bir stack için sıralı `command_ids` hâlâ desteklenir. Gerçek servis 
 - Stop işlemi dependency sırasının tersidir. Örneğin DB → API → UI, UI → API → DB olarak durdurulur.
 - Dashboard'daki Stack detayında **Orchestration** düzenleyicisi aynı alanları yönetir. “Start selected” kullanıldığında gerekli bağımlılıklar otomatik eklenir.
 
+Stack'ler başka stack'lere `depends_on_stacks` ile bağlanabilir. Bu kenar, başka bir projedeki paylaşılan altyapı stack'ini (örneğin docker) işaret edebilir:
+
+```json
+{
+  "name": "Hotel meta",
+  "depends_on_stacks": [
+    { "stack_id": "stack_infra", "wait_timeout_ms": 90000 }
+  ],
+  "members": [
+    { "command_id": "api-id", "position": 0, "wait_for": "ready", "wait_timeout_ms": 60000 }
+  ]
+}
+```
+
+- `depends_on_stacks` kayıttaki `stack_id` değerlerini kullanır; self-reference, bilinmeyen id, duplicate ve cycle reddedilir.
+- Önkoşul stack'in her member'ı “up enough” olana kadar beklenir: managed `can_stop`, external `running`/`checking`, veya `started unverified` (external `unknown` + `can_stop`).
+- `start_stack` önkoşullar hazır değilse `needed_stacks` döner ve bu stack'i başlatmaz. `start_prerequisites=true` yalnızca kullanıcı o stack'leri başlatmayı onayladıktan sonra geçilir.
+- B'nin alt kümesini başlatmak yine A'nın tamamını gerektirir. B'yi durdurmak A'yı durdurmaz.
+- Kenar timeout'u varsayılan 90000 ms'dir (100–600000); member `wait_timeout_ms` değerinden bağımsızdır.
+
 ## 9. Önerilen prompt örnekleri
 
 ### 9.1. Projeyi incele, hiçbir şey çalıştırma

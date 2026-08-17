@@ -229,10 +229,14 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		} else {
 			v.ID = catalogID("stack", project.ID, v.StableKey)
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), ts(v.CreatedAt), ts(v.UpdatedAt)); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), ts(v.CreatedAt), ts(v.UpdatedAt)); e != nil {
 			return result, e
 		}
 		appendResult(&result, action, CatalogResultItem{Type: "stack", Key: item.Key, ID: v.ID})
+	}
+	if err = validateAppliedPrerequisiteGraph(ctx, tx); err != nil {
+		result.Conflicts = append(result.Conflicts, CatalogResultItem{Type: "stack", Message: err.Error()})
+		return result, &CatalogConflictError{Result: result}
 	}
 	if dryRun {
 		return result, nil
@@ -241,6 +245,37 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		return result, err
 	}
 	return result, nil
+}
+
+func validateAppliedPrerequisiteGraph(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT `+stackCols+` FROM stacks`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var stacks []domain.Stack
+	graph := map[string][]string{}
+	for rows.Next() {
+		item, scanErr := scanStack(rows)
+		if scanErr != nil {
+			return scanErr
+		}
+		ids := make([]string, 0, len(item.DependsOnStacks))
+		for _, edge := range domain.NormalizeStackPrerequisites(item.DependsOnStacks) {
+			ids = append(ids, edge.StackID)
+		}
+		graph[item.ID] = ids
+		stacks = append(stacks, item)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range stacks {
+		if id := domain.StackPrerequisiteCycle(item.ID, domain.NormalizeStackPrerequisites(item.DependsOnStacks), graph); id != "" {
+			return fmt.Errorf("stack prerequisite cycle includes %s", id)
+		}
+	}
+	return nil
 }
 
 func applyProjectTx(ctx context.Context, tx *sql.Tx, in domain.Project, now time.Time) (domain.Project, string, error) {
@@ -363,7 +398,8 @@ func stackComparable(v domain.Stack) any {
 		ProjectID, CollectionID, StableKey, Name, Description, StartStrategy, FailurePolicy string
 		Favorite                                                                            bool
 		Members                                                                             string
-	}{v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members)}
+		DependsOnStacks                                                                     string
+	}{v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks)}
 }
 
 var _ = fmt.Sprintf

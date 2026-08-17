@@ -277,6 +277,10 @@ func (c *daemonClient) do(ctx context.Context, method, path string, query url.Va
 					conflict["result"] = "already_running"
 					return conflict, nil
 				}
+				if _, ok := conflict["needed_stacks"]; ok {
+					conflict["result"] = "prerequisites_required"
+					return conflict, nil
+				}
 			}
 		}
 		return nil, &HTTPError{

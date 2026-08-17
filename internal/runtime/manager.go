@@ -25,6 +25,22 @@ import (
 
 var ErrAlreadyRunning = errors.New("command is already running")
 
+type NeededStack struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	UpCount       int    `json:"up_count"`
+	TotalCount    int    `json:"total_count"`
+	WaitTimeoutMS int    `json:"wait_timeout_ms"`
+}
+
+type ErrPrerequisites struct {
+	Needed []NeededStack
+}
+
+func (e *ErrPrerequisites) Error() string {
+	return "prerequisite stacks are not ready"
+}
+
 type Config struct {
 	DataDir             string
 	StopGrace           time.Duration
@@ -814,6 +830,10 @@ func (m *Manager) RestartStack(ctx context.Context, id string) ([]domain.Run, er
 }
 
 func (m *Manager) RestartStackWithParameters(ctx context.Context, id string, values map[string]map[string]string) ([]domain.Run, error) {
+	return m.RestartStackWithPrerequisites(ctx, id, values, false)
+}
+
+func (m *Manager) RestartStackWithPrerequisites(ctx context.Context, id string, values map[string]map[string]string, startPrerequisites bool) ([]domain.Run, error) {
 	stack, err := m.store.Stack(ctx, id)
 	if err != nil {
 		return nil, err
@@ -835,7 +855,7 @@ func (m *Manager) RestartStackWithParameters(ctx context.Context, id string, val
 			return nil, err
 		}
 	}
-	return m.StartStackMembersWithParameters(ctx, id, nil, values)
+	return m.startStack(ctx, id, nil, values, startPrerequisites)
 }
 
 func (m *Manager) StartStack(ctx context.Context, id string) ([]domain.Run, error) {
@@ -851,6 +871,14 @@ func (m *Manager) StartStackMembers(ctx context.Context, id string, commandIDs [
 }
 
 func (m *Manager) StartStackMembersWithParameters(ctx context.Context, id string, commandIDs []string, values map[string]map[string]string) ([]domain.Run, error) {
+	return m.startStack(ctx, id, commandIDs, values, false)
+}
+
+func (m *Manager) StartStackMembersWithPrerequisites(ctx context.Context, id string, commandIDs []string, values map[string]map[string]string, startPrerequisites bool) ([]domain.Run, error) {
+	return m.startStack(ctx, id, commandIDs, values, startPrerequisites)
+}
+
+func (m *Manager) startStackMembersOnly(ctx context.Context, id string, commandIDs []string, values map[string]map[string]string) ([]domain.Run, error) {
 	s, err := m.store.Stack(ctx, id)
 	if err != nil {
 		return nil, err

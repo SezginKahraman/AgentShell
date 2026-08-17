@@ -54,6 +54,46 @@ func TestCommandParametersAllowOnlyOneStdinBinding(t *testing.T) {
 	}
 }
 
+func TestPrerequisiteMemberReadyAndStackGraphCycles(t *testing.T) {
+	if PrerequisiteMemberReady("managed", "", true) != true {
+		t.Fatal("managed can_stop must be up enough")
+	}
+	if PrerequisiteMemberReady("managed", "", false) {
+		t.Fatal("stopped managed member must not be up enough")
+	}
+	if PrerequisiteMemberReady("external", "running", true) != true {
+		t.Fatal("external running must be up enough")
+	}
+	if PrerequisiteMemberReady("external", "checking", true) != true {
+		t.Fatal("external checking must be up enough")
+	}
+	if PrerequisiteMemberReady("external", "unknown", true) != true {
+		t.Fatal("started unverified must be up enough")
+	}
+	if PrerequisiteMemberReady("external", "unknown", false) {
+		t.Fatal("unknown without can_stop must not be up enough")
+	}
+	if PrerequisiteMemberReady("external", "stopped", false) {
+		t.Fatal("stopped external must not be up enough")
+	}
+
+	normalized := NormalizeStackPrerequisites([]StackPrerequisite{{StackID: " stack-a ", WaitTimeoutMS: 0}})
+	if len(normalized) != 1 || normalized[0].StackID != "stack-a" || normalized[0].WaitTimeoutMS != DefaultStackPrerequisiteTimeoutMS {
+		t.Fatalf("normalize=%+v", normalized)
+	}
+
+	graph := map[string][]string{"stack-a": {"stack-b"}, "stack-b": {"stack-c"}}
+	if id := StackPrerequisiteCycle("stack-c", []StackPrerequisite{{StackID: "stack-a"}}, graph); id == "" {
+		t.Fatal("transitive cycle C→A→B→C must be detected")
+	}
+	if id := StackPrerequisiteCycle("stack-app", []StackPrerequisite{{StackID: "stack-a"}}, graph); id != "" {
+		t.Fatalf("acyclic graph reported cycle at %s", id)
+	}
+	if id := StackPrerequisiteCycle("stack-a", []StackPrerequisite{{StackID: "stack-a"}}, nil); id != "stack-a" {
+		t.Fatalf("self cycle=%q", id)
+	}
+}
+
 func TestObserveExternalRunSeparatesLifecycleFromCurrentState(t *testing.T) {
 	now := time.Now().UTC()
 	tests := []struct {

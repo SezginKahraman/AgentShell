@@ -27,6 +27,8 @@ func TestRevision3InputValidation(t *testing.T) {
 		{"unknown stack dependency", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "api", DependsOn: []string{"db"}}}}).validate(), "unknown"},
 		{"invalid stack wait policy", (SaveStackInput{Name: "App", Members: []StackMemberInput{{CommandID: "api", WaitFor: "healthy"}}}).validate(), "wait_for"},
 		{"mixed stack membership shapes", (SaveStackInput{Name: "App", CommandIDs: []string{"api"}, Members: []StackMemberInput{{CommandID: "api"}}}).validate(), "not both"},
+		{"duplicate stack prerequisite", (SaveStackInput{Name: "App", CommandIDs: []string{"api"}, DependsOnStacks: []StackPrerequisiteInput{{StackID: "stack-a"}, {StackID: "stack-a"}}}).validate(), "duplicate"},
+		{"invalid stack prerequisite timeout", (SaveStackInput{Name: "App", CommandIDs: []string{"api"}, DependsOnStacks: []StackPrerequisiteInput{{StackID: "stack-a", WaitTimeoutMS: 10}}}).validate(), "wait_timeout_ms"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

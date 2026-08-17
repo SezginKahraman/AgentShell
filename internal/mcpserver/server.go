@@ -347,7 +347,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, runPath(input.RunID)+"/promote", nil, payload)
 		})
 
-	addTool(server, "apply_catalog", "Apply catalog", toolIntent+"Atomically validate and idempotently apply one project's collections, saved commands, and stacks. Commands may define runtime parameter schemas, but must never contain actual secret values or secret defaults. Stack members may reference request-local command keys with depends_on, wait_for, and wait_timeout_ms. Use dry_run first. This never starts a Run.", mutating("Apply catalog", false, true), ApplyCatalogInput.validate,
+	addTool(server, "apply_catalog", "Apply catalog", toolIntent+"Atomically validate and idempotently apply one project's collections, saved commands, and stacks. Commands may define runtime parameter schemas, but must never contain actual secret values or secret defaults. Stack members may reference request-local command keys with depends_on, wait_for, and wait_timeout_ms. Stacks may declare depends_on_stacks with already persisted stack_id values, including cross-project infrastructure. Use dry_run first. This never starts a Run.", mutating("Apply catalog", false, true), ApplyCatalogInput.validate,
 		func(ctx context.Context, input ApplyCatalogInput) (map[string]any, error) {
 			payload, err := objectPayload(input)
 			if err != nil {
@@ -427,7 +427,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/stacks", nil, nil)
 		})
 
-	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Preserve project_id and collection_id. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
+	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Use depends_on_stacks with persisted stack_id values when another stack, including shared infrastructure in another project, must be up first. Preserve project_id and collection_id. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
 		func(ctx context.Context, input SaveStackInput) (map[string]any, error) {
 			payload, err := stackPayload(input)
 			if err != nil {
@@ -451,7 +451,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodDelete, stackPath(input.ID), nil, nil)
 		})
 
-	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or the optional command_ids subset, through AgentShell. Supply transient parameters by command ID for every selected member and dependency that requires them. Selected members automatically include transitive dependencies. Dependents wait for each dependency's configured spawn, ready, or exit condition. Preserve partial results and errors.", mutating("Start stack", false, false), StartStackInput.validate,
+	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or the optional command_ids subset, through AgentShell. Supply transient parameters by command ID for every selected member and dependency that requires them. Selected members automatically include transitive dependencies. Dependents wait for each dependency's configured spawn, ready, or exit condition. If prerequisite stacks are not up enough, the tool returns needed_stacks and does not start this stack; pass start_prerequisites=true only after the user confirmed starting those stacks. Preserve partial results and errors.", mutating("Start stack", false, false), StartStackInput.validate,
 		func(ctx context.Context, input StartStackInput) (map[string]any, error) {
 			payload, err := objectPayload(input, "id")
 			if err != nil {
@@ -465,7 +465,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, stackPath(input.ID)+"/stop", nil, nil)
 		})
 
-	addTool(server, "restart_stack", "Restart stack", toolIntent+"Restart the running members and start stopped members of a saved stack, preserving partial and per-member outcomes.", mutating("Restart stack", true, false), StartStackInput.validate,
+	addTool(server, "restart_stack", "Restart stack", toolIntent+"Restart the running members and start stopped members of a saved stack, preserving partial and per-member outcomes. The same prerequisite gate as start_stack applies; do not pass start_prerequisites=true unless the user confirmed starting those stacks.", mutating("Restart stack", true, false), StartStackInput.validate,
 		func(ctx context.Context, input StartStackInput) (map[string]any, error) {
 			payload, err := objectPayload(input, "id", "command_ids")
 			if err != nil {
@@ -570,7 +570,7 @@ var projectFields = []string{"name", "root_path"}
 var collectionFields = []string{"project_id", "name", "parent_id", "sort_order"}
 
 var stackFields = []string{
-	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members",
+	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members", "depends_on_stacks",
 }
 
 func runtimePayload(input RunInput) (map[string]any, error) {

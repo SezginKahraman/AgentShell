@@ -9,7 +9,7 @@ import {
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
 import { classifiedLogLines, logLineClass, splitLogLines, stripAnsi } from './logs'
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember } from './types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, NeededStack, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember, StackPrerequisite } from './types'
 
 type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details' | 'Checks & Tests'
@@ -21,7 +21,11 @@ type Theme = 'light' | 'dark'
 type LogFilter = 'all' | 'errors'
 type CheckDetailView = 'request' | 'response' | 'edit'
 type ParameterRequest = { title: string; commands: SavedCommand[]; submit: (values: Record<string, Record<string, string>>) => void }
+type PrerequisiteRequest = { stack: Stack; action: 'start' | 'restart'; commandIDs?: string[]; parameters?: Record<string, Record<string, string>>; needed: NeededStack[]; confirm: () => void }
 type CheckDraft = { name: string; description: string; kind: 'http' | 'command'; commandID: string; method: NonNullable<CheckDefinition['http_method']>; url: string; scope: 'local' | 'remote'; headers: string; body: string; expectedStatus: string; bodyContains: string; timeoutMS: string; trigger: 'manual' | 'after_ready'; tags: string }
+
+const isPrerequisiteError = (error: unknown): error is Error & { status?: number; needed_stacks?: NeededStack[] } =>
+	error instanceof Error && (error as Error & { status?: number }).status === 409 && Array.isArray((error as Error & { needed_stacks?: NeededStack[] }).needed_stacks)
 
 const pagePaths: Record<Page, string> = {
 	dashboard: '/',
@@ -804,7 +808,7 @@ function CommandDrawer({ command, project, collection, checks, commands, api, cl
 	  </div><footer className="drawer-actions command-drawer-actions"><button className="button danger subtle" data-testid={`delete-command-${command.id}`} onClick={remove} disabled={busy || canStop} title={canStop ? 'Stop the launcher before deleting it' : `Delete ${command.name}`}><Trash2 /> Delete</button><span />{command.status === 'stopping' ? <button className="button danger" disabled><RefreshCw /> Stopping…</button> : canStop ? <><button className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop</button><button className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart</button></> : <button className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {command.kind === 'task' ? 'Run' : 'Start'}</button>}</footer></aside></>
 }
 
-function StackDrawer({ stack, commands, project, collection, checks, api, close, openMember, action, memberAction, runCheck, save, remove, busy, globalBusy, accepting, refresh, initialEditing = false }: { stack: Stack; commands: SavedCommand[]; project?: Project; collection?: Collection; checks: CheckDefinition[]; api: AgentShellApi; close: () => void; openMember: (id: string) => void; action: (a: 'start' | 'stop' | 'restart', commandIDs?: string[]) => void; memberAction: (command: SavedCommand, action: 'stop' | 'restart') => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; save: (input: Partial<Stack>) => void; remove: () => void; busy: boolean; globalBusy: string; accepting: boolean; refresh: () => Promise<void>; initialEditing?: boolean }) {
+function StackDrawer({ stack, stacks, commands, project, collection, checks, api, close, openMember, action, memberAction, runCheck, save, remove, busy, globalBusy, accepting, refresh, initialEditing = false }: { stack: Stack; stacks: Stack[]; commands: SavedCommand[]; project?: Project; collection?: Collection; checks: CheckDefinition[]; api: AgentShellApi; close: () => void; openMember: (id: string) => void; action: (a: 'start' | 'stop' | 'restart', commandIDs?: string[]) => void; memberAction: (command: SavedCommand, action: 'stop' | 'restart') => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; save: (input: Partial<Stack>) => void; remove: () => void; busy: boolean; globalBusy: string; accepting: boolean; refresh: () => Promise<void>; initialEditing?: boolean }) {
 	const members = (stack.members ?? stack.commands ?? []).slice().sort((left, right) => (left.position ?? 0) - (right.position ?? 0))
 	const normalized = () => members.map((member, position) => ({ ...member, position, depends_on: member.depends_on ?? [], wait_for: member.wait_for ?? 'spawn' as const, wait_timeout_ms: member.wait_timeout_ms ?? 30000 }))
 	const isActive = (member: (typeof members)[number]) => member.can_stop ?? running(member.status)
@@ -814,13 +818,14 @@ function StackDrawer({ stack, commands, project, collection, checks, api, close,
 	const [draft, setDraft] = useState(normalized)
 	const [strategy, setStrategy] = useState<NonNullable<Stack['start_strategy']>>(stack.start_strategy ?? 'parallel')
 	const [failurePolicy, setFailurePolicy] = useState<NonNullable<Stack['failure_policy']>>(stack.failure_policy ?? 'continue')
+	const [prereqs, setPrereqs] = useState<StackPrerequisite[]>(stack.depends_on_stacks ?? [])
 	const [memberRuns, setMemberRuns] = useState<Record<string, Run[]>>({})
 	const [logMemberID, setLogMemberID] = useState('')
 	const [logRunID, setLogRunID] = useState('')
 	const [logsLoading, setLogsLoading] = useState(false)
 	const [logsError, setLogsError] = useState('')
 	const memberRunSignature = members.map(member => `${member.command_id}:${member.active_run_id ?? ''}:${member.status ?? ''}`).join('|')
-	useEffect(() => { setSelectedIDs([]); setEditing(initialEditing); setViewTab('Overview'); setDraft(normalized()); setStrategy(stack.start_strategy ?? 'parallel'); setFailurePolicy(stack.failure_policy ?? 'continue'); setMemberRuns({}); setLogMemberID(''); setLogRunID('') }, [stack.id, initialEditing])
+	useEffect(() => { setSelectedIDs([]); setEditing(initialEditing); setViewTab('Overview'); setDraft(normalized()); setStrategy(stack.start_strategy ?? 'parallel'); setFailurePolicy(stack.failure_policy ?? 'continue'); setPrereqs(stack.depends_on_stacks ?? []); setMemberRuns({}); setLogMemberID(''); setLogRunID('') }, [stack.id, initialEditing])
 	useEffect(() => {
 		if (viewTab !== 'Logs') return
 		let cancelled = false
@@ -848,7 +853,7 @@ function StackDrawer({ stack, commands, project, collection, checks, api, close,
 	const toggleAll = () => setSelectedIDs(allSelected ? [] : available.map(member => member.command_id))
 	const hasActive = members.some(isActive)
 	const nameOf = (id: string) => members.find(member => member.command_id === id)?.name ?? commands.find(command => command.id === id)?.name ?? id
-	const beginEdit = () => { setDraft(normalized()); setStrategy(stack.start_strategy ?? 'parallel'); setFailurePolicy(stack.failure_policy ?? 'continue'); setEditing(true) }
+	const beginEdit = () => { setDraft(normalized()); setStrategy(stack.start_strategy ?? 'parallel'); setFailurePolicy(stack.failure_policy ?? 'continue'); setPrereqs(stack.depends_on_stacks ?? []); setEditing(true) }
 	const updateMember = (id: string, patch: Partial<(typeof draft)[number]>) => setDraft(current => current.map(member => member.command_id === id ? { ...member, ...patch } : member))
 	const moveMember = (index: number, direction: -1 | 1) => setDraft(current => {
 		const target = index + direction
@@ -863,8 +868,25 @@ function StackDrawer({ stack, commands, project, collection, checks, api, close,
 		const member = members.find(item => item.command_id === id)
 		setLogRunID(member?.active_run_id ?? memberRuns[id]?.[0]?.id ?? '')
 	}
+	const togglePrereq = (id: string) => setPrereqs(current => current.some(edge => edge.stack_id === id) ? current.filter(edge => edge.stack_id !== id) : [...current, { stack_id: id, wait_timeout_ms: 90000 }])
+	const updatePrereqTimeout = (id: string, wait_timeout_ms: number) => setPrereqs(current => current.map(edge => edge.stack_id === id ? { ...edge, wait_timeout_ms } : edge))
+	const blockedPrereqIDs = (() => {
+		const blocked = new Set<string>([stack.id])
+		const walk = (id: string) => {
+			stacks.forEach(candidate => {
+				if (!blocked.has(candidate.id) && candidate.depends_on_stacks?.some(edge => edge.stack_id === id)) {
+					blocked.add(candidate.id)
+					walk(candidate.id)
+				}
+			})
+		}
+		walk(stack.id)
+		return blocked
+	})()
+	const prereqOptions = stacks.filter(candidate => !blockedPrereqIDs.has(candidate.id))
+	const prereqName = (id: string) => stacks.find(candidate => candidate.id === id)?.name ?? id
 	const saveOrchestration = () => {
-		save({ start_strategy: strategy, failure_policy: failurePolicy, members: draft.map(({ command_id, position, depends_on, wait_for, wait_timeout_ms }) => ({ command_id, position, depends_on, wait_for, wait_timeout_ms })) })
+		save({ start_strategy: strategy, failure_policy: failurePolicy, members: draft.map(({ command_id, position, depends_on, wait_for, wait_timeout_ms }) => ({ command_id, position, depends_on, wait_for, wait_timeout_ms })), depends_on_stacks: prereqs })
 		setEditing(false)
 	}
 	const tabs: StackDetailTab[] = ['Overview', 'Logs', ...(checks.length ? ['Checks & Tests'] as StackDetailTab[] : [])]
@@ -873,6 +895,7 @@ function StackDrawer({ stack, commands, project, collection, checks, api, close,
 		{editing ? <div className="stack-orchestration" data-testid="stack-orchestration-editor">
 			<div className="orchestration-intro"><strong>Dependency orchestration</strong><span>Rows unlock only after their dependencies satisfy the configured condition. Stop runs in reverse dependency order.</span></div>
 			<div className="orchestration-options"><label>Start strategy<select aria-label="Stack start strategy" value={strategy} onChange={event => setStrategy(event.target.value as typeof strategy)}><option value="parallel">Parallel dependency waves</option><option value="sequential">Sequential, one at a time</option></select></label><label>On failure<select aria-label="Stack failure policy" value={failurePolicy} onChange={event => setFailurePolicy(event.target.value as typeof failurePolicy)}><option value="stop">Stop scheduling dependents</option><option value="continue">Continue independent branches</option></select></label></div>
+			<fieldset className="stack-prerequisites" data-testid="stack-prerequisites-editor"><legend>Prerequisite stacks</legend><span>These stacks must be up enough before any member of this stack starts. Stopping this stack never stops them.</span><div className="dependency-options">{prereqOptions.map(candidate => <label key={candidate.id}><input type="checkbox" data-testid={`stack-prereq-${candidate.id}`} checked={prereqs.some(edge => edge.stack_id === candidate.id)} onChange={() => togglePrereq(candidate.id)} /><span>{candidate.name}</span></label>)}{prereqOptions.length === 0 && <small>No other stacks available.</small>}</div>{prereqs.map(edge => <label key={edge.stack_id} className="prereq-timeout">Timeout for {prereqName(edge.stack_id)} (ms)<input aria-label={`${prereqName(edge.stack_id)} prerequisite timeout`} type="number" min="100" max="600000" step="100" value={edge.wait_timeout_ms ?? 90000} onChange={event => updatePrereqTimeout(edge.stack_id, Number(event.target.value))} /></label>)}</fieldset>
 			<div className="orchestration-flow">{draft.map((member, index) => {
 				const command = commands.find(item => item.id === member.command_id) ?? member.command
 				return <article className="orchestration-member" data-testid={`stack-member-config-${member.command_id}`} key={member.command_id}><header><span className="member-position">{index + 1}</span><div><strong>{member.name ?? command?.name ?? member.command_id}</strong><code>{command?.command ?? member.command_id}</code></div><div><IconButton label={`Move ${nameOf(member.command_id)} up`} onClick={() => moveMember(index, -1)} disabled={index === 0 || busy}><ChevronUp /></IconButton><IconButton label={`Move ${nameOf(member.command_id)} down`} onClick={() => moveMember(index, 1)} disabled={index === draft.length - 1 || busy}><ChevronDown /></IconButton></div></header><div className="member-condition"><label>Consider complete when<select aria-label={`${nameOf(member.command_id)} wait condition`} value={member.wait_for} onChange={event => updateMember(member.command_id, { wait_for: event.target.value as 'spawn' | 'ready' | 'exit' })}><option value="spawn">Process is spawned</option><option value="ready">Expected ports are ready</option><option value="exit">Command exits successfully</option></select></label><label>Timeout (ms)<input aria-label={`${nameOf(member.command_id)} wait timeout`} type="number" min="100" max="600000" step="100" value={member.wait_timeout_ms} onChange={event => updateMember(member.command_id, { wait_timeout_ms: Number(event.target.value) })} /></label></div><fieldset><legend>Starts after</legend><div className="dependency-options">{draft.filter(candidate => candidate.command_id !== member.command_id).map(candidate => <label key={candidate.command_id}><input type="checkbox" checked={member.depends_on?.includes(candidate.command_id) ?? false} onChange={() => toggleDependency(member.command_id, candidate.command_id)} /><span>{nameOf(candidate.command_id)}</span></label>)}{draft.length === 1 && <small>No other stack members.</small>}</div></fieldset></article>
@@ -884,6 +907,7 @@ function StackDrawer({ stack, commands, project, collection, checks, api, close,
 			{logsError ? <div className="detail-note"><strong>Logs unavailable</strong><span>{logsError}</span></div> : logMemberID && !logsLoading ? <RunLogPanel api={api} runs={memberRuns[logMemberID] ?? []} runID={logRunID} setRunID={setLogRunID} testId="stack-log-panel" /> : <Empty title="Loading member Runs" detail="Reading Run history and combined output." />}
 		</div> : <>
 			<Definition rows={[["Project", project?.name ?? "Global catalog"], ["Collection", collection?.name ?? "Project root"], ["Start strategy", stack.start_strategy ?? "parallel"], ["Failure policy", stack.failure_policy ?? "continue"], ["Members", `${stack.running_count ?? members.filter(isActive).length}/${stack.total_count ?? members.length} running`]]} />
+			{(stack.depends_on_stacks ?? []).length > 0 && <div className="stack-flow-summary" aria-label="Prerequisite stacks">{(stack.depends_on_stacks ?? []).map(edge => <div key={edge.stack_id} data-testid={`stack-prereq-summary-${edge.stack_id}`}><span>after</span><strong>{prereqName(edge.stack_id)}</strong><small>{Math.round((edge.wait_timeout_ms ?? 90000) / 1000)}s</small></div>)}</div>}
 			<div className="stack-flow-summary" aria-label="Stack dependency order">{members.map((member, index) => { const command = commands.find(item => item.id === member.command_id) ?? member.command; return <div key={member.command_id}><span>{index + 1}</span><strong>{nameOf(member.command_id)}</strong><small>{member.depends_on?.length ? `after ${member.depends_on.map(nameOf).join(', ')}` : 'root'} · wait {member.wait_for ?? 'spawn'} · {member.wait_timeout_ms ?? 30000} ms · {memberDisplayState(member, command)}{(member.lifecycle_mode ?? command?.lifecycle_mode) === 'external' ? ' external' : ''}</small></div> })}</div>
 			<div className="stack-member-heading"><div><h3>Choose members to start</h3><small>Dependencies are included automatically; running members stay untouched.</small></div><button className="text-button" onClick={toggleAll} disabled={!available.length}>{allSelected ? "Clear" : "Select available"}</button></div>
 			<div className="stack-member-picker">{members.map(member => {
@@ -948,6 +972,10 @@ function ShutdownDialog({ data, close, confirm, busy, mode }: { data: Snapshot; 
   return <><button className="modal-scrim" aria-label="Cancel shutdown" onClick={close} /><section className="modal" role="dialog" aria-modal="true" aria-labelledby="shutdown-title"><span className="modal-icon"><Power /></span><h2 id="shutdown-title">Stop AgentShell?</h2><p>{mode === 'demo' ? 'This stops only the isolated browser demo.' : 'The runtime will gracefully stop every process group it manages, then close the dashboard API.'}</p><div className="shutdown-impact"><div><strong>{activeRuns.length}</strong><span>active runs</span></div><div><strong>{data.ports.length}</strong><span>listening ports</span></div></div>{activeRuns.length > 0 && <ul>{activeRuns.slice(0, 5).map(run => <li key={run.id}><span>{run.label}{run.listeners?.length ? <em>{run.listeners.map(listener => `:${listener.port}`).join(' ')}</em> : null}</span><code>{run.command}</code></li>)}</ul>}<footer><button className="button" onClick={close} disabled={busy}>Cancel</button><button className="button danger" data-testid="confirm-shutdown" onClick={confirm} disabled={busy}><Power />{busy ? 'Stopping…' : 'Stop runtime and runs'}</button></footer></section></>
 }
 
+function StackPrerequisitesDialog({ request, close }: { request: PrerequisiteRequest; close: () => void }) {
+	return <><button className="modal-scrim" aria-label="Cancel prerequisite start" onClick={close} /><section className="modal" role="dialog" aria-modal="true" aria-labelledby="prereq-title" data-testid="stack-prerequisites-dialog"><span className="modal-icon"><Boxes /></span><h2 id="prereq-title">Start prerequisite stacks?</h2><p><strong>{request.stack.name}</strong> waits until these stacks are up enough. They will not be stopped later when this stack stops.</p><ul className="prereq-needed">{request.needed.map(item => <li key={item.id}><strong>{item.name}</strong><span>{item.up_count}/{item.total_count} up · {Math.round(item.wait_timeout_ms / 1000)}s</span></li>)}</ul><footer><button className="button" onClick={close}>Cancel</button><button className="button primary" data-testid="confirm-start-prerequisites" onClick={request.confirm}>Start them</button></footer></section></>
+}
+
 function DeleteSavedDialog({ target, close, confirm, busy }: { target: DeleteTarget; close: () => void; confirm: () => void; busy: boolean }) {
 	const command = target.type === 'command'
 	return <><button className="modal-scrim" aria-label="Cancel delete" onClick={close} /><section className="modal delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" data-testid="delete-saved-dialog"><span className="modal-icon"><Trash2 /></span><h2 id="delete-title">Delete {command ? 'launcher' : 'stack'}?</h2><p><strong>{target.item.name}</strong> will be removed from the saved catalog.</p><div className="delete-note">{command ? 'Previous Runs, logs, and History entries are retained. A launcher used by a stack cannot be deleted until it is removed from that stack.' : 'The launchers inside this stack are kept. Only the saved grouping is deleted.'}</div><footer><button className="button" onClick={close} disabled={busy}>Cancel</button><button className="button danger" data-testid="confirm-delete-saved" onClick={confirm} disabled={busy}><Trash2 />{busy ? 'Deleting…' : `Delete ${command ? 'launcher' : 'stack'}`}</button></footer></section></>
@@ -983,6 +1011,7 @@ export default function App() {
 	const [stackOpen, setStackOpen] = useState(false)
 	const [editStackID, setEditStackID] = useState('')
   const [parameterRequest, setParameterRequest] = useState<ParameterRequest | null>(null)
+  const [prereqRequest, setPrereqRequest] = useState<PrerequisiteRequest | null>(null)
   const shutdownPollFailures = useRef(0)
 	const setPage = useCallback((next: Page) => {
 		const target = pagePaths[next]
@@ -1060,7 +1089,24 @@ export default function App() {
   }
   const stackAction = (stack: Stack, action: 'start' | 'stop' | 'restart', commandIDs?: string[]) => {
     if (!api || (action !== 'stop' && !accepting)) return
-    const execute = (parameters?: Record<string, Record<string, string>>) => perform(stack.id, () => api.stackAction(stack.id, action, commandIDs, parameters))
+    const execute = (parameters?: Record<string, Record<string, string>>, startPrerequisites = false) => perform(stack.id, async () => {
+      try {
+        await api.stackAction(stack.id, action, commandIDs, parameters, startPrerequisites)
+      } catch (error) {
+        if (!startPrerequisites && action !== 'stop' && isPrerequisiteError(error)) {
+          setPrereqRequest({
+            stack,
+            action,
+            commandIDs,
+            parameters,
+            needed: error.needed_stacks ?? [],
+            confirm: () => { setPrereqRequest(null); execute(parameters, true) },
+          })
+          return
+        }
+        throw error
+      }
+    })
     if (action !== 'stop') {
       const parameterCommands = stackParameterCommands(stack, action, commandIDs)
       if (parameterCommands.length) {
@@ -1206,7 +1252,7 @@ export default function App() {
     </main>
     {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} checks={data.checks.filter(check => check.owner_type === 'run' && check.owner_id === selected.id)} commands={data.commands} api={api} action={a => runAction(selected, a)} runCheck={checkAction} busy={busy === selected.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
 	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} checks={data.checks.filter(check => check.owner_type === 'command' && check.owner_id === selectedCommand.id)} commands={data.commands} api={api} close={closeCommand} back={commandParentStack ? { label: commandParentStack.name, action: backToParentStack } : undefined} action={action => commandAction(selectedCommand, action)} runCheck={checkAction} remove={() => setDeleteTarget({ type: 'command', item: selectedCommand })} busy={busy === selectedCommand.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
-	{selectedStack && api && <StackDrawer stack={selectedStack} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} checks={data.checks.filter(check => check.owner_type === 'stack' && check.owner_id === selectedStack.id)} api={api} close={() => { setSelectedStackID(''); setEditStackID('') }} openMember={id => { const parentID = selectedStack.id; setSelectedStackID(''); setEditStackID(''); openCommand(id, parentID) }} action={(action, commandIDs) => stackAction(selectedStack, action, commandIDs)} memberAction={(command, action) => commandAction(command, action)} runCheck={checkAction} save={input => { saveStack(selectedStack, input); setEditStackID('') }} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} globalBusy={busy} accepting={accepting} refresh={reload} initialEditing={editStackID === selectedStack.id} />}
+	{selectedStack && api && <StackDrawer stack={selectedStack} stacks={data.stacks} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} checks={data.checks.filter(check => check.owner_type === 'stack' && check.owner_id === selectedStack.id)} api={api} close={() => { setSelectedStackID(''); setEditStackID('') }} openMember={id => { const parentID = selectedStack.id; setSelectedStackID(''); setEditStackID(''); openCommand(id, parentID) }} action={(action, commandIDs) => stackAction(selectedStack, action, commandIDs)} memberAction={(command, action) => commandAction(command, action)} runCheck={checkAction} save={input => { saveStack(selectedStack, input); setEditStackID('') }} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} globalBusy={busy} accepting={accepting} refresh={reload} initialEditing={editStackID === selectedStack.id} />}
     {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}
     {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === selectedProject)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
 	{stackOpen && <StackDialog commands={data.commands} projects={data.projects} collections={data.collections} close={() => setStackOpen(false)} submit={createStack} busy={busy === 'create-stack'} />}
@@ -1214,5 +1260,6 @@ export default function App() {
 	{shutdownOpen && api && <ShutdownDialog data={data} close={() => setShutdownOpen(false)} confirm={shutdown} busy={busy === 'runtime-shutdown'} mode={api.mode} />}
 	{deleteTarget && <DeleteSavedDialog target={deleteTarget} close={() => setDeleteTarget(null)} confirm={deleteSaved} busy={busy === deleteTarget.item.id} />}
     {parameterRequest && <ParameterDialog request={parameterRequest} close={() => setParameterRequest(null)} />}
+	{prereqRequest && <StackPrerequisitesDialog request={prereqRequest} close={() => setPrereqRequest(null)} />}
   </div>
 }

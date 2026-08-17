@@ -234,6 +234,17 @@ func TestStackPayloadPreservesDependencyOrchestration(t *testing.T) {
 	}
 }
 
+func TestStackPayloadPreservesPrerequisites(t *testing.T) {
+	payload, err := stackPayload(SaveStackInput{Name: "Hotel meta", CommandIDs: []string{"api"}, DependsOnStacks: []StackPrerequisiteInput{{StackID: "stack_infra", WaitTimeoutMS: 90000}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prereqs := payload["depends_on_stacks"].([]any)
+	if len(prereqs) != 1 || prereqs[0].(map[string]any)["stack_id"] != "stack_infra" {
+		t.Fatalf("depends_on_stacks = %#v", payload["depends_on_stacks"])
+	}
+}
+
 func TestDecodeObjectRejectsMultipleValues(t *testing.T) {
 	if _, err := decodeObject([]byte(`{} {}`)); err == nil || !strings.Contains(err.Error(), "multiple") {
 		t.Fatalf("error = %v", err)

@@ -252,6 +252,103 @@ func TestStackDependenciesRoundTripAndSelectedStartIncludesClosure(t *testing.T)
 	}
 }
 
+func TestStackPrerequisitesValidationAndStartGate(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	root := t.TempDir()
+	createCommand := func(name, command, kind string) string {
+		t.Helper()
+		var created map[string]any
+		body := map[string]any{"name": name, "command": command, "cwd": root, "kind": kind, "concurrency_policy": "allow"}
+		if kind == "service" {
+			body["concurrency_policy"] = "forbid"
+		}
+		if status := request(t, client, http.MethodPost, srv.URL+"/api/commands", body, &created); status != http.StatusCreated {
+			t.Fatalf("create %s status=%d body=%v", name, status, created)
+		}
+		return created["id"].(string)
+	}
+	createStack := func(name, commandID, waitFor string, prereqs []map[string]any) map[string]any {
+		t.Helper()
+		body := map[string]any{"name": name, "members": []map[string]any{{"command_id": commandID, "position": 0, "wait_for": waitFor, "wait_timeout_ms": 2000}}}
+		if prereqs != nil {
+			body["depends_on_stacks"] = prereqs
+		}
+		var created map[string]any
+		if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks", body, &created); status != http.StatusCreated {
+			t.Fatalf("create stack %s status=%d body=%v", name, status, created)
+		}
+		return created
+	}
+	infraID := createCommand("Infra", "sleep 30", "service")
+	appID := createCommand("App", "printf app", "task")
+	infra := createStack("Altyapi", infraID, "spawn", nil)
+	app := createStack("Hotel meta", appID, "exit", []map[string]any{{"stack_id": infra["id"], "wait_timeout_ms": 5000}})
+	if raw, _ := app["depends_on_stacks"].([]any); len(raw) != 1 {
+		t.Fatalf("saved prereqs=%v", app["depends_on_stacks"])
+	}
+	var listed []map[string]any
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/stacks", nil, &listed); status != 200 {
+		t.Fatalf("list status=%d", status)
+	}
+	found := false
+	for _, item := range listed {
+		if item["id"] == app["id"] {
+			found = true
+			if raw, _ := item["depends_on_stacks"].([]any); len(raw) != 1 {
+				t.Fatalf("list prereqs=%v", item["depends_on_stacks"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("created stack missing from list")
+	}
+	var failure map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks", map[string]any{"name": "Bad", "command_ids": []string{appID}, "depends_on_stacks": []map[string]any{{"stack_id": "missing"}}}, &failure); status != http.StatusBadRequest || !strings.Contains(fmtString(failure["error"]), "unknown") {
+		t.Fatalf("unknown prereq status=%d body=%v", status, failure)
+	}
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/stacks/"+app["id"].(string), map[string]any{"depends_on_stacks": []map[string]any{{"stack_id": app["id"]}}}, &failure); status != http.StatusBadRequest || !strings.Contains(fmtString(failure["error"]), "itself") {
+		t.Fatalf("self prereq status=%d body=%v", status, failure)
+	}
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/stacks/"+infra["id"].(string), map[string]any{"depends_on_stacks": []map[string]any{{"stack_id": app["id"]}}}, &failure); status != http.StatusBadRequest || !strings.Contains(fmtString(failure["error"]), "cycle") {
+		t.Fatalf("cycle prereq status=%d body=%v", status, failure)
+	}
+	otherRoot := t.TempDir()
+	var otherProject map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/projects", map[string]any{"name": "Other", "root_path": otherRoot}, &otherProject); status != http.StatusCreated {
+		t.Fatalf("project status=%d body=%v", status, otherProject)
+	}
+	var otherCommand map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/commands", map[string]any{"name": "Shared infra", "command": "true", "cwd": otherRoot, "kind": "task", "project_id": otherProject["id"]}, &otherCommand); status != http.StatusCreated {
+		t.Fatalf("cross command status=%d body=%v", status, otherCommand)
+	}
+	var otherStack map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks", map[string]any{"name": "Shared docker", "project_id": otherProject["id"], "command_ids": []string{otherCommand["id"].(string)}, "depends_on_stacks": []map[string]any{{"stack_id": infra["id"]}}}, &otherStack); status != http.StatusCreated {
+		t.Fatalf("cross-project stack status=%d body=%v", status, otherStack)
+	}
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+app["id"].(string)+"/start", nil, &failure); status != http.StatusConflict {
+		t.Fatalf("unconfirmed start status=%d body=%v", status, failure)
+	}
+	needed, _ := failure["needed_stacks"].([]any)
+	if len(needed) != 1 || needed[0].(map[string]any)["id"] != infra["id"] {
+		t.Fatalf("needed_stacks=%v", failure["needed_stacks"])
+	}
+	var runs []domain.Run
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+app["id"].(string)+"/start", map[string]any{"start_prerequisites": true}, &runs); status != http.StatusCreated || len(runs) != 1 {
+		t.Fatalf("confirmed start status=%d runs=%+v", status, runs)
+	}
+	var stopped []domain.Run
+	request(t, client, http.MethodPost, srv.URL+"/api/stacks/"+infra["id"].(string)+"/stop", nil, &stopped)
+}
+
+func fmtString(v any) string {
+	if v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
+
 func TestSummaryAndOriginGuard(t *testing.T) {
 	srv, _ := testServer(t)
 	var summary map[string]int

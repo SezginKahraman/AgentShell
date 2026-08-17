@@ -22,6 +22,16 @@ describe('DemoApi', () => {
     expect(stack.running_count).toBe(stack.total_count)
   })
 
+  it('asks before starting prerequisite stacks', async () => {
+    const api = new DemoApi()
+    await api.stackAction('stack-external', 'stop')
+    await expect(api.stackAction('stack-internal', 'start')).rejects.toMatchObject({ status: 409 })
+    await api.stackAction('stack-internal', 'start', undefined, undefined, true)
+    const snapshot = await api.getSnapshot()
+    expect(snapshot.stacks.find(stack => stack.id === 'stack-external')?.status).toBe('running')
+    expect(snapshot.stacks.find(stack => stack.id === 'stack-internal')?.status).toBe('running')
+  })
+
   it('uses copyable non-http addresses and provides log content', async () => {
     const snapshot = await apiSnapshot()
     expect(snapshot.ports.some(port => port.port === 5432 && port.protocol === 'tcp')).toBe(true)
