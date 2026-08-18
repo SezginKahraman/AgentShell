@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { classifiedLogLines } from './logs'
+import { classifiedLogLines, displayedLogText } from './logs'
 
 const severity = (content: string, stderr = '') => classifiedLogLines(content, stderr).map(line => line.severity)
 
@@ -42,5 +42,14 @@ describe('classifiedLogLines', () => {
     expect(severity('time=now level=info msg=ready\n')).toEqual([null])
     expect(severity('2026-08-17 12:00:00 +0000 [warn]: buffer overflow\n')).toEqual(['warn'])
     expect(severity('[error] panic recovered\n')).toEqual(['error'])
+  })
+})
+
+describe('displayedLogText', () => {
+  test('joins visible lines and keeps only errors when filtered', () => {
+    const stdout = 'connected to database\n'
+    const stderr = '[19:42:14] ERROR build failed: module not found\n'
+    expect(displayedLogText(stdout + stderr, stderr, 'all')).toBe('connected to database\n[19:42:14] ERROR build failed: module not found')
+    expect(displayedLogText(stdout + stderr, stderr, 'errors')).toBe('[19:42:14] ERROR build failed: module not found')
   })
 })

@@ -1,4 +1,5 @@
 export type LogSeverity = 'error' | 'warn' | null
+export type LogFilter = 'all' | 'errors'
 
 export const stripAnsi = (line: string) => line.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
 const explicitError = /(?:^|\b)(?:error|err|fatal|panic|failed|failure|exception|critical|traceback)(?:\b|:)/i
@@ -66,3 +67,9 @@ export const classifiedLogLines = (content: string, stderr: string) => {
 }
 
 export const logLineClass = (severity: LogSeverity) => severity === 'error' ? 'log-line log-line-error' : severity === 'warn' ? 'log-line log-line-warn' : 'log-line'
+
+export const displayedLogText = (content: string, stderr: string, filter: LogFilter) => {
+  const lines = classifiedLogLines(content, stderr)
+  const visible = filter === 'errors' ? lines.filter((entry) => entry.error) : lines
+  return visible.map((entry) => stripAnsi(entry.line)).join('\n')
+}
