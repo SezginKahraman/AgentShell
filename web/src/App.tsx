@@ -4,15 +4,17 @@ import {
   ExternalLink, FileTerminal, Gauge, History, LayoutDashboard, ListChecks, Menu, Moon,
   Minus, Network, Play, Plus, RefreshCw, RotateCcw, Search, Server, Settings, Sparkles, Square,
   Power, Star, Terminal, Unplug, X, Zap, FolderKanban, FolderOpen, BookmarkPlus, ScrollText,
-  Layers3, Check, Tag, Save, ArrowLeft, ArrowRight, Globe2, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Sun,
+  Layers3, Check, Tag, Save, ArrowLeft, ArrowRight, Globe2, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Sun, TestTube2,
 } from 'lucide-react'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
 import { classifiedLogLines, displayedLogText, logLineClass, splitLogLines, stripAnsi } from './logs'
 import type { LogFilter } from './logs'
+import { checkOwnerExists, checkOwnerLabel, checkTargetText, filterChecks } from './checkCatalog'
+import type { CheckKindFilter, CheckOwnerFilter } from './checkCatalog'
 import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, ExpectedPort, Listener, NeededStack, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember, StackPrerequisite } from './types'
 
-type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'stacks' | 'settings'
+type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'tests' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details' | 'Checks & Tests'
 type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script' | 'Checks & Tests'
 type StackDetailTab = 'Overview' | 'Logs' | 'Checks & Tests'
@@ -36,6 +38,7 @@ const pagePaths: Record<Page, string> = {
 	projects: '/projects',
 	services: '/services',
 	tasks: '/tasks',
+	tests: '/tests',
 	stacks: '/stacks',
 	settings: '/settings',
 }
@@ -111,7 +114,7 @@ function IconButton({ label, children, onClick, danger, disabled, testId, presse
   return <button data-testid={testId} className={`icon-button ${danger ? 'danger' : ''} ${className}`.trim()} aria-label={label} aria-pressed={pressed} title={label} onClick={onClick} disabled={disabled}>{children}</button>
 }
 
-function CopyButton({ text, label = 'Copy', testId, compact }: { text: string; label?: string; testId?: string; compact?: boolean }) {
+function CopyButton({ text, label = 'Copy', testId, compact, named }: { text: string; label?: string; testId?: string; compact?: boolean; named?: boolean }) {
   const [copied, setCopied] = useState(false)
   useEffect(() => { setCopied(false) }, [text])
   useEffect(() => {
@@ -119,18 +122,31 @@ function CopyButton({ text, label = 'Copy', testId, compact }: { text: string; l
     const timer = window.setTimeout(() => setCopied(false), 1400)
     return () => window.clearTimeout(timer)
   }, [copied])
-  return <IconButton className={`${copied ? 'copied' : ''} ${compact ? 'copy-compact' : ''}`.trim()} label={copied ? 'Copied' : label} testId={testId} disabled={!text} onClick={event => {
+  const caption = copied ? 'Copied' : label
+  const copy = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
     if (!text) return
     void navigator.clipboard?.writeText(text).then(() => setCopied(true)).catch(() => undefined)
-  }}>{copied ? <Check /> : <Copy />}</IconButton>
+  }
+  if (named) {
+    return <button type="button" data-testid={testId} className={`button small copy-named ${copied ? 'copied' : ''}`} aria-label={caption} title={caption} disabled={!text} onClick={copy}>{copied ? <Check /> : <Copy />}{copied ? 'Copied' : 'Copy'}</button>
+  }
+  return <IconButton className={`${copied ? 'copied' : ''} ${compact ? 'copy-compact' : ''}`.trim()} label={caption} testId={testId} disabled={!text} onClick={copy}>{copied ? <Check /> : <Copy />}</IconButton>
+}
+
+function OutputPreviewBlock({ content, state, testId, onOpen }: { content: string; state: 'loading' | 'ready' | 'empty' | 'error'; testId: string; onOpen: () => void }) {
+  const body = state === 'loading' ? 'Loading latest output…' : state === 'ready' ? content : state === 'error' ? 'Latest output could not be loaded.' : 'This Run produced no output.'
+  return <div className="output-preview-block">
+    <button type="button" className="output-preview" data-testid={testId} onClick={onOpen}><code>{body}</code></button>
+    <div className="output-preview-bar"><button type="button" className="output-preview-open" onClick={onOpen}><ScrollText /> View full logs</button><CopyButton named text={state === 'ready' ? content : ''} label="Copy output" testId={`copy-${testId}`} /></div>
+  </div>
 }
 
 function Sidebar({ page, setPage, open, close, runtime, mode }: { page: Page; setPage: (p: Page) => void; open: boolean; close: () => void; runtime?: RuntimeInfo; mode: AgentShellApi['mode'] }) {
   const groups: { label: string; links: [Page, string, React.ReactNode][] }[] = [
     { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['logs', 'Logs', <ScrollText />], ['history', 'History', <History />]] },
     { label: 'Workspace', links: [['projects', 'Projects', <FolderKanban />]] },
-    { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['stacks', 'Stacks', <Boxes />]] },
+    { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['tests', 'Tests', <TestTube2 />], ['stacks', 'Stacks', <Boxes />]] },
   ]
   return <>
     {open && <button className="sidebar-scrim" aria-label="Close navigation" onClick={close} />}
@@ -342,7 +358,7 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
     {!entries.length ? <div className="logs-empty"><Empty title="No open port logs" detail="Start a service with a listening port to follow its shell output here." /></div> : !visibleEntries.length ? <div className="logs-empty"><Empty title="No ports in this scope" detail="Choose another project or collection." /></div> : <>
       <div className="port-log-tabs" role="tablist" aria-label="Open port logs">{visibleEntries.map(entry => <button key={entry.key} role="tab" aria-selected={selected?.key === entry.key} className={selected?.key === entry.key ? 'active' : ''} onClick={() => setSelectedKey(entry.key)}><span className="live-dot" /><strong>:{entry.port.port}</strong><span>{entry.port.name ?? entry.run.label}</span><small>{entry.projectName} · {entry.collectionName}</small></button>)}</div>
       {selected && <div className="terminal-shell">
-        <header><div className="terminal-title"><span className="terminal-lights"><i /><i /><i /></span><div><strong>{selected.run.label}</strong><small>{selected.projectName} / {selected.collectionName} / :{selected.port.port}</small></div></div><div className="terminal-actions"><LogFilterControls value={logFilter} setValue={setLogFilter} errors={classifiedLogLines(content, stderr).filter(line => line.error).length} /><label><input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> Follow output</label><button className={`button small ${live ? 'live-active' : ''}`} onClick={() => setLive(value => !value)}><Activity /> {live ? 'Live' : 'Paused'}</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton><CopyButton text={!loading && !logError && content ? displayedLogText(content, stderr, logFilter) : ''} label="Copy logs" testId="copy-logs-live-log-terminal" /></div></header>
+        <header><div className="terminal-title"><span className="terminal-lights"><i /><i /><i /></span><div><strong>{selected.run.label}</strong><small>{selected.projectName} / {selected.collectionName} / :{selected.port.port}</small></div></div><div className="terminal-actions"><LogFilterControls value={logFilter} setValue={setLogFilter} errors={classifiedLogLines(content, stderr).filter(line => line.error).length} /><label><input type="checkbox" checked={follow} onChange={event => setFollow(event.target.checked)} /> Follow output</label><button className={`button small ${live ? 'live-active' : ''}`} onClick={() => setLive(value => !value)}><Activity /> {live ? 'Live' : 'Paused'}</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton><CopyButton named text={!loading && !logError && content ? displayedLogText(content, stderr, logFilter) : ''} label="Copy logs" testId="copy-logs-live-log-terminal" /></div></header>
         {loading ? <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ attaching to combined stdout/stderr…</pre> : logError ? <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ log stream error: {logError}</pre> : content ? <LogOutput content={content} stderr={stderr} filter={logFilter} elementRef={terminal} className="live-terminal" testId="live-log-terminal" /> : <pre ref={terminal} className="live-terminal" data-testid="live-log-terminal">$ connected — waiting for process output…</pre>}
         <footer><span className="copyable-value"><code>$ {selected.run.command}</code><CopyButton text={selected.run.command} label="Copy command" testId="copy-live-command" compact /></span><span>{updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : 'Connecting…'} · Errors includes unmatched stderr and explicit error severity · last 300 lines</span></footer>
       </div>}
@@ -656,17 +672,17 @@ function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false
   return <div className="drawer-log-panel">
     <div className="drawer-log-toolbar">
       {!hideRunSelect && <label className="run-log-select">Run<select value={runID} onChange={event => setRunID(event.target.value)}><option value="">Select a Run</option>{runs.map(run => <option key={run.id} value={run.id}>{new Date(run.created_at ?? run.started_at ?? Date.now()).toLocaleString()} · {run.lifecycle_action ?? 'run'} · {run.status}</option>)}</select></label>}
-      <div className="drawer-log-controls"><span className={live ? 'log-live' : 'log-saved'}><i />{live ? 'Live' : 'Saved output'}</span><button className="button small" aria-pressed={follow} onClick={() => setFollow(value => !value)}><ArrowRight /> Follow</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton><CopyButton text={content && content !== 'Select a Run to inspect its combined output.' && !content.startsWith('Unable to load logs:') ? displayedLogText(content, stderr, logFilter) : ''} label="Copy logs" testId={`copy-logs-${testId}`} /></div>
+      <div className="drawer-log-controls"><span className={live ? 'log-live' : 'log-saved'}><i />{live ? 'Live' : 'Saved output'}</span><button className="button small" aria-pressed={follow} onClick={() => setFollow(value => !value)}><ArrowRight /> Follow</button><IconButton label="Refresh logs" onClick={() => setRefreshToken(value => value + 1)}><RefreshCw /></IconButton><CopyButton named text={content && content !== 'Select a Run to inspect its combined output.' && !content.startsWith('Unable to load logs:') ? displayedLogText(content, stderr, logFilter) : ''} label="Copy logs" testId={`copy-logs-${testId}`} /></div>
     </div>
     <LogFilterControls value={logFilter} setValue={setLogFilter} errors={errorCount} />
     {loading && !content ? <pre ref={terminal} className="log-view" data-testid={testId}>Loading logs…</pre> : content ? <LogOutput content={content} stderr={stderr} filter={logFilter} elementRef={terminal} testId={testId} /> : <pre ref={terminal} className="log-view" data-testid={testId}>This Run produced no output.</pre>}
   </div>
 }
 
-function ChecksPanel({ checks, commands, api, run, busy, accepting, refresh, onEmpty }: { checks: CheckDefinition[]; commands: SavedCommand[]; api: AgentShellApi; run: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; busy: string; accepting: boolean; refresh: () => Promise<void>; onEmpty: () => void }) {
+function ChecksPanel({ checks, commands, api, run, busy, accepting, refresh, onEmpty, hideList = false, initialView = 'request' }: { checks: CheckDefinition[]; commands: SavedCommand[]; api: AgentShellApi; run: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; busy: string; accepting: boolean; refresh: () => Promise<void>; onEmpty: () => void; hideList?: boolean; initialView?: CheckDetailView }) {
 	const [selectedID, setSelectedID] = useState(checks[0]?.id ?? '')
 	const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
-	const [detailView, setDetailView] = useState<CheckDetailView>('request')
+	const [detailView, setDetailView] = useState<CheckDetailView>(initialView)
 	const [runs, setRuns] = useState<Record<string, Run[]>>({})
 	const [runID, setRunID] = useState('')
 	const [error, setError] = useState('')
@@ -681,7 +697,8 @@ function ChecksPanel({ checks, commands, api, run, busy, accepting, refresh, onE
 		setDraft(checkDraft(selected))
 		setDraftError('')
 		setDeleteConfirm(false)
-	}, [selected?.id])
+		setDetailView(initialView)
+	}, [selected?.id, initialView])
 	useEffect(() => {
 		if (!selected) return
 		let cancelled = false
@@ -749,17 +766,17 @@ function ChecksPanel({ checks, commands, api, run, busy, accepting, refresh, onE
 		['Trigger', selected.trigger === 'after_ready' ? 'Automatically after stack readiness' : 'Manual only'],
 	]
 	return <div className="checks-panel" data-testid="checks-tests-panel">
-		<div className="checks-intro"><div><h3>Checks &amp; Tests</h3><p>Selecting a test only shows its definition. A request or task runs only when you press Run.</p></div><div className="checks-intro-actions"><span>{checks.length} attached</span><IconButton testId="toggle-all-checks" label={allCollapsed ? 'Expand all tests' : 'Collapse all tests'} pressed={!allCollapsed} onClick={toggleAll}>{allCollapsed ? <Plus /> : <Minus />}</IconButton></div></div>
+		{!hideList && <><div className="checks-intro"><div><h3>Checks &amp; Tests</h3><p>Selecting a test only shows its definition. A request or task runs only when you press Run.</p></div><div className="checks-intro-actions"><span>{checks.length} attached</span><IconButton testId="toggle-all-checks" label={allCollapsed ? 'Expand all tests' : 'Collapse all tests'} pressed={!allCollapsed} onClick={toggleAll}>{allCollapsed ? <Plus /> : <Minus />}</IconButton></div></div>
 		<div className="check-cards">{checks.map(check => {
 			const command = commands.find(item => item.id === check.command_id)
 			const active = running(check.last_run?.status)
 			const knownRuns = check.run_count ?? runs[check.id]?.length ?? (check.last_run ? 1 : 0)
 			const closed = collapsed.has(check.id)
-			return <article key={check.id} className={`${selected.id === check.id ? 'selected' : ''} ${closed ? 'collapsed' : ''}`} data-testid={`check-card-${check.id}`}>
-				<header><button type="button" className="check-card-select" data-testid={`select-check-${check.id}`} onClick={() => selectCheck(check)}><span className={`check-kind check-kind-${check.kind}`}>{check.kind === 'http' ? (check.http_method ?? 'GET') : 'TASK'}</span><span><strong>{check.name}</strong><Status value={check.last_run?.status ?? 'unknown'} /></span><span className="check-badges">{check.kind === 'http' && <em className={`check-scope check-scope-${check.http_scope ?? 'local'}`}>{check.http_scope === 'remote' ? 'Remote' : 'Local'}</em>}{check.trigger === 'after_ready' && <em>after ready</em>}</span></button><IconButton testId={`toggle-check-${check.id}`} label={`${closed ? 'Expand' : 'Collapse'} ${check.name}`} pressed={!closed} onClick={() => toggle(check.id)}>{closed ? <Plus /> : <Minus />}</IconButton></header>
-				{!closed && <div className="check-card-body">{check.description && <p>{check.description}</p>}<code title={check.kind === 'http' ? check.http_url : command?.command}>{check.kind === 'http' ? check.http_url : command ? `${command.name} · ${command.command}` : 'Missing task launcher'}</code><footer><small>{knownRuns} Run{knownRuns === 1 ? '' : 's'}{check.last_run?.started_at ? ` · last ${new Date(check.last_run.started_at).toLocaleString()}` : ''}</small><div>{knownRuns > 0 ? <button type="button" className="button small" onClick={() => selectCheck(check, 'response')}><ScrollText /> Response</button> : null}<button type="button" className="button primary small" data-testid={`run-check-${check.id}`} onClick={() => execute(check)} disabled={busy === check.id || active || !accepting}><Play /> {busy === check.id || active ? 'Running…' : 'Run'}</button></div></footer></div>}
+			return <article key={check.id} className={`${selected.id === check.id ? 'selected' : ''} ${closed ? 'collapsed' : ''}`} data-testid={`check-card-${check.id}`} tabIndex={0} onClick={() => selectCheck(check)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectCheck(check) } }}>
+				<header><div className="check-card-select" data-testid={`select-check-${check.id}`}><span className={`check-kind check-kind-${check.kind}`}>{check.kind === 'http' ? (check.http_method ?? 'GET') : 'TASK'}</span><span><strong>{check.name}</strong><Status value={check.last_run?.status ?? 'unknown'} /></span><span className="check-badges">{check.kind === 'http' && <em className={`check-scope check-scope-${check.http_scope ?? 'local'}`}>{check.http_scope === 'remote' ? 'Remote' : 'Local'}</em>}{check.trigger === 'after_ready' && <em>after ready</em>}</span></div><span onClick={event => event.stopPropagation()}><IconButton testId={`toggle-check-${check.id}`} label={`${closed ? 'Expand' : 'Collapse'} ${check.name}`} pressed={!closed} onClick={() => toggle(check.id)}>{closed ? <Plus /> : <Minus />}</IconButton></span></header>
+				{!closed && <div className="check-card-body">{check.description && <p>{check.description}</p>}<code title={check.kind === 'http' ? check.http_url : command?.command}>{check.kind === 'http' ? check.http_url : command ? `${command.name} · ${command.command}` : 'Missing task launcher'}</code><footer><small>{knownRuns} Run{knownRuns === 1 ? '' : 's'}{check.last_run?.started_at ? ` · last ${new Date(check.last_run.started_at).toLocaleString()}` : ''}</small><div onClick={event => event.stopPropagation()}>{knownRuns > 0 ? <button type="button" className="button small" onClick={() => selectCheck(check, 'response')}><ScrollText /> Response</button> : null}<button type="button" className="button primary small" data-testid={`run-check-${check.id}`} onClick={() => execute(check)} disabled={busy === check.id || active || !accepting}><Play /> {busy === check.id || active ? 'Running…' : 'Run'}</button></div></footer></div>}
 			</article>
-		})}</div>
+		})}</div></>}
 		<section className="check-detail" data-testid="check-detail-panel"><header className="check-detail-head"><div><strong>{selected.name}</strong><span>{selected.kind === 'http' ? `${selected.http_method ?? 'GET'} · ${selected.http_scope === 'remote' ? 'Remote HTTP' : 'Local HTTP'}` : 'Saved task check'}</span></div><div className="check-detail-tabs" role="tablist"><button type="button" role="tab" data-testid="check-request-tab" aria-selected={detailView === 'request'} className={detailView === 'request' ? 'active' : ''} onClick={() => setDetailView('request')}>Request</button><button type="button" role="tab" data-testid="check-response-tab" aria-selected={detailView === 'response'} className={detailView === 'response' ? 'active' : ''} onClick={() => setDetailView('response')}>Response</button><button type="button" role="tab" data-testid="check-edit-tab" aria-selected={detailView === 'edit'} className={detailView === 'edit' ? 'active' : ''} onClick={() => { setDraftError(''); setDetailView('edit') }}>Edit</button></div></header>
 			{detailView === 'request' ? <div className="check-request"><div className="check-request-note"><Check /> Inspecting this definition does not send a request or start a task.</div><Definition rows={requestRows} />{!!selected.tags?.length && <div className="chips">{selected.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}<button type="button" className="button primary" data-testid={`run-selected-check-${selected.id}`} onClick={() => execute(selected)} disabled={busy === selected.id || running(selected.last_run?.status) || !accepting}><Play /> {busy === selected.id || running(selected.last_run?.status) ? 'Running…' : 'Run now'}</button></div> : detailView === 'response' ? <div className="check-response">{error ? <div className="detail-note"><strong>Response unavailable</strong><span>{error}</span></div> : <RunLogPanel api={api} runs={history} runID={runID} setRunID={setRunID} testId="check-log-panel" emptyDetail="Review the request, then press Run to capture its response, assertions, stdout and stderr here." />}</div> : <form className="check-editor" data-testid="check-editor" onSubmit={event => event.preventDefault()}>
 				<div className="check-editor-note"><strong>Temporary draft</strong><span>Typing here never changes or runs the saved default. Run this draft once, reset it, or save it as a new test.</span></div>
@@ -772,6 +789,42 @@ function ChecksPanel({ checks, commands, api, run, busy, accepting, refresh, onE
 			</form>}
 		</section>
 	</div>
+}
+
+function TestsPage({ data, query, busy, accepting, run, open, openOwner }: { data: Snapshot; query: string; busy: string; accepting: boolean; run: (check: CheckDefinition) => void; open: (check: CheckDefinition, view?: CheckDetailView) => void; openOwner: (check: CheckDefinition) => void }) {
+	const [search, setSearch] = useState('')
+	const [kind, setKind] = useState<CheckKindFilter>('all')
+	const [owner, setOwner] = useState<CheckOwnerFilter>('all')
+	const catalog = { stacks: data.stacks, commands: data.commands, runs: [...data.runs, ...data.history.filter(run => !data.runs.some(item => item.id === run.id))] }
+	const visible = filterChecks(data.checks, { query: search.trim() || query, kind, owner }, catalog)
+	const kinds: [CheckKindFilter, string][] = [['all', 'All kinds'], ['http', 'HTTP'], ['command', 'Task']]
+	const owners: [CheckOwnerFilter, string][] = [['all', 'All owners'], ['stack', 'Stacks'], ['command', 'Launchers'], ['run', 'Runs']]
+	return <section className="tests-workspace" data-testid="tests-page">
+		<div className="tests-toolbar">
+			<label className="search tests-search"><Search /><input data-testid="tests-search" aria-label="Search tests" placeholder="Search tests…" value={search} onChange={event => setSearch(event.target.value)} /></label>
+			<div className="collection-filter" role="tablist" aria-label="Test kinds">{kinds.map(([id, label]) => <button key={id} type="button" data-testid={`tests-filter-kind-${id}`} role="tab" aria-selected={kind === id} className={kind === id ? 'active' : ''} onClick={() => setKind(id)}>{label}</button>)}</div>
+			<div className="collection-filter" role="tablist" aria-label="Test owners">{owners.map(([id, label]) => <button key={id} type="button" data-testid={`tests-filter-owner-${id}`} role="tab" aria-selected={owner === id} className={owner === id ? 'active' : ''} onClick={() => setOwner(id)}>{label}</button>)}</div>
+		</div>
+		{!data.checks.length ? <Empty title="No saved tests" detail="Attach HTTP or task checks to a stack, launcher, or Run, then they appear here." /> : !visible.length ? <Empty title="No matching tests" detail="Clear search or choose another kind and owner filter." /> : <div className="catalog-grid">{visible.map(check => {
+			const ownerInfo = checkOwnerLabel(check, catalog)
+			const target = checkTargetText(check, data.commands)
+			const knownRuns = check.run_count ?? (check.last_run ? 1 : 0)
+			const active = running(check.last_run?.status)
+			const exists = checkOwnerExists(check, catalog)
+			return <article key={check.id} className="catalog-card interactive test-card" tabIndex={0} data-testid={`test-card-${check.id}`} onClick={() => open(check)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); open(check) } }}>
+				<div className="catalog-top"><span className={`check-kind check-kind-${check.kind}`}>{check.kind === 'http' ? (check.http_method ?? 'GET') : 'TASK'}</span><div><h3>{check.name}</h3><Status value={check.last_run?.status ?? 'unknown'} /></div></div>
+				{check.description && <p className="catalog-description">{check.description}</p>}
+				<code title={target}>{target}</code>
+				<button type="button" className="test-owner-link" data-testid={`open-test-owner-${check.id}`} disabled={!exists} onClick={event => { event.stopPropagation(); openOwner(check) }}>{ownerInfo.kind} · {ownerInfo.name}</button>
+				<div className="chips">{check.kind === 'http' && <span>{check.http_scope === 'remote' ? 'Remote' : 'Local'}</span>}{check.trigger === 'after_ready' && <span>after ready</span>}{check.tags?.map(tag => <span key={tag}>{tag}</span>)}</div>
+				<footer onClick={event => event.stopPropagation()}><small>{knownRuns} Run{knownRuns === 1 ? '' : 's'}{check.last_run?.started_at ? ` · last ${new Date(check.last_run.started_at).toLocaleString()}` : ''}</small><div>{knownRuns > 0 ? <button type="button" className="button small" onClick={() => open(check, 'response')}><ScrollText /> Response</button> : null}<button type="button" className="button primary small" data-testid={`run-test-${check.id}`} onClick={() => { open(check, 'response'); run(check) }} disabled={busy === check.id || active || !accepting}><Play /> {busy === check.id || active ? 'Running…' : 'Run'}</button></div></footer>
+			</article>
+		})}</div>}
+	</section>
+}
+
+function TestDrawer({ check, commands, api, close, openOwner, runCheck, busy, accepting, refresh, initialView }: { check: CheckDefinition; commands: SavedCommand[]; api: AgentShellApi; close: () => void; openOwner: () => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; busy: string; accepting: boolean; refresh: () => Promise<void>; initialView: CheckDetailView }) {
+	return <><button className="drawer-scrim" aria-label="Close test details" onClick={close} /><aside className="drawer command-drawer" data-testid="test-detail-drawer" aria-label={`${check.name} test details`}><header className="drawer-head"><div className="drawer-heading-copy"><h2>{check.name}</h2><span className="drawer-lifecycle-state"><Status value={check.last_run?.status ?? 'unknown'} /><em className="external-badge">{check.kind === 'http' ? 'HTTP' : 'Task'}</em></span></div><div className="drawer-head-actions"><button type="button" className="button small" data-testid="open-test-owner" onClick={openOwner}>Open {check.owner_type}</button><IconButton label="Close test details" onClick={close}><X /></IconButton></div></header><div className="drawer-body"><ChecksPanel checks={[check]} commands={commands} api={api} run={runCheck} busy={busy} accepting={accepting} refresh={refresh} onEmpty={close} hideList initialView={initialView} /></div></aside></>
 }
 
 function CommandDrawer({ command, project, collection, checks, commands, api, close, back, action, runCheck, remove, busy, globalBusy, accepting, refresh }: { command: SavedCommand; project?: Project; collection?: Collection; checks: CheckDefinition[]; commands: SavedCommand[]; api: AgentShellApi; close: () => void; back?: { label: string; action: () => void }; action: (a: 'start' | 'stop' | 'restart') => void; runCheck: (check: CheckDefinition, draft?: Partial<CheckInput>) => void; remove: () => void; busy: boolean; globalBusy: string; accepting: boolean; refresh: () => Promise<void> }) {
@@ -815,7 +868,7 @@ function CommandDrawer({ command, project, collection, checks, commands, api, cl
 	if (command.lifecycle_mode === 'external') overviewRows.push(['Observed state', commandDisplayState(command)], ['State confidence', command.state_confidence ?? 'unknown'])
 	overviewRows.push(['Directory', command.cwd], ['Project', project?.name ?? 'Global catalog'], ['Collection', collection?.name ?? 'Project root'], ['Kind', command.kind], ['Lifecycle', command.lifecycle_mode ?? 'managed'], ['Shell', command.shell || '/bin/sh'], ['Concurrency', command.concurrency_policy ?? 'forbid'], ['Previous Runs', String(command.run_count ?? runs.length)])
 	return <><button className="drawer-scrim" aria-label="Close launcher details" onClick={close} /><aside className="drawer command-drawer" data-testid="command-detail-drawer" aria-label={`${command.name} launcher details`}><header className="drawer-head"><div className="drawer-heading-copy">{back && <button className="drawer-back" data-testid="drawer-back" onClick={back.action}><ArrowLeft /> Back to {back.label}</button>}<h2>{command.name}</h2><span className="drawer-lifecycle-state"><Status value={commandDisplayState(command)} />{command.lifecycle_mode === 'external' && <em className="external-badge">External</em>}</span></div><IconButton label="Close launcher details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`command-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
-    {tab === 'Overview' && <><Definition rows={overviewRows.slice(0, 1)} /><dl className="definition output-definition"><div><dt>Output</dt><dd>{outputPreview.runID ? <button className="output-preview" data-testid="command-output-preview" onClick={() => { setRunID(outputPreview.runID); setTab('Logs') }}><code>{outputPreview.state === 'loading' ? 'Loading latest output…' : outputPreview.state === 'ready' ? outputPreview.content : outputPreview.state === 'error' ? 'Latest output could not be loaded.' : 'This Run produced no output.'}</code><span><ScrollText /> View full logs</span></button> : <span className="output-preview-empty">{outputPreview.state === 'loading' ? 'Loading Run history…' : 'No previous Run output.'}</span>}</dd></div></dl><Definition rows={overviewRows.slice(1)} />{!!command.parameters?.length && <><h3>Runtime inputs</h3><div className="parameter-schema">{command.parameters.map(parameter => <div key={parameter.key}><span className={parameter.type === 'secret' ? 'secret' : ''}>{parameter.type === 'secret' ? '•••' : parameter.type}</span><strong>{parameter.label}</strong><small>{parameter.required ? 'Required' : 'Optional'} · {parameter.binding === 'stdin' ? 'stdin' : 'temporary ' + parameter.env_var}</small>{parameter.description && <p>{parameter.description}</p>}</div>)}</div><p className="port-verification-note">Only field definitions are saved. Values are requested again for every start or restart.</p></>}{detailError && <div className="detail-note"><strong>Details unavailable</strong><span>{detailError}</span></div>}{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
+    {tab === 'Overview' && <><Definition rows={overviewRows.slice(0, 1)} /><dl className="definition output-definition"><div><dt>Output</dt><dd>{outputPreview.runID ? <OutputPreviewBlock content={outputPreview.content} state={outputPreview.state} testId="command-output-preview" onOpen={() => { setRunID(outputPreview.runID); setTab('Logs') }} /> : <span className="output-preview-empty">{outputPreview.state === 'loading' ? 'Loading Run history…' : 'No previous Run output.'}</span>}</dd></div></dl><Definition rows={overviewRows.slice(1)} />{!!command.parameters?.length && <><h3>Runtime inputs</h3><div className="parameter-schema">{command.parameters.map(parameter => <div key={parameter.key}><span className={parameter.type === 'secret' ? 'secret' : ''}>{parameter.type === 'secret' ? '•••' : parameter.type}</span><strong>{parameter.label}</strong><small>{parameter.required ? 'Required' : 'Optional'} · {parameter.binding === 'stdin' ? 'stdin' : 'temporary ' + parameter.env_var}</small>{parameter.description && <p>{parameter.description}</p>}</div>)}</div><p className="port-verification-note">Only field definitions are saved. Values are requested again for every start or restart.</p></>}{detailError && <div className="detail-note"><strong>Details unavailable</strong><span>{detailError}</span></div>}{command.state_detail && <div className="detail-note"><strong>Lifecycle state</strong><span>{command.state_detail}</span></div>}{!!command.expected_ports?.length && <><h3>Expected ports</h3><div className="chips">{command.expected_ports.map(port => <ExpectedPortChip key={port.port} port={port} verification={command.port_verifications?.find(item => item.port === port.port)} external={command.lifecycle_mode === 'external'} />)}</div>{command.lifecycle_mode === 'external' && <p className="port-verification-note">External checks prove a port transition, not process ownership. Pre-existing ports are never attributed to this launcher.</p>}</>}{!!command.tags?.length && <><h3>Tags</h3><div className="chips">{command.tags.map(tag => <span key={tag}>{tag}</span>)}</div></>}</>}
     {tab === 'Runs' && (loading ? <Empty title="Loading Runs" detail="Reading launcher history." /> : runs.length ? <div className="command-runs">{runs.map(run => <button key={run.id} onClick={() => { setRunID(run.id); setTab('Logs') }}><div><strong>{run.lifecycle_action ? `${run.lifecycle_action} · ` : ''}{run.command}</strong><small>{run.started_at ? new Date(run.started_at).toLocaleString() : 'Not started'} · {duration(run.started_at, run.ended_at)}</small></div><Status value={run.status} /><ScrollText /></button>)}</div> : <Empty title="No previous Runs" detail="This launcher has not been started through AgentShell yet." />)}
     {tab === 'Logs' && <RunLogPanel api={api} runs={runs} runID={runID} setRunID={setRunID} testId="command-log-panel" />}
     {tab === 'Script' && <><div className="script-heading"><div><strong>{source.path}</strong><small>Read-only · loaded from the launcher working directory</small></div><div className="script-heading-actions">{source.truncated && <span>First 512 KiB</span>}<CopyButton text={source.content || ''} label="Copy script" testId="copy-script" compact /></div></div><pre className="script-view" data-testid="command-script-panel">{source.content || '# Empty script'}</pre></>}
@@ -956,7 +1009,7 @@ function DetailDrawer({ run, tab, setTab, close, checks, commands, api, action, 
 		return () => { cancelled = true; if (timer) window.clearInterval(timer) }
 	}, [api, run.id, run.output_preview, run.status])
   return <><button className="drawer-scrim" aria-label="Close run details" onClick={close} /><aside className="drawer" data-testid="run-detail-drawer" aria-label={`${run.label} details`}><header className="drawer-head"><div><h2>{run.label}</h2><Status value={run.status} /></div><IconButton label="Close run details" onClick={close}><X /></IconButton></header><div className="tabs" role="tablist">{tabs.map(name => <button data-testid={`detail-tab-${name.toLowerCase()}`} role="tab" aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div><div className="drawer-body">
-    {tab === 'Overview' && <><Definition rows={[['Command', run.command, { copy: true, testId: 'copy-run-command' }]]} /><dl className="definition output-definition"><div><dt>Output</dt><dd><button className="output-preview" data-testid="run-output-preview" onClick={() => setTab('Logs')}><code>{outputPreview.state === 'loading' ? 'Loading latest output…' : outputPreview.state === 'ready' ? outputPreview.content : outputPreview.state === 'error' ? 'Latest output could not be loaded.' : 'This Run produced no output.'}</code><span><ScrollText /> View full logs</span></button></dd></div></dl><Definition rows={[['Directory', run.cwd], ['Started', run.started_at ? new Date(run.started_at).toLocaleString() : '—'], ['Source', run.source ?? 'User'], ['Shell', run.shell ?? 'default'], ['Exit Code', run.exit_code?.toString() ?? '—']]} /><h3>Ports ({listeners.length})</h3><div className="port-list">{listeners.map(p => <div key={p.port}><strong>{p.port}</strong><span>{p.name ?? p.protocol}</span><Status value={p.status ?? 'listening'} /><PortAction port={p} /></div>)}</div><h3>Resource usage</h3><Metric label="CPU" value={`${run.cpu_percent?.toFixed(1) ?? 0}%`} percent={run.cpu_percent ?? 0} /><Metric label="Memory" value={humanBytes(run.memory_bytes)} percent={Math.min(100, (run.memory_bytes ?? 0) / 5_000_000)} /></>}
+    {tab === 'Overview' && <><Definition rows={[['Command', run.command, { copy: true, testId: 'copy-run-command' }]]} /><dl className="definition output-definition"><div><dt>Output</dt><dd><OutputPreviewBlock content={outputPreview.content} state={outputPreview.state} testId="run-output-preview" onOpen={() => setTab('Logs')} /></dd></div></dl><Definition rows={[['Directory', run.cwd], ['Started', run.started_at ? new Date(run.started_at).toLocaleString() : '—'], ['Source', run.source ?? 'User'], ['Shell', run.shell ?? 'default'], ['Exit Code', run.exit_code?.toString() ?? '—']]} /><h3>Ports ({listeners.length})</h3><div className="port-list">{listeners.map(p => <div key={p.port}><strong>{p.port}</strong><span>{p.name ?? p.protocol}</span><Status value={p.status ?? 'listening'} /><PortAction port={p} /></div>)}</div><h3>Resource usage</h3><Metric label="CPU" value={`${run.cpu_percent?.toFixed(1) ?? 0}%`} percent={run.cpu_percent ?? 0} /><Metric label="Memory" value={humanBytes(run.memory_bytes)} percent={Math.min(100, (run.memory_bytes ?? 0) / 5_000_000)} /></>}
     {tab === 'Logs' && <RunLogPanel api={api} runs={[run]} runID={run.id} setRunID={() => undefined} testId="log-panel" hideRunSelect />}
     {tab === 'Processes' && <div className="process-list">{run.processes?.map(p => <div key={p.pid}><strong>PID {p.pid}</strong><code>{p.command ?? run.command}</code><span>{p.cpu_percent?.toFixed(1) ?? 0}% CPU</span><span>{humanBytes(p.memory_bytes)}</span></div>) ?? <Empty title="No process data" detail="Process discovery is still running." />}</div>}
     {tab === 'Ports' && <PortsTable ports={listeners} full />}
@@ -969,7 +1022,7 @@ type DefinitionRow = [string, string] | [string, string, { copy?: boolean; testI
 function Definition({ rows }: { rows: DefinitionRow[] }) {
   return <dl className="definition">{rows.map(row => {
     const [key, value, options] = row
-    return <div key={key}><dt>{key}</dt><dd>{options?.copy ? <span className="copyable-value"><span>{value}</span><CopyButton text={value === '—' ? '' : value} label={`Copy ${key.toLowerCase()}`} testId={options.testId} compact /></span> : value}</dd></div>
+    return <div key={key}><dt>{key}</dt><dd>{options?.copy ? <span className="copyable-value"><span>{value}</span><CopyButton named text={value === '—' ? '' : value} label={`Copy ${key.toLowerCase()}`} testId={options.testId} /></span> : value}</dd></div>
   })}</dl>
 }
 function Metric({ label, value, percent }: { label: string; value: string; percent: number }) { return <div className="metric"><span>{label}</span><strong>{value}</strong><i><b style={{ width: `${Math.min(100, percent)}%` }} /></i></div> }
@@ -1017,6 +1070,8 @@ export default function App() {
   const [selected, setSelected] = useState<Run | null>(null)
 	const [selectedCommandID, setSelectedCommandID] = useState('')
 	const [selectedStackID, setSelectedStackID] = useState('')
+	const [selectedCheckID, setSelectedCheckID] = useState('')
+	const [testView, setTestView] = useState<CheckDetailView>('request')
 	const [commandParentStackID, setCommandParentStackID] = useState('')
 	const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [tab, setTab] = useState<DetailTab>('Overview')
@@ -1046,6 +1101,26 @@ export default function App() {
 	const closeCommand = () => {
 		setSelectedCommandID('')
 		setCommandParentStackID('')
+	}
+	const openCheck = (check: CheckDefinition, view: CheckDetailView = 'request') => {
+		setSelectedCheckID(check.id)
+		setTestView(view)
+	}
+	const openCheckOwner = (check: CheckDefinition) => {
+		setSelectedCheckID('')
+		if (check.owner_type === 'stack') {
+			setSelectedStackID(check.owner_id)
+			return
+		}
+		if (check.owner_type === 'command') {
+			openCommand(check.owner_id)
+			return
+		}
+		const owned = data.runs.find(run => run.id === check.owner_id) ?? data.history.find(run => run.id === check.owner_id)
+		if (owned) {
+			setSelected(owned)
+			setTab('Overview')
+		}
 	}
 	const backToParentStack = () => {
 		if (!commandParentStackID) return
@@ -1242,11 +1317,12 @@ export default function App() {
 	}
   const shutdown = async () => { if (!api) return; setBusy('runtime-shutdown'); try { await api.shutdownRuntime(); setShutdownOpen(false); setShutdownRequested(true); setSelected(null); setRuntime(current => current ? { ...current, status: 'stopping' } : current) } catch (e) { setError(e instanceof Error ? e.message : 'Shutdown failed') } finally { setBusy('') } }
   const select = (run: Run, selectedTab: DetailTab = 'Overview') => { setSelected(run); setTab(selectedTab) }
-  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
+  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], tests: ['Tests', 'HTTP and task checks across stacks, launchers and Runs'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
   const filter = <T extends { name?: string; label?: string; command?: string }>(items: T[]) => items.filter(i => `${i.name} ${i.label} ${i.command}`.toLowerCase().includes(query.toLowerCase()))
   const commands = filter(data.commands)
 	const selectedCommand = data.commands.find(command => command.id === selectedCommandID)
 	const selectedStack = data.stacks.find(stack => stack.id === selectedStackID)
+	const selectedCheck = data.checks.find(check => check.id === selectedCheckID)
 	const commandParentStack = data.stacks.find(stack => stack.id === commandParentStackID)
 
   if (runtime?.status === 'stopped') return <StoppedScreen mode={api?.mode ?? 'live'} />
@@ -1267,11 +1343,13 @@ export default function App() {
         {page === 'projects' && <ProjectCatalog data={data} selectedProject={selectedProject} setSelectedProject={setSelectedProject} busy={busy} accepting={accepting} handlers={catalogHandlers} selectRun={select} runAgain={runAgain} promote={setPromoteRun} addCollection={() => setCollectionOpen(true)} />}
 		{page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => openCommand(c.id)} />)}</div>}
 		{page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => openCommand(c.id)} />)}</div>}
+		{page === 'tests' && <TestsPage data={data} query={query} busy={busy} accepting={accepting} run={checkAction} open={openCheck} openOwner={openCheckOwner} />}
 		{page === 'stacks' && <><div className="library-toolbar"><div><strong>Reusable environments</strong><span>Dependency-aware groups of saved launchers.</span></div><button className="button primary" data-testid="new-stack" onClick={() => setStackOpen(true)}><Plus /> New stack</button></div><div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} remove={() => setDeleteTarget({ type: 'stack', item: s })} open={() => { setEditStackID(''); setSelectedStackID(s.id) }} />)}</div></>}
         {page === 'settings' && api && <SettingsPage runtime={runtime} mode={api.mode} onShutdown={() => setShutdownOpen(true)} />}
       </div>
     </main>
     {selected && api && <DetailDrawer run={selected} tab={tab} setTab={setTab} close={() => setSelected(null)} checks={data.checks.filter(check => check.owner_type === 'run' && check.owner_id === selected.id)} commands={data.commands} api={api} action={a => runAction(selected, a)} runCheck={checkAction} busy={busy === selected.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
+	{selectedCheck && api && <TestDrawer check={selectedCheck} commands={data.commands} api={api} close={() => setSelectedCheckID('')} openOwner={() => openCheckOwner(selectedCheck)} runCheck={checkAction} busy={busy} accepting={accepting} refresh={reload} initialView={testView} />}
 	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} checks={data.checks.filter(check => check.owner_type === 'command' && check.owner_id === selectedCommand.id)} commands={data.commands} api={api} close={closeCommand} back={commandParentStack ? { label: commandParentStack.name, action: backToParentStack } : undefined} action={action => commandAction(selectedCommand, action)} runCheck={checkAction} remove={() => setDeleteTarget({ type: 'command', item: selectedCommand })} busy={busy === selectedCommand.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
 	{selectedStack && api && <StackDrawer stack={selectedStack} stacks={data.stacks} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} checks={data.checks.filter(check => check.owner_type === 'stack' && check.owner_id === selectedStack.id)} api={api} close={() => { setSelectedStackID(''); setEditStackID('') }} openMember={id => { const parentID = selectedStack.id; setSelectedStackID(''); setEditStackID(''); openCommand(id, parentID) }} action={(action, commandIDs) => stackAction(selectedStack, action, commandIDs)} memberAction={(command, action) => commandAction(command, action)} runCheck={checkAction} save={input => { saveStack(selectedStack, input); setEditStackID('') }} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} globalBusy={busy} accepting={accepting} refresh={reload} initialEditing={editStackID === selectedStack.id} />}
     {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}

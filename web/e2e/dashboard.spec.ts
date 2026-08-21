@@ -107,6 +107,8 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
   await expect(page.getByTestId('copy-script')).toHaveAttribute('aria-label', 'Copied')
   await page.getByTestId('command-detail-drawer').getByRole('button', { name: 'Close launcher details' }).click()
   await page.getByTestId('command-card-cmd-api').click()
+  await expect(page.getByTestId('copy-command')).toBeVisible()
+  await expect(page.getByTestId('copy-command-output-preview')).toBeVisible()
   await page.getByTestId('command-tab-runs').click()
   await expect(page.getByTestId('command-detail-drawer')).toContainText('make go')
   await page.getByTestId('command-detail-drawer').getByRole('button', { name: 'make go' }).click()
@@ -309,7 +311,8 @@ test('checks are inspected before execution and can be collapsed, copied, edited
 	await expect(page.getByTestId('check-card-check-health').locator('.check-card-body')).toHaveCount(0)
 	await page.getByTestId('toggle-check-check-health').click()
 
-	await page.getByTestId('select-check-check-staging-health').click()
+	await page.getByTestId('check-card-check-staging-health').locator('code').click()
+	await expect(page.getByTestId('check-detail-panel')).toContainText('https://staging.example.com/health')
 	await page.getByTestId('check-edit-tab').click()
 	let editor = page.getByTestId('check-editor')
 	await editor.getByLabel('Name').fill('Temporary staging health')
@@ -455,4 +458,39 @@ test('parameterized launcher prompts for one-shot secret input', async ({ page }
 
   await card.getByTestId('restart-command-cmd-vault-unseal').click()
   await expect(page.getByTestId('parameter-dialog').getByLabel('Vault unseal key')).toHaveValue('')
+})
+
+test('tests page lists, searches, runs and opens the owning stack or launcher', async ({ page }) => {
+  await page.goto('/tests')
+  await expect(page).toHaveURL(/\/tests$/)
+  await expect(page.getByRole('heading', { name: 'Tests' })).toBeVisible()
+  await expect(page.getByTestId('test-card-check-health')).toBeVisible()
+  await expect(page.getByTestId('test-card-check-smoke')).toBeVisible()
+  await expect(page.getByTestId('test-card-check-run-health')).toBeVisible()
+
+  await page.getByTestId('tests-search').fill('staging')
+  await expect(page.getByTestId('test-card-check-staging-health')).toBeVisible()
+  await expect(page.getByTestId('test-card-check-health')).toHaveCount(0)
+
+  await page.getByTestId('tests-search').fill('')
+  await page.getByTestId('tests-filter-kind-command').click()
+  await expect(page.getByTestId('test-card-check-smoke')).toBeVisible()
+  await expect(page.getByTestId('test-card-check-health')).toHaveCount(0)
+
+  await page.getByTestId('tests-filter-kind-all').click()
+  await page.getByTestId('test-card-check-health').click()
+  const drawer = page.getByTestId('test-detail-drawer')
+  await expect(drawer).toBeVisible()
+  await expect(page.getByTestId('check-detail-panel')).toContainText('http://127.0.0.1:8080/health')
+  await page.getByTestId('run-selected-check-check-health').click()
+  await expect(page.getByTestId('check-response-tab')).toHaveAttribute('aria-selected', 'true')
+  await page.getByTestId('open-test-owner').click()
+  await expect(page.getByTestId('test-detail-drawer')).toHaveCount(0)
+  await expect(page.getByTestId('stack-detail-drawer')).toBeVisible()
+  await expect(page.getByTestId('stack-detail-drawer')).toContainText('Internal Microservices')
+  await page.getByTestId('stack-detail-drawer').getByRole('button', { name: 'Close stack details' }).click()
+
+  await page.getByTestId('open-test-owner-check-smoke').click()
+  await expect(page.getByTestId('command-detail-drawer')).toBeVisible()
+  await expect(page.getByTestId('command-detail-drawer')).toContainText('Backend API')
 })
