@@ -73,10 +73,10 @@ func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 			t.Errorf("tool %s does not communicate AgentShell intent", tool.Name)
 		}
 	}
-	if len(names) != 43 {
+	if len(names) != 52 {
 		t.Fatalf("published %d tools: %v", len(names), names)
 	}
-	for _, name := range []string{"get_runtime", "list_ports", "shutdown_runtime", "run", "list_runs", "inspect_run", "get_logs", "stop_run", "restart_run", "get_workspace_context", "inspect_project", "list_projects", "save_project", "update_project", "delete_project", "list_collections", "save_collection", "update_collection", "delete_collection", "promote_run", "apply_catalog", "save_command", "start_command", "save_stack", "restart_stack", "list_environments", "update_environments", "list_checks", "save_check", "update_check", "delete_check", "run_check", "run_checks"} {
+	for _, name := range []string{"get_runtime", "list_ports", "shutdown_runtime", "run", "list_runs", "inspect_run", "get_logs", "stop_run", "restart_run", "get_workspace_context", "inspect_project", "list_projects", "save_project", "update_project", "delete_project", "list_collections", "save_collection", "update_collection", "delete_collection", "promote_run", "apply_catalog", "save_command", "start_command", "save_stack", "restart_stack", "list_environments", "update_environments", "list_checks", "save_check", "update_check", "delete_check", "run_check", "run_checks", "list_http_collections", "save_http_collection", "update_http_collection", "delete_http_collection", "save_http_request", "update_http_request", "delete_http_request", "run_http_request", "import_http_request"} {
 		if !names[name] {
 			t.Errorf("missing tool %q", name)
 		}

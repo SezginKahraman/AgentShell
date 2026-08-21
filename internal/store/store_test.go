@@ -87,6 +87,10 @@ func TestEmptyListsAreNonNil(t *testing.T) {
 	if err != nil || checks == nil {
 		t.Fatalf("checks=%#v err=%v", checks, err)
 	}
+	httpCollections, err := s.HTTPCollections(ctx)
+	if err != nil || httpCollections == nil {
+		t.Fatalf("http collections=%#v err=%v", httpCollections, err)
+	}
 }
 
 func TestDeleteCommandRejectsStackMember(t *testing.T) {
@@ -294,5 +298,48 @@ func TestApplyCatalogResolvesStackDependencyKeys(t *testing.T) {
 	}
 	if stacks[0].Members[1].DependsOn[0] != stacks[0].Members[0].CommandID || stacks[0].Members[1].WaitFor != "ready" || stacks[0].Members[1].WaitTimeoutMS != 45000 {
 		t.Fatalf("resolved members=%+v", stacks[0].Members)
+	}
+}
+
+func TestHTTPCollectionsCRUDAndStackUnbind(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "http-collections.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	command := domain.CommandDefinition{ID: "cmd-http", Name: "API", Command: "true", Cwd: t.TempDir(), Kind: "task", ConcurrencyPolicy: "allow", CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveCommand(ctx, &command); err != nil {
+		t.Fatal(err)
+	}
+	stack := domain.Stack{ID: "stack-http", Name: "API", StartStrategy: "parallel", FailurePolicy: "continue", Members: []domain.StackMember{{CommandID: command.ID}}, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveStack(ctx, &stack); err != nil {
+		t.Fatal(err)
+	}
+	collection := domain.HTTPCollection{ID: "http-col", Name: "Hotel Meta API", StackID: stack.ID, SortOrder: 0, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveHTTPCollection(ctx, &collection); err != nil {
+		t.Fatal(err)
+	}
+	request := domain.HTTPRequest{ID: "http-req", CollectionID: collection.ID, Name: "Health", Method: "GET", URL: "{{API_URL}}/health", TimeoutMS: 5000, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveHTTPRequest(ctx, &request); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.HTTPCollection(ctx, collection.ID)
+	if err != nil || got.StackID != stack.ID || len(got.Requests) != 1 || got.Requests[0].URL != request.URL {
+		t.Fatalf("collection=%+v err=%v", got, err)
+	}
+	if err = s.DeleteStack(ctx, stack.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.HTTPCollection(ctx, collection.ID)
+	if err != nil || got.StackID != "" {
+		t.Fatalf("unbind after stack delete: %+v err=%v", got, err)
+	}
+	if err = s.DeleteHTTPCollection(ctx, collection.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.HTTPRequest(ctx, request.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cascade delete request: %v", err)
 	}
 }

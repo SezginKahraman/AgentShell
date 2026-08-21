@@ -10,7 +10,7 @@ tags: [stack, environment, catalog]
 
 AgentShell keeps **one stack identity** and injects a named profile at start. `prod` is a column name, not a remote host.
 
-Related: [stack environments design](superpowers/specs/2026-08-21-stack-environments-design.md).
+Related: [stack environments design](superpowers/specs/2026-08-21-stack-environments-design.md), [HTTP collections](http-collections.md).
 
 ## Library
 

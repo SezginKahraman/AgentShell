@@ -372,7 +372,7 @@ func TestSummaryAndOriginGuard(t *testing.T) {
 
 func TestEmptyListEndpointsEncodeArrays(t *testing.T) {
 	srv, _ := testServer(t)
-	for _, endpoint := range []string{"projects", "collections", "commands", "stacks", "checks", "runs", "history"} {
+	for _, endpoint := range []string{"projects", "collections", "commands", "stacks", "checks", "runs", "history", "http-collections"} {
 		var raw json.RawMessage
 		status := request(t, srv.Client(), http.MethodGet, srv.URL+"/api/"+endpoint, nil, &raw)
 		if status != http.StatusOK || string(raw) != "[]" {

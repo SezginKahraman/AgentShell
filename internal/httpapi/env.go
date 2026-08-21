@@ -41,6 +41,10 @@ func (s *Server) environmentsAPI(w http.ResponseWriter, r *http.Request) {
 			respond(w, nil, err)
 			return
 		}
+		if err = remapHTTPCollectionsAfterLibraryChange(ctx, s.store, old.Names, normalized.Names); err != nil {
+			respond(w, nil, err)
+			return
+		}
 		respond(w, normalized, nil)
 	default:
 		method(w)

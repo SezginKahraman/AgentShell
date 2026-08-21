@@ -59,7 +59,7 @@ func newServer(normalized normalizedConfig, client *daemonClient, initialized fu
 		Title:   "AgentShell local runtime manager",
 		Version: normalized.version,
 	}, &mcp.ServerOptions{
-		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When a launcher needs runtime input, define parameters on the saved command. Use type=secret with binding=stdin for credentials; never place real secrets in command, env, defaults, catalog metadata, descriptions, logs, or chat. Prefer asking the user to enter secrets in the AgentShell dashboard; only pass parameters to a start tool when the user explicitly supplied the values, and never repeat them. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. Attach reusable verifications with save_check: native HTTP checks default to http_scope=local; set http_scope=remote explicitly for a remote test environment and describe the target clearly. For bash or .sh verification, first save a managed task and reference it with kind=command. A check owner may be a stack, command, or Run. after_ready is stack-only and must not require interactive parameters. Never store credentials in HTTP check URLs, headers, or bodies, and do not aim remote checks at infrastructure metadata or control-plane endpoints. Every check execution is a normal Run with inspectable logs. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime.",
+		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When a launcher needs runtime input, define parameters on the saved command. Use type=secret with binding=stdin for credentials; never place real secrets in command, env, defaults, catalog metadata, descriptions, logs, or chat. Prefer asking the user to enter secrets in the AgentShell dashboard; only pass parameters to a start tool when the user explicitly supplied the values, and never repeat them. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. Attach reusable verifications with save_check: native HTTP checks default to http_scope=local; set http_scope=remote explicitly for a remote test environment and describe the target clearly. For bash or .sh verification, first save a managed task and reference it with kind=command. A check owner may be a stack, command, or Run. after_ready is stack-only and must not require interactive parameters. Never store credentials in HTTP check URLs, headers, or bodies, and do not aim remote checks at infrastructure metadata or control-plane endpoints. Every check execution is a normal Run with inspectable logs. For an API client, use HTTP collections (list_http_collections / save_http_request / import_http_request / run_http_request), not catalog collections and not checks; bind stack_id and write {{API_URL}} instead of cloning a stack per profile. When the user pasted curl, import_http_request. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime.",
 		InitializedHandler: initialized,
 	})
 	registerRuntimeTools(server, client)
@@ -540,6 +540,71 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			}
 			return client.do(ctx, http.MethodPost, "/api/checks/run", nil, payload)
 		})
+
+	addTool(server, "list_http_collections", "List HTTP collections", toolIntent+"List Postman-like HTTP request collections, including nested requests and last_result. This is not list_collections (launcher folders) and not list_checks (health probes).", readOnly("List HTTP collections"), nil,
+		func(ctx context.Context, _ EmptyInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodGet, "/api/http-collections", nil, nil)
+		})
+
+	addTool(server, "save_http_collection", "Save HTTP collection", toolIntent+"Create an HTTP request collection. Optionally bind stack_id so Send interpolates {{KEY}} from that stack's environment and extras. This executes nothing and is not a catalog collection folder.", mutating("Save HTTP collection", false, false), SaveHTTPCollectionInput.validate,
+		func(ctx context.Context, input SaveHTTPCollectionInput) (map[string]any, error) {
+			payload, err := objectPayload(input)
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPost, "/api/http-collections", nil, payload)
+		})
+
+	addTool(server, "update_http_collection", "Update HTTP collection", toolIntent+"Update an HTTP collection's name, stack bind, or unbound environment without sending requests.", mutating("Update HTTP collection", false, false), UpdateHTTPCollectionInput.validate,
+		func(ctx context.Context, input UpdateHTTPCollectionInput) (map[string]any, error) {
+			payload, err := objectPayload(input, "id")
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPut, httpCollectionPath(input.ID), nil, payload)
+		})
+
+	addTool(server, "delete_http_collection", "Delete HTTP collection", toolIntent+"Delete an HTTP collection and its requests. Last results are removed with the requests.", mutating("Delete HTTP collection", true, true), EntityIDInput.validate,
+		func(ctx context.Context, input EntityIDInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodDelete, httpCollectionPath(input.ID), nil, nil)
+		})
+
+	addTool(server, "save_http_request", "Save HTTP request", toolIntent+"Add an independent HTTP request to an HTTP collection. URL, headers, and body may use {{KEY}} from the workspace environment library. Never store secrets. This does not send the request and is not save_check.", mutating("Save HTTP request", false, false), SaveHTTPRequestInput.validate,
+		func(ctx context.Context, input SaveHTTPRequestInput) (map[string]any, error) {
+			payload, err := objectPayload(input)
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPost, "/api/http-requests", nil, payload)
+		})
+
+	addTool(server, "update_http_request", "Update HTTP request", toolIntent+"Update a saved HTTP request without sending it. Keep secrets out of URL, headers, and body.", mutating("Update HTTP request", false, false), UpdateHTTPRequestInput.validate,
+		func(ctx context.Context, input UpdateHTTPRequestInput) (map[string]any, error) {
+			payload, err := objectPayload(input, "id")
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPut, httpRequestPath(input.ID), nil, payload)
+		})
+
+	addTool(server, "delete_http_request", "Delete HTTP request", toolIntent+"Delete one saved HTTP request from its collection.", mutating("Delete HTTP request", true, true), EntityIDInput.validate,
+		func(ctx context.Context, input EntityIDInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodDelete, httpRequestPath(input.ID), nil, nil)
+		})
+
+	addTool(server, "run_http_request", "Send HTTP request", toolIntent+"Send one saved HTTP collection request after interpolating {{KEY}} from the workspace library and, when bound, the stack extras. This is not a process Run and not run_check. Do not send a mutating production request without explicit user intent.", mutating("Send HTTP request", false, false), EntityIDInput.validate,
+		func(ctx context.Context, input EntityIDInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodPost, httpRequestPath(input.ID)+"/send", nil, nil)
+		})
+
+	addTool(server, "import_http_request", "Import curl as HTTP request", toolIntent+"Parse a curl command into a saved HTTP collection request. Origin matching the bound stack environment is rewritten to {{KEY}}. This does not send the request. Prefer this over save_http_request when the user pasted curl. Never import curl -u credentials.", mutating("Import curl as HTTP request", false, false), ImportHTTPRequestInput.validate,
+		func(ctx context.Context, input ImportHTTPRequestInput) (map[string]any, error) {
+			payload, err := objectPayload(input, "collection_id")
+			if err != nil {
+				return nil, err
+			}
+			return client.do(ctx, http.MethodPost, httpCollectionPath(input.CollectionID)+"/import", nil, payload)
+		})
 }
 
 func runPath(id string) string     { return "/api/runs/" + url.PathEscape(strings.TrimSpace(id)) }
@@ -547,6 +612,12 @@ func projectPath(id string) string { return "/api/projects/" + url.PathEscape(st
 func commandPath(id string) string { return "/api/commands/" + url.PathEscape(strings.TrimSpace(id)) }
 func stackPath(id string) string   { return "/api/stacks/" + url.PathEscape(strings.TrimSpace(id)) }
 func checkPath(id string) string   { return "/api/checks/" + url.PathEscape(strings.TrimSpace(id)) }
+func httpCollectionPath(id string) string {
+	return "/api/http-collections/" + url.PathEscape(strings.TrimSpace(id))
+}
+func httpRequestPath(id string) string {
+	return "/api/http-requests/" + url.PathEscape(strings.TrimSpace(id))
+}
 func collectionPath(id string) string {
 	return "/api/collections/" + url.PathEscape(strings.TrimSpace(id))
 }

@@ -95,6 +95,15 @@ CREATE TABLE IF NOT EXISTS checks (
  http_body TEXT NOT NULL DEFAULT '', expected_status TEXT NOT NULL DEFAULT '[]', body_contains TEXT NOT NULL DEFAULT '',
  timeout_ms INTEGER NOT NULL DEFAULT 10000, trigger TEXT NOT NULL DEFAULT 'manual', tags TEXT NOT NULL DEFAULT '[]',
 	 created_by TEXT NOT NULL DEFAULT '', http_scope TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS http_collections (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', stack_id TEXT NOT NULL DEFAULT '',
+ environment TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS http_requests (
+ id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, name TEXT NOT NULL, method TEXT NOT NULL DEFAULT 'GET',
+ url TEXT NOT NULL, headers TEXT NOT NULL DEFAULT '{}', body TEXT NOT NULL DEFAULT '', timeout_ms INTEGER NOT NULL DEFAULT 10000,
+ sort_order INTEGER NOT NULL DEFAULT 0, last_result TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );`)
 	if err != nil {
 		return err
@@ -121,6 +130,8 @@ CREATE INDEX IF NOT EXISTS stacks_collection_idx ON stacks(collection_id);
 CREATE INDEX IF NOT EXISTS checks_owner_idx ON checks(owner_type,owner_id,name);
 CREATE INDEX IF NOT EXISTS checks_command_idx ON checks(command_id);
 CREATE INDEX IF NOT EXISTS runs_check_idx ON runs(check_definition_id,created_at);
+CREATE INDEX IF NOT EXISTS http_collections_sort_idx ON http_collections(sort_order,name);
+CREATE INDEX IF NOT EXISTS http_requests_collection_idx ON http_requests(collection_id,sort_order,name);
 INSERT OR IGNORE INTO environment_library(id, names, keys, value_json) VALUES('workspace', '["local"]', '[]', '{}');`)
 	return err
 }
@@ -690,6 +701,9 @@ func (s *Store) DeleteStack(ctx context.Context, id string) error {
 	if refs > 0 {
 		return fmt.Errorf("%w: stack has %d attached checks", ErrConflict, refs)
 	}
+	if _, e := s.db.ExecContext(ctx, `UPDATE http_collections SET stack_id='' WHERE stack_id=?`, id); e != nil {
+		return e
+	}
 	r, e := s.db.ExecContext(ctx, `DELETE FROM stacks WHERE id=?`, id)
 	return affected(r, e)
 }
@@ -773,6 +787,156 @@ func (s *Store) DeleteCheck(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: check has %d active Runs", ErrConflict, active)
 	}
 	r, err := s.db.ExecContext(ctx, `DELETE FROM checks WHERE id=?`, id)
+	return affected(r, err)
+}
+
+const httpCollectionCols = `id,name,description,stack_id,environment,sort_order,created_at,updated_at`
+const httpRequestCols = `id,collection_id,name,method,url,headers,body,timeout_ms,sort_order,last_result,created_at,updated_at`
+
+func (s *Store) SaveHTTPCollection(ctx context.Context, v *domain.HTTPCollection) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO http_collections(`+httpCollectionCols+`) VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,stack_id=excluded.stack_id,
+environment=excluded.environment,sort_order=excluded.sort_order,updated_at=excluded.updated_at`,
+		v.ID, v.Name, v.Description, v.StackID, v.Environment, v.SortOrder, ts(v.CreatedAt), ts(v.UpdatedAt))
+	return err
+}
+
+func scanHTTPCollection(row scanner) (domain.HTTPCollection, error) {
+	var v domain.HTTPCollection
+	var created, updated string
+	err := row.Scan(&v.ID, &v.Name, &v.Description, &v.StackID, &v.Environment, &v.SortOrder, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return v, ErrNotFound
+	}
+	if err != nil {
+		return v, err
+	}
+	v.CreatedAt = parseTime(created)
+	v.UpdatedAt = parseTime(updated)
+	return v, nil
+}
+
+func (s *Store) HTTPCollection(ctx context.Context, id string) (domain.HTTPCollection, error) {
+	v, err := scanHTTPCollection(s.db.QueryRowContext(ctx, `SELECT `+httpCollectionCols+` FROM http_collections WHERE id=?`, id))
+	if err != nil {
+		return v, err
+	}
+	requests, err := s.HTTPRequests(ctx, v.ID)
+	if err != nil {
+		return v, err
+	}
+	v.Requests = requests
+	return v, nil
+}
+
+func (s *Store) HTTPCollections(ctx context.Context) ([]domain.HTTPCollection, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+httpCollectionCols+` FROM http_collections ORDER BY sort_order,name,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.HTTPCollection, 0)
+	for rows.Next() {
+		v, scanErr := scanHTTPCollection(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	requests, err := s.HTTPRequests(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	byCollection := map[string][]domain.HTTPRequest{}
+	for _, request := range requests {
+		byCollection[request.CollectionID] = append(byCollection[request.CollectionID], request)
+	}
+	for i := range out {
+		list := byCollection[out[i].ID]
+		if list == nil {
+			list = []domain.HTTPRequest{}
+		}
+		out[i].Requests = list
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteHTTPCollection(ctx context.Context, id string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM http_requests WHERE collection_id=?`, id); err != nil {
+		return err
+	}
+	r, err := s.db.ExecContext(ctx, `DELETE FROM http_collections WHERE id=?`, id)
+	return affected(r, err)
+}
+
+func (s *Store) SaveHTTPRequest(ctx context.Context, v *domain.HTTPRequest) error {
+	last := ""
+	if v.LastResult != nil {
+		last = js(v.LastResult)
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO http_requests(`+httpRequestCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET collection_id=excluded.collection_id,name=excluded.name,method=excluded.method,url=excluded.url,
+headers=excluded.headers,body=excluded.body,timeout_ms=excluded.timeout_ms,sort_order=excluded.sort_order,
+last_result=excluded.last_result,updated_at=excluded.updated_at`,
+		v.ID, v.CollectionID, v.Name, v.Method, v.URL, js(v.Headers), v.Body, v.TimeoutMS, v.SortOrder, last, ts(v.CreatedAt), ts(v.UpdatedAt))
+	return err
+}
+
+func scanHTTPRequest(row scanner) (domain.HTTPRequest, error) {
+	var v domain.HTTPRequest
+	var headers, last, created, updated string
+	err := row.Scan(&v.ID, &v.CollectionID, &v.Name, &v.Method, &v.URL, &headers, &v.Body, &v.TimeoutMS, &v.SortOrder, &last, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return v, ErrNotFound
+	}
+	if err != nil {
+		return v, err
+	}
+	v.CreatedAt = parseTime(created)
+	v.UpdatedAt = parseTime(updated)
+	_ = json.Unmarshal([]byte(headers), &v.Headers)
+	if strings.TrimSpace(last) != "" && last != "null" {
+		var result domain.HTTPResult
+		if json.Unmarshal([]byte(last), &result) == nil {
+			v.LastResult = &result
+		}
+	}
+	return v, nil
+}
+
+func (s *Store) HTTPRequest(ctx context.Context, id string) (domain.HTTPRequest, error) {
+	return scanHTTPRequest(s.db.QueryRowContext(ctx, `SELECT `+httpRequestCols+` FROM http_requests WHERE id=?`, id))
+}
+
+func (s *Store) HTTPRequests(ctx context.Context, collectionID string) ([]domain.HTTPRequest, error) {
+	query := `SELECT ` + httpRequestCols + ` FROM http_requests`
+	args := []any{}
+	if collectionID != "" {
+		query += ` WHERE collection_id=?`
+		args = append(args, collectionID)
+	}
+	query += ` ORDER BY sort_order,name,id`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.HTTPRequest, 0)
+	for rows.Next() {
+		v, scanErr := scanHTTPRequest(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteHTTPRequest(ctx context.Context, id string) error {
+	r, err := s.db.ExecContext(ctx, `DELETE FROM http_requests WHERE id=?`, id)
 	return affected(r, err)
 }
 

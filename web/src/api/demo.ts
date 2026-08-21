@@ -1,5 +1,7 @@
 import type { AgentShellApi } from './client'
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, EnvironmentLibrary, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPRequest, HTTPRequestInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
+import { httpCollectionVars, interpolateTemplate } from '../httpInterpolate'
+import { parseCurl, rewriteURLWithVars } from '../parseCurl'
 
 const now = Date.now()
 const iso = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
@@ -47,6 +49,12 @@ const stacks: Stack[] = [
 
 let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod'], keys: ['API_URL'], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com' } } }
 
+const httpCollections: HTTPCollection[] = [
+	{ id: 'http-hotel', name: 'Hotel Meta API', stack_id: 'stack-internal', sort_order: 0, requests: [
+		{ id: 'http-health', collection_id: 'http-hotel', name: 'Health', method: 'GET', url: '{{API_URL}}/health', timeout_ms: 5000, sort_order: 0 },
+	] },
+]
+
 const checks: CheckDefinition[] = [
 	{ id: 'check-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'API health', description: 'Verify the stack API is accepting requests.', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], timeout_ms: 5000, trigger: 'after_ready' },
 	{ id: 'check-staging-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'Staging health', description: 'Verify the deployed test environment.', kind: 'http', http_method: 'GET', http_url: 'https://staging.example.com/health', http_scope: 'remote', expected_status: [200], timeout_ms: 10000, trigger: 'manual' },
@@ -61,7 +69,7 @@ export class DemoApi implements AgentShellApi {
   private emit() { this.listeners.forEach(fn => fn()) }
   async getSnapshot(): Promise<Snapshot> {
     const ports = runs.flatMap(run => (run.listeners ?? []).map(port => ({ ...port, run_id: run.id, run_label: run.label })))
-    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks) }
+    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks), http_collections: structuredClone(httpCollections) }
   }
   async getRuntime(): Promise<RuntimeInfo> {
     return { status: this.runtimeStatus, instance_id: 'demo-browser-runtime', pid: 0, api_url: 'browser demo adapter', started_at: new Date(now).toISOString(), uptime_seconds: Math.max(0, Math.round((Date.now() - now) / 1000)), managed_runs: runs.filter(run => runningStatus(run.status)).length, database: { path: 'No database (browser demo)' }, mcp: { count: 0, clients: [] } }
@@ -227,6 +235,83 @@ export class DemoApi implements AgentShellApi {
 		environmentLibrary = structuredClone({ names: library.names, keys: library.keys ?? [], values: library.values ?? {} })
 		this.emit()
 		return structuredClone(environmentLibrary)
+	}
+  async createHTTPCollection(input: HTTPCollectionInput) {
+		const item: HTTPCollection = { ...structuredClone(input), id: `http-col-${Date.now()}`, requests: [] }
+		httpCollections.push(item)
+		this.emit()
+		return structuredClone(item)
+	}
+  async updateHTTPCollection(id: string, input: Partial<HTTPCollectionInput>) {
+		const item = httpCollections.find(value => value.id === id)
+		if (!item) throw new Error('HTTP collection not found')
+		Object.assign(item, structuredClone(input))
+		this.emit()
+		return structuredClone(item)
+	}
+  async deleteHTTPCollection(id: string) {
+		const index = httpCollections.findIndex(value => value.id === id)
+		if (index < 0) throw new Error('HTTP collection not found')
+		httpCollections.splice(index, 1)
+		this.emit()
+	}
+  async createHTTPRequest(input: HTTPRequestInput) {
+		const collection = httpCollections.find(value => value.id === input.collection_id)
+		if (!collection) throw new Error('HTTP collection not found')
+		const item: HTTPRequest = { ...structuredClone(input), id: `http-req-${Date.now()}` }
+		collection.requests = [...(collection.requests ?? []), item]
+		this.emit()
+		return structuredClone(item)
+	}
+  async updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>) {
+		for (const collection of httpCollections) {
+			const item = collection.requests?.find(value => value.id === id)
+			if (!item) continue
+			Object.assign(item, structuredClone(input))
+			this.emit()
+			return structuredClone(item)
+		}
+		throw new Error('HTTP request not found')
+	}
+  async deleteHTTPRequest(id: string) {
+		for (const collection of httpCollections) {
+			const index = collection.requests?.findIndex(value => value.id === id) ?? -1
+			if (index < 0) continue
+			collection.requests?.splice(index, 1)
+			this.emit()
+			return
+		}
+		throw new Error('HTTP request not found')
+	}
+  async sendHTTPRequest(id: string) {
+		for (const collection of httpCollections) {
+			const item = collection.requests?.find(value => value.id === id)
+			if (!item) continue
+			const stack = stacks.find(value => value.id === collection.stack_id)
+			const { name, vars } = httpCollectionVars(environmentLibrary, collection, stack)
+			const url = interpolateTemplate(item.url, vars)
+			item.last_result = { status: 200, url, method: item.method ?? 'GET', headers: { 'Content-Type': 'application/json' }, body: '{"status":"ok"}', environment: name, duration_ms: 12, sent_at: new Date().toISOString() }
+			this.emit()
+			return structuredClone(item)
+		}
+		throw new Error('HTTP request not found')
+	}
+  async importHTTPRequest(collectionID: string, curl: string) {
+		const collection = httpCollections.find(value => value.id === collectionID)
+		if (!collection) throw new Error('HTTP collection not found')
+		const parsed = parseCurl(curl)
+		const stack = stacks.find(value => value.id === collection.stack_id)
+		const { vars } = httpCollectionVars(environmentLibrary, collection, stack)
+		return this.createHTTPRequest({
+			collection_id: collectionID,
+			name: parsed.name,
+			method: parsed.method as HTTPRequest['method'],
+			url: rewriteURLWithVars(parsed.url, vars),
+			headers: parsed.headers,
+			body: parsed.body,
+			timeout_ms: parsed.timeout_ms || 10000,
+			sort_order: collection.requests?.length ?? 0,
+		})
 	}
   subscribe(onChange: () => void) { this.listeners.add(onChange); return () => this.listeners.delete(onChange) }
 }

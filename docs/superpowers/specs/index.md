@@ -11,3 +11,4 @@ timestamp: 2026-08-17T14:15:00Z
 
 - [Stack prerequisites](2026-08-17-stack-prerequisites-design.md) — stack-to-stack start dependencies.
 - [Stack environments](2026-08-21-stack-environments-design.md) — workspace named environments for stacks.
+- [HTTP collections](2026-08-21-http-collections-design.md) — Postman-like request catalog bound to a stack.

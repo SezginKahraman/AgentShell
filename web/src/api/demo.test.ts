@@ -75,6 +75,23 @@ describe('DemoApi', () => {
     await api.deleteCheck(created.id)
     expect((await api.getSnapshot()).checks.some(item => item.id === created.id)).toBe(false)
   })
+
+  it('sends an HTTP collection request with interpolated stack environment', async () => {
+    const api = new DemoApi()
+    const sent = await api.sendHTTPRequest('http-health')
+    expect(sent.last_result?.url).toBe('http://127.0.0.1:8080/health')
+    expect(sent.last_result?.environment).toBe('local')
+    expect(sent.last_result?.body).toContain('ok')
+    expect(sent.last_result?.headers?.['Content-Type']).toBe('application/json')
+  })
+
+  it('imports curl into an HTTP collection and rewrites the origin', async () => {
+    const api = new DemoApi()
+    const imported = await api.importHTTPRequest('http-hotel', "curl -X POST 'http://127.0.0.1:8080/v1/hotels' -H 'Content-Type: application/json' --data-raw '{\"city\":\"IST\"}'")
+    expect(imported.method).toBe('POST')
+    expect(imported.url).toBe('{{API_URL}}/v1/hotels')
+    expect(imported.body).toBe('{"city":"IST"}')
+  })
 })
 
 async function apiSnapshot() { return new DemoApi().getSnapshot() }

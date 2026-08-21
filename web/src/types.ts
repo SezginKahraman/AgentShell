@@ -136,6 +136,46 @@ export interface RuntimeInfo {
 }
 export interface ShutdownResult { status: 'shutting_down' | 'already_shutting_down' }
 
+export interface HTTPResult {
+	status?: number
+	url?: string
+	method?: string
+	headers?: Record<string, string>
+	body?: string
+	truncated?: boolean
+	duration_ms?: number
+	error?: string
+	environment?: string
+	sent_at?: string
+}
+export interface HTTPRequest {
+	id: string
+	collection_id: string
+	name: string
+	method?: 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
+	url: string
+	headers?: Record<string, string>
+	body?: string
+	timeout_ms?: number
+	sort_order?: number
+	last_result?: HTTPResult
+	created_at?: string
+	updated_at?: string
+}
+export type HTTPRequestInput = Omit<HTTPRequest, 'id' | 'last_result' | 'created_at' | 'updated_at'>
+export interface HTTPCollection {
+	id: string
+	name: string
+	description?: string
+	stack_id?: string
+	environment?: string
+	sort_order?: number
+	requests?: HTTPRequest[]
+	created_at?: string
+	updated_at?: string
+}
+export type HTTPCollectionInput = Omit<HTTPCollection, 'id' | 'requests' | 'created_at' | 'updated_at'>
+
 export interface Snapshot {
   summary: Summary
   runs: Run[]
@@ -146,4 +186,5 @@ export interface Snapshot {
   projects: Project[]
   collections: Collection[]
 	checks: CheckDefinition[]
+	http_collections?: HTTPCollection[]
 }

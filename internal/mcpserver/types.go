@@ -1448,3 +1448,139 @@ func (in UpdateEnvironmentsInput) validate() error {
 	_, err := domain.NormalizeEnvironmentLibrary(domain.EnvironmentLibrary{Names: in.Names, Keys: in.Keys, Values: in.Values})
 	return err
 }
+
+type SaveHTTPCollectionInput struct {
+	Name        string `json:"name" jsonschema:"Collection name shown in the HTTP page"`
+	Description string `json:"description,omitempty" jsonschema:"Optional purpose without credentials"`
+	StackID     string `json:"stack_id,omitempty" jsonschema:"Optional stack to bind for environment interpolation and dashboard details"`
+	Environment string `json:"environment,omitempty" jsonschema:"Library column used only when the collection is unbound"`
+	SortOrder   int    `json:"sort_order,omitempty" jsonschema:"Display order"`
+}
+
+func (in SaveHTTPCollectionInput) validate() error {
+	if strings.TrimSpace(in.Name) == "" {
+		return fmt.Errorf("name is required")
+	}
+	if in.StackID != "" {
+		if err := identifier("stack_id", in.StackID); err != nil {
+			return err
+		}
+	}
+	if in.Environment != "" && !domain.ValidEnvironmentName(strings.ToLower(strings.TrimSpace(in.Environment))) {
+		return fmt.Errorf("environment %q is invalid", in.Environment)
+	}
+	return nil
+}
+
+type UpdateHTTPCollectionInput struct {
+	ID          string  `json:"id" jsonschema:"HTTP collection identifier"`
+	Name        *string `json:"name,omitempty" jsonschema:"New collection name"`
+	Description *string `json:"description,omitempty" jsonschema:"New description"`
+	StackID     *string `json:"stack_id,omitempty" jsonschema:"New stack bind; empty string unbinds"`
+	Environment *string `json:"environment,omitempty" jsonschema:"New unbound environment name; empty follows the default library name"`
+	SortOrder   *int    `json:"sort_order,omitempty" jsonschema:"New display order"`
+}
+
+func (in UpdateHTTPCollectionInput) validate() error {
+	if err := identifier("id", in.ID); err != nil {
+		return err
+	}
+	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
+		return fmt.Errorf("name is required")
+	}
+	if in.StackID != nil && strings.TrimSpace(*in.StackID) != "" {
+		if err := identifier("stack_id", *in.StackID); err != nil {
+			return err
+		}
+	}
+	if in.Environment != nil && strings.TrimSpace(*in.Environment) != "" && !domain.ValidEnvironmentName(strings.ToLower(strings.TrimSpace(*in.Environment))) {
+		return fmt.Errorf("environment %q is invalid", *in.Environment)
+	}
+	return nil
+}
+
+type SaveHTTPRequestInput struct {
+	CollectionID string            `json:"collection_id" jsonschema:"Parent HTTP collection identifier"`
+	Name         string            `json:"name" jsonschema:"Request name"`
+	Method       string            `json:"method,omitempty" jsonschema:"HTTP method; defaults to GET"`
+	URL          string            `json:"url" jsonschema:"URL template; may include {{KEY}} from the workspace environment library"`
+	Headers      map[string]string `json:"headers,omitempty" jsonschema:"Non-sensitive headers; values may include {{KEY}}"`
+	Body         string            `json:"body,omitempty" jsonschema:"Optional non-sensitive body; may include {{KEY}}"`
+	TimeoutMS    int               `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms; default 10000, max 120000"`
+	SortOrder    int               `json:"sort_order,omitempty" jsonschema:"Display order inside the collection"`
+}
+
+func (in SaveHTTPRequestInput) validate() error {
+	if err := identifier("collection_id", in.CollectionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.TrimSpace(in.URL) == "" {
+		return fmt.Errorf("url is required")
+	}
+	if _, err := domain.NormalizeHTTPMethod(in.Method); err != nil {
+		return err
+	}
+	if in.TimeoutMS < 0 {
+		return fmt.Errorf("timeout_ms must be >= 0")
+	}
+	return nil
+}
+
+type UpdateHTTPRequestInput struct {
+	ID           string             `json:"id" jsonschema:"HTTP request identifier"`
+	CollectionID *string            `json:"collection_id,omitempty" jsonschema:"Move to another HTTP collection"`
+	Name         *string            `json:"name,omitempty" jsonschema:"New request name"`
+	Method       *string            `json:"method,omitempty" jsonschema:"New HTTP method"`
+	URL          *string            `json:"url,omitempty" jsonschema:"New URL template"`
+	Headers      *map[string]string `json:"headers,omitempty" jsonschema:"Replacement header map"`
+	Body         *string            `json:"body,omitempty" jsonschema:"New body"`
+	TimeoutMS    *int               `json:"timeout_ms,omitempty" jsonschema:"New timeout in ms"`
+	SortOrder    *int               `json:"sort_order,omitempty" jsonschema:"New display order"`
+}
+
+func (in UpdateHTTPRequestInput) validate() error {
+	if err := identifier("id", in.ID); err != nil {
+		return err
+	}
+	if in.CollectionID != nil {
+		if err := identifier("collection_id", *in.CollectionID); err != nil {
+			return err
+		}
+	}
+	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
+		return fmt.Errorf("name is required")
+	}
+	if in.URL != nil && strings.TrimSpace(*in.URL) == "" {
+		return fmt.Errorf("url is required")
+	}
+	if in.Method != nil {
+		if _, err := domain.NormalizeHTTPMethod(*in.Method); err != nil {
+			return err
+		}
+	}
+	if in.TimeoutMS != nil && *in.TimeoutMS < 0 {
+		return fmt.Errorf("timeout_ms must be >= 0")
+	}
+	return nil
+}
+
+type ImportHTTPRequestInput struct {
+	CollectionID string `json:"collection_id" jsonschema:"HTTP collection that will own the imported request"`
+	Curl         string `json:"curl" jsonschema:"A curl command to parse into method, URL, headers, and body. Do not include -u credentials"`
+}
+
+func (in ImportHTTPRequestInput) validate() error {
+	if err := identifier("collection_id", in.CollectionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(in.Curl) == "" {
+		return fmt.Errorf("curl is required")
+	}
+	if _, err := domain.ParseCurl(in.Curl); err != nil {
+		return err
+	}
+	return nil
+}

@@ -1,4 +1,4 @@
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, EnvironmentLibrary, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPRequest, HTTPRequestInput, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -30,6 +30,14 @@ export interface AgentShellApi {
   deleteCollection(id: string): Promise<void>
   getEnvironments(): Promise<EnvironmentLibrary>
   updateEnvironments(library: EnvironmentLibrary): Promise<EnvironmentLibrary>
+  createHTTPCollection(input: HTTPCollectionInput): Promise<HTTPCollection>
+  updateHTTPCollection(id: string, input: Partial<HTTPCollectionInput>): Promise<HTTPCollection>
+  deleteHTTPCollection(id: string): Promise<void>
+  createHTTPRequest(input: HTTPRequestInput): Promise<HTTPRequest>
+  updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>): Promise<HTTPRequest>
+  deleteHTTPRequest(id: string): Promise<void>
+  sendHTTPRequest(id: string): Promise<HTTPRequest>
+  importHTTPRequest(collectionID: string, curl: string): Promise<HTTPRequest>
   subscribe(onChange: (event?: string) => void): () => void
 }
 
@@ -65,14 +73,15 @@ export class HttpApi implements AgentShellApi {
   mode = 'live' as const
   async health() { return request<{ status: string }>('/api/health') }
   async getSnapshot(): Promise<Snapshot> {
-    const [summary, runs, ports, history, commands, stacks, projects, collections, checks] = await Promise.all([
+    const [summary, runs, ports, history, commands, stacks, projects, collections, checks, httpCollections] = await Promise.all([
       request<Summary>('/api/summary'), request<Run[] | { items?: Run[] } | null>('/api/runs'),
       request<Listener[] | { items?: Listener[] } | null>('/api/ports'), request<Run[] | { items?: Run[] } | null>('/api/history'),
       request<SavedCommand[] | { items?: SavedCommand[] } | null>('/api/commands'), request<Stack[] | { items?: Stack[] } | null>('/api/stacks'),
       request<Project[] | { items?: Project[] } | null>('/api/projects'), optionalArrayRequest<Collection>('/api/collections'),
 		optionalArrayRequest<CheckDefinition>('/api/checks'),
+		optionalArrayRequest<HTTPCollection>('/api/http-collections'),
     ])
-    return { summary, runs: array(runs), ports: array(ports), history: array(history), commands: array(commands), stacks: array(stacks), projects: array(projects), collections: array(collections), checks: array(checks) }
+    return { summary, runs: array(runs), ports: array(ports), history: array(history), commands: array(commands), stacks: array(stacks), projects: array(projects), collections: array(collections), checks: array(checks), http_collections: array(httpCollections) }
   }
   getRuntime() { return request<RuntimeInfo>('/api/runtime') }
   shutdownRuntime() { return request<ShutdownResult>('/api/runtime/shutdown', { method: 'POST', body: JSON.stringify({ confirm: true }) }) }
@@ -104,6 +113,14 @@ export class HttpApi implements AgentShellApi {
   async deleteCollection(id: string) { await request(`/api/collections/${id}`, { method: 'DELETE' }) }
   getEnvironments() { return request<EnvironmentLibrary>('/api/environments') }
   updateEnvironments(library: EnvironmentLibrary) { return request<EnvironmentLibrary>('/api/environments', { method: 'PUT', body: JSON.stringify(library) }) }
+  createHTTPCollection(input: HTTPCollectionInput) { return request<HTTPCollection>('/api/http-collections', { method: 'POST', body: JSON.stringify(input) }) }
+  updateHTTPCollection(id: string, input: Partial<HTTPCollectionInput>) { return request<HTTPCollection>(`/api/http-collections/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+  async deleteHTTPCollection(id: string) { await request(`/api/http-collections/${id}`, { method: 'DELETE' }) }
+  createHTTPRequest(input: HTTPRequestInput) { return request<HTTPRequest>('/api/http-requests', { method: 'POST', body: JSON.stringify(input) }) }
+  updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>) { return request<HTTPRequest>(`/api/http-requests/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+  async deleteHTTPRequest(id: string) { await request(`/api/http-requests/${id}`, { method: 'DELETE' }) }
+  sendHTTPRequest(id: string) { return request<HTTPRequest>(`/api/http-requests/${id}/send`, { method: 'POST' }) }
+  importHTTPRequest(collectionID: string, curl: string) { return request<HTTPRequest>(`/api/http-collections/${collectionID}/import`, { method: 'POST', body: JSON.stringify({ curl }) }) }
   subscribe(onChange: (event?: string) => void) {
     const source = new EventSource('/api/events')
     const handler = (event: Event) => onChange(event.type)

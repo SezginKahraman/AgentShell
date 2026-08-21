@@ -133,6 +133,12 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		}
 		s.environmentsAPI(w, r)
 		return
+	case "http-collections":
+		s.httpCollectionsAPI(w, r, parts[2:])
+		return
+	case "http-requests":
+		s.httpRequestsAPI(w, r, parts[2:])
+		return
 	case "events":
 		s.sse(w, r)
 		return
@@ -1705,7 +1711,7 @@ func fail(w http.ResponseWriter, e error) {
 		status = 404
 	} else if errors.Is(e, store.ErrConflict) {
 		status = http.StatusConflict
-	} else if errors.Is(e, domain.ErrInvalidCommandParameters) || errors.Is(e, domain.ErrInvalidEnvironment) {
+	} else if errors.Is(e, domain.ErrInvalidCommandParameters) || errors.Is(e, domain.ErrInvalidEnvironment) || errors.Is(e, domain.ErrHTTPRequest) {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, e.Error())

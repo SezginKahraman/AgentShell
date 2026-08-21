@@ -13,9 +13,10 @@ import type { LogFilter } from './logs'
 import { checkOwnerExists, checkOwnerLabel, checkTargetText, filterChecks } from './checkCatalog'
 import type { CheckKindFilter, CheckOwnerFilter } from './checkCatalog'
 import { EnvBadge, EnvironmentsPanel, emptyEnvironmentLibrary } from './environments'
+import { HTTPCollectionsPage } from './httpCollections'
 import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, EnvironmentLibrary, ExpectedPort, Listener, NeededStack, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember, StackPrerequisite } from './types'
 
-type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'tests' | 'stacks' | 'settings'
+type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'tests' | 'http' | 'stacks' | 'settings'
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details' | 'Checks & Tests'
 type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script' | 'Checks & Tests'
 type StackDetailTab = 'Overview' | 'Logs' | 'Checks & Tests'
@@ -40,6 +41,7 @@ const pagePaths: Record<Page, string> = {
 	services: '/services',
 	tasks: '/tasks',
 	tests: '/tests',
+	http: '/http',
 	stacks: '/stacks',
 	settings: '/settings',
 }
@@ -48,7 +50,7 @@ const pageFromPath = (pathname: string): Page => {
 	return (Object.entries(pagePaths).find(([, path]) => path === normalized)?.[0] as Page | undefined) ?? 'dashboard'
 }
 
-const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [], checks: [] }
+const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [], checks: [], http_collections: [] }
 const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
 const externalDisplayState = (lifecycleMode?: string, observedState?: string, status?: string, canStop?: boolean) => {
 	if (lifecycleMode !== 'external') return status ?? 'stopped'
@@ -147,7 +149,7 @@ function Sidebar({ page, setPage, open, close, runtime, mode }: { page: Page; se
   const groups: { label: string; links: [Page, string, React.ReactNode][] }[] = [
     { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['logs', 'Logs', <ScrollText />], ['history', 'History', <History />]] },
     { label: 'Workspace', links: [['projects', 'Projects', <FolderKanban />]] },
-    { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['tests', 'Tests', <TestTube2 />], ['stacks', 'Stacks', <Boxes />]] },
+    { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['tests', 'Tests', <TestTube2 />], ['http', 'HTTP', <Globe2 />], ['stacks', 'Stacks', <Boxes />]] },
   ]
   return <>
     {open && <button className="sidebar-scrim" aria-label="Close navigation" onClick={close} />}
@@ -1347,7 +1349,7 @@ export default function App() {
 	}
   const shutdown = async () => { if (!api) return; setBusy('runtime-shutdown'); try { await api.shutdownRuntime(); setShutdownOpen(false); setShutdownRequested(true); setSelected(null); setRuntime(current => current ? { ...current, status: 'stopping' } : current) } catch (e) { setError(e instanceof Error ? e.message : 'Shutdown failed') } finally { setBusy('') } }
   const select = (run: Run, selectedTab: DetailTab = 'Overview') => { setSelected(run); setTab(selectedTab) }
-  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], tests: ['Tests', 'HTTP and task checks across stacks, launchers and Runs'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
+  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], tests: ['Tests', 'HTTP and task checks across stacks, launchers and Runs'], http: ['HTTP collections', 'Saved API requests, interpolated from stack environments'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
   const filter = <T extends { name?: string; label?: string; command?: string }>(items: T[]) => items.filter(i => `${i.name} ${i.label} ${i.command}`.toLowerCase().includes(query.toLowerCase()))
   const commands = filter(data.commands)
 	const selectedCommand = data.commands.find(command => command.id === selectedCommandID)
@@ -1374,6 +1376,7 @@ export default function App() {
 		{page === 'services' && <div className="catalog-grid">{commands.filter(c => c.kind === 'service').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => openCommand(c.id)} />)}</div>}
 		{page === 'tasks' && <div className="catalog-grid">{commands.filter(c => c.kind === 'task').map(c => <CommandCard key={c.id} command={c} busy={busy === c.id} accepting={accepting} action={a => commandAction(c, a)} favorite={() => favoriteCommand(c)} open={() => openCommand(c.id)} />)}</div>}
 		{page === 'tests' && <TestsPage data={data} query={query} busy={busy} accepting={accepting} run={checkAction} open={openCheck} openOwner={openCheckOwner} />}
+		{page === 'http' && api && <HTTPCollectionsPage data={data} api={api} busy={busy} accepting={accepting} refresh={reload} openStack={stack => { setEditStackID(''); setSelectedStackID(stack.id) }} />}
 		{page === 'stacks' && <><div className="library-toolbar"><div><strong>Reusable environments</strong><span>Dependency-aware groups of saved launchers.</span></div><button className="button primary" data-testid="new-stack" onClick={() => setStackOpen(true)}><Plus /> New stack</button></div><div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} remove={() => setDeleteTarget({ type: 'stack', item: s })} open={() => { setEditStackID(''); setSelectedStackID(s.id) }} />)}</div></>}
         {page === 'settings' && api && <SettingsPage runtime={runtime} mode={api.mode} api={api} onShutdown={() => setShutdownOpen(true)} />}
       </div>
