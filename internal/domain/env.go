@@ -13,6 +13,8 @@ const (
 	WorkspaceLibraryID      = "workspace"
 )
 
+var SeededEnvironmentNames = []string{DefaultEnvironmentName, "prod", "stage", "test"}
+
 var (
 	ErrInvalidEnvironment = errors.New("invalid environment")
 	envNamePattern        = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
@@ -43,6 +45,30 @@ func DefaultEnvironmentNameIn(names []string) string {
 		return names[0]
 	}
 	return DefaultEnvironmentName
+}
+
+func EnsureSeededEnvironmentNames(names []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(names)+len(SeededEnvironmentNames))
+	for _, raw := range names {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, name := range SeededEnvironmentNames {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return append([]string{}, SeededEnvironmentNames...)
+	}
+	return out
 }
 
 func NormalizeEnvironmentLibrary(lib EnvironmentLibrary) (EnvironmentLibrary, error) {

@@ -1,3 +1,26 @@
+export const PLACEHOLDER_RE = /\{\{\s*([^}]+?)\s*\}\}/g
+
+export type TemplatePart =
+  | { kind: 'text'; value: string }
+  | { kind: 'var'; raw: string; key: string; resolved?: string }
+
+export const splitTemplate = (text: string, vars: Record<string, string> = {}): TemplatePart[] => {
+  const parts: TemplatePart[] = []
+  const re = new RegExp(PLACEHOLDER_RE.source, 'g')
+  let last = 0
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text))) {
+    if (match.index > last) parts.push({ kind: 'text', value: text.slice(last, match.index) })
+    const key = match[1].trim()
+    const resolved = Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : undefined
+    parts.push({ kind: 'var', raw: match[0], key, resolved })
+    last = match.index + match[0].length
+  }
+  if (last < text.length) parts.push({ kind: 'text', value: text.slice(last) })
+  if (!parts.length) parts.push({ kind: 'text', value: text })
+  return parts
+}
+
 export const interpolateTemplate = (template: string, vars: Record<string, string>): string => {
   const missing: string[] = []
   const seen = new Set<string>()

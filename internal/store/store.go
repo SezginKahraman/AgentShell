@@ -132,8 +132,34 @@ CREATE INDEX IF NOT EXISTS checks_command_idx ON checks(command_id);
 CREATE INDEX IF NOT EXISTS runs_check_idx ON runs(check_definition_id,created_at);
 CREATE INDEX IF NOT EXISTS http_collections_sort_idx ON http_collections(sort_order,name);
 CREATE INDEX IF NOT EXISTS http_requests_collection_idx ON http_requests(collection_id,sort_order,name);
-INSERT OR IGNORE INTO environment_library(id, names, keys, value_json) VALUES('workspace', '["local"]', '[]', '{}');`)
-	return err
+INSERT OR IGNORE INTO environment_library(id, names, keys, value_json) VALUES('workspace', '["local","prod","stage","test"]', '[]', '{}');`)
+	if err != nil {
+		return err
+	}
+	return s.ensureSeededEnvironmentNames()
+}
+
+func (s *Store) ensureSeededEnvironmentNames() error {
+	ctx := context.Background()
+	lib, err := s.EnvironmentLibrary(ctx)
+	if err != nil {
+		return err
+	}
+	next := domain.EnsureSeededEnvironmentNames(lib.Names)
+	if len(next) == len(lib.Names) {
+		same := true
+		for i := range next {
+			if next[i] != lib.Names[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil
+		}
+	}
+	lib.Names = next
+	return s.SaveEnvironmentLibrary(ctx, lib)
 }
 
 func (s *Store) ensureColumn(table, definition string) error {
@@ -632,7 +658,7 @@ func (s *Store) EnvironmentLibrary(ctx context.Context) (domain.EnvironmentLibra
 	var names, keys, values string
 	err := s.db.QueryRowContext(ctx, `SELECT names,keys,value_json FROM environment_library WHERE id=?`, domain.WorkspaceLibraryID).Scan(&names, &keys, &values)
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.EnvironmentLibrary{Names: []string{domain.DefaultEnvironmentName}}, nil
+		return domain.EnvironmentLibrary{Names: append([]string{}, domain.SeededEnvironmentNames...)}, nil
 	}
 	if err != nil {
 		return domain.EnvironmentLibrary{}, err

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCurl, rewriteURLWithVars } from './parseCurl'
+import { formatCurl, parseCurl, rewriteURLWithVars } from './parseCurl'
 
 describe('parseCurl', () => {
   it('parses a POST JSON curl with line continuations', () => {
@@ -19,5 +19,20 @@ describe('parseCurl', () => {
 
   it('rewrites the longest matching origin to {{KEY}}', () => {
     expect(rewriteURLWithVars('http://127.0.0.1:8080/health', { API_URL: 'http://127.0.0.1:8080' })).toBe('{{API_URL}}/health')
+  })
+})
+
+describe('formatCurl', () => {
+  it('renders a saved GET with placeholders', () => {
+    expect(formatCurl({ method: 'GET', url: '{{API_URL}}/health', headers: {}, body: '' })).toBe("curl -X GET '{{API_URL}}/health'")
+  })
+
+  it('renders headers and body for a saved POST', () => {
+    expect(formatCurl({
+      method: 'POST',
+      url: 'https://api.example.com/v1/hotels',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"city":"IST"}',
+    })).toBe(`curl -X POST 'https://api.example.com/v1/hotels' \\\n  -H 'Content-Type: application/json' \\\n  --data-raw '{"city":"IST"}'`)
   })
 })

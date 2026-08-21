@@ -3,13 +3,14 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/agentshell/agentshell/internal/domain"
 )
 
-func TestEnvironmentLibrarySeedsLocal(t *testing.T) {
+func TestEnvironmentLibrarySeedsLocalProdStageTest(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "env.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -19,8 +20,33 @@ func TestEnvironmentLibrarySeedsLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lib.Names) != 1 || lib.Names[0] != domain.DefaultEnvironmentName {
+	if strings.Join(lib.Names, ",") != strings.Join(domain.SeededEnvironmentNames, ",") {
 		t.Fatalf("seeded library=%+v", lib)
+	}
+}
+
+func TestEnvironmentLibraryMigratesMissingSeededNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "env-migrate.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err = s.SaveEnvironmentLibrary(ctx, domain.EnvironmentLibrary{Names: []string{"local"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	lib, err := s.EnvironmentLibrary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(lib.Names, ",") != "local,prod,stage,test" {
+		t.Fatalf("migrated library=%+v", lib)
 	}
 }
 

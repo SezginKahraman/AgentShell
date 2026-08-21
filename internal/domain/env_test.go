@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +149,16 @@ func TestNormalizeStackEnvironmentAndExtras(t *testing.T) {
 	extras, err = NormalizeStackExtras(map[string]map[string]string{"FEATURE": {"prod": "1"}}, []string{"local", "prod"})
 	if err != nil || extras["FEATURE"]["prod"] != "1" {
 		t.Fatalf("extras=%v err=%v", extras, err)
+	}
+}
+
+func TestEnsureSeededEnvironmentNamesAddsProdStageTest(t *testing.T) {
+	got := EnsureSeededEnvironmentNames([]string{"local"})
+	if strings.Join(got, ",") != "local,prod,stage,test" {
+		t.Fatalf("seeded=%v", got)
+	}
+	got = EnsureSeededEnvironmentNames([]string{"local", "qa"})
+	if strings.Join(got, ",") != "local,qa,prod,stage,test" {
+		t.Fatalf("keep extra names=%v", got)
 	}
 }

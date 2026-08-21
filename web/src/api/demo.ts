@@ -47,7 +47,7 @@ const stacks: Stack[] = [
 	{ id: 'stack-external', name: 'External infrastructure', description: 'Detached resources with port-based observed state.', status: 'running', start_strategy: 'parallel', failure_policy: 'stop', environment: 'local', resolved_environment: 'local', running_count: 1, total_count: 1, members: [{ command_id: 'cmd-external-infra', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Detached infrastructure', status: 'external', lifecycle_mode: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'Expected MySQL port is listening; process ownership remains external.', port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], can_stop: true }] },
 ]
 
-let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod'], keys: ['API_URL'], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com' } } }
+let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod', 'stage', 'test'], keys: ['API_URL'], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com', stage: 'https://staging.example.com', test: 'http://127.0.0.1:8081' } } }
 
 const httpCollections: HTTPCollection[] = [
 	{ id: 'http-hotel', name: 'Hotel Meta API', stack_id: 'stack-internal', sort_order: 0, requests: [
@@ -56,9 +56,9 @@ const httpCollections: HTTPCollection[] = [
 ]
 
 const checks: CheckDefinition[] = [
-	{ id: 'check-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'API health', description: 'Verify the stack API is accepting requests.', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], timeout_ms: 5000, trigger: 'after_ready' },
-	{ id: 'check-staging-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'Staging health', description: 'Verify the deployed test environment.', kind: 'http', http_method: 'GET', http_url: 'https://staging.example.com/health', http_scope: 'remote', expected_status: [200], timeout_ms: 10000, trigger: 'manual' },
-	{ id: 'check-smoke', owner_type: 'command', owner_id: 'cmd-api', name: 'Backend smoke test', description: 'Run the saved project test task.', kind: 'command', command_id: 'cmd-test', trigger: 'manual' },
+	{ id: 'check-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'API health', description: 'Verify the stack API is accepting requests.', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], timeout_ms: 5000, trigger: 'after_ready', tags: ['smoke', 'api'] },
+	{ id: 'check-staging-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'Staging health', description: 'Verify the deployed test environment.', kind: 'http', http_method: 'GET', http_url: 'https://staging.example.com/health', http_scope: 'remote', expected_status: [200], timeout_ms: 10000, trigger: 'manual', tags: ['remote'] },
+	{ id: 'check-smoke', owner_type: 'command', owner_id: 'cmd-api', name: 'Backend smoke test', description: 'Run the saved project test task.', kind: 'command', command_id: 'cmd-test', trigger: 'manual', tags: ['test'] },
 	{ id: 'check-run-health', owner_type: 'run', owner_id: 'run-api', name: 'Current Run health', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], trigger: 'manual' },
 ]
 

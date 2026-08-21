@@ -25,10 +25,9 @@ describe('filterChecks', () => {
     expect(filterChecks(checks, { query: 'go test' }, { stacks, commands, runs }).map(check => check.id)).toEqual(['check-smoke'])
   })
 
-  test('filters by kind and owner type', () => {
-    expect(filterChecks(checks, { kind: 'command' }).map(check => check.id)).toEqual(['check-smoke'])
-    expect(filterChecks(checks, { owner: 'run' }).map(check => check.id)).toEqual(['check-run'])
-    expect(filterChecks(checks, { kind: 'http', owner: 'stack', query: 'health' }).map(check => check.id)).toEqual(['check-health', 'check-staging'])
+  test('filters by selected tags', () => {
+    expect(filterChecks(checks, { tags: ['smoke'] }).map(check => check.id)).toEqual(['check-health'])
+    expect(filterChecks(checks, { tags: ['smoke'], kind: 'http' }).map(check => check.id)).toEqual(['check-health'])
   })
 })
 

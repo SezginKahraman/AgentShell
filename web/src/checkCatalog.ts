@@ -1,14 +1,16 @@
+import { hasAllTags } from './tags'
 import type { CheckDefinition, Run, SavedCommand, Stack } from './types'
 
 export type CheckKindFilter = 'all' | 'http' | 'command'
 export type CheckOwnerFilter = 'all' | 'stack' | 'command' | 'run'
 export type CheckCatalog = { stacks: Stack[]; commands: SavedCommand[]; runs: Run[] }
 
-export const filterChecks = (checks: CheckDefinition[], { query = '', kind = 'all', owner = 'all' }: { query?: string; kind?: CheckKindFilter; owner?: CheckOwnerFilter } = {}, catalog?: CheckCatalog) => {
+export const filterChecks = (checks: CheckDefinition[], { query = '', kind = 'all', owner = 'all', tags = [] }: { query?: string; kind?: CheckKindFilter; owner?: CheckOwnerFilter; tags?: string[] } = {}, catalog?: CheckCatalog) => {
   const needle = query.trim().toLowerCase()
   return checks.filter(check => {
     if (kind !== 'all' && check.kind !== kind) return false
     if (owner !== 'all' && check.owner_type !== owner) return false
+    if (!hasAllTags(check.tags, tags)) return false
     if (!needle) return true
     const ownerName = catalog ? checkOwnerLabel(check, catalog).name : ''
     const target = catalog ? checkTargetText(check, catalog.commands) : ''

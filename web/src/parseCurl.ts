@@ -111,3 +111,18 @@ export const parseCurl = (raw: string): ParsedCurl => {
   })()
   return { name: path, method: method.toUpperCase(), url: target.trim(), headers, body, timeout_ms: timeoutMS }
 }
+
+const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
+
+export const formatCurl = (request: { method?: string; url: string; headers?: Record<string, string>; body?: string; timeout_ms?: number }): string => {
+  const parts = ['curl', '-X', request.method || 'GET', shellQuote(request.url)]
+  const lines = [parts.join(' ')]
+  for (const [key, value] of Object.entries(request.headers ?? {})) {
+    if (!key) continue
+    lines.push(`  -H ${shellQuote(`${key}: ${value}`)}`)
+  }
+  if (request.body) lines.push(`  --data-raw ${shellQuote(request.body)}`)
+  const timeout = request.timeout_ms ?? 0
+  if (timeout > 0 && timeout !== 10000) lines.push(`  --max-time ${timeout / 1000}`)
+  return lines.join(' \\\n')
+}

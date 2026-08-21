@@ -29,7 +29,6 @@ Amaç şudur:
 - Project bir gerçek workspace/root klasörünü temsil eder.
 - Collection yalnızca o projenin katalog içindeki düzenleme klasörüdür.
 - `Project launchers`, launcher'ın bir Project'e ait olduğu fakat isteğe bağlı bir Collection seçilmediği kök alanıdır.
-- `Global catalog`, belirli bir Project'e bağlı olmayan launcher'lar içindir.
 
 ## 2. Bağlantı mimarisi
 

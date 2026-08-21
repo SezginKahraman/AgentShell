@@ -10,6 +10,7 @@ timestamp: 2026-08-17T14:15:00Z
 # AgentShell documentation
 
 - [Change log](log.md)
+- [How-to guides](how-to/index.md)
 - [Environments](environments.md)
 - [HTTP collections](http-collections.md)
 - [Design specs](superpowers/specs/index.md)

@@ -14,7 +14,7 @@ func TestEnvironmentLibraryHTTP(t *testing.T) {
 		t.Fatalf("get status=%d body=%v", status, lib)
 	}
 	names, _ := lib["names"].([]any)
-	if len(names) != 1 || names[0] != "local" {
+	if len(names) != 4 || names[0] != "local" || names[1] != "prod" || names[2] != "stage" || names[3] != "test" {
 		t.Fatalf("seeded library=%v", lib)
 	}
 	if status := request(t, client, http.MethodPut, srv.URL+"/api/environments", map[string]any{"names": []string{}}, &lib); status != http.StatusBadRequest {

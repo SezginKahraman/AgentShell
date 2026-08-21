@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { httpCollectionVars, interpolateTemplate } from './httpInterpolate'
+import { httpCollectionVars, interpolateTemplate, splitTemplate } from './httpInterpolate'
 
 describe('httpInterpolate', () => {
   it('replaces placeholders and reports missing keys', () => {
@@ -15,5 +15,15 @@ describe('httpInterpolate', () => {
     )
     expect(name).toBe('prod')
     expect(vars.API_URL).toBe('https://stack')
+  })
+
+  it('splits {{placeholders}} for highlighting', () => {
+    const parts = splitTemplate("GET '{{HOTEL_URL}}/inventory'", { HOTEL_URL: 'http://127.0.0.1:8091' })
+    expect(parts).toEqual([
+      { kind: 'text', value: "GET '" },
+      { kind: 'var', raw: '{{HOTEL_URL}}', key: 'HOTEL_URL', resolved: 'http://127.0.0.1:8091' },
+      { kind: 'text', value: "/inventory'" },
+    ])
+    expect(splitTemplate('{{ MISSING }}', {})[0]).toMatchObject({ kind: 'var', key: 'MISSING', resolved: undefined })
   })
 })

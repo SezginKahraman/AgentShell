@@ -47,7 +47,7 @@ One document for the whole AgentShell instance, not per project:
 }
 ```
 
-- Empty workspace seeds `names: ["local"]`, empty keys.
+- Empty workspace seeds `names: ["local", "prod", "stage", "test"]`, empty keys. Existing libraries that are missing those names receive them on migrate.
 - At least one name is required; the last name cannot be deleted.
 - `custom` is reserved and rejected as a name.
 - Names are stored lowercase: start with a letter, then `a-z`, `0-9`, `_`, `-`, max 32 characters.
