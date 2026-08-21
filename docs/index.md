@@ -10,4 +10,5 @@ timestamp: 2026-08-17T14:15:00Z
 # AgentShell documentation
 
 - [Change log](log.md)
+- [Environments](environments.md)
 - [Design specs](superpowers/specs/index.md)

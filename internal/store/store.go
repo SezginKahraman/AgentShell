@@ -77,8 +77,12 @@ CREATE TABLE IF NOT EXISTS stacks (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', start_strategy TEXT NOT NULL,
  failure_policy TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT 0, members TEXT NOT NULL DEFAULT '[]',
 	 depends_on_stacks TEXT NOT NULL DEFAULT '[]',
+	 environment TEXT NOT NULL DEFAULT 'local', env TEXT NOT NULL DEFAULT '{}',
 	 project_id TEXT NOT NULL DEFAULT '', collection_id TEXT NOT NULL DEFAULT '', stable_key TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS environment_library (
+ id TEXT PRIMARY KEY, names TEXT NOT NULL DEFAULT '["local"]', keys TEXT NOT NULL DEFAULT '[]', value_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS collections (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, parent_id TEXT NOT NULL DEFAULT '',
@@ -98,7 +102,7 @@ CREATE TABLE IF NOT EXISTS checks (
 	columns := map[string][]string{
 		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'", "check_definition_id TEXT NOT NULL DEFAULT ''", "check_owner_type TEXT NOT NULL DEFAULT ''", "check_owner_id TEXT NOT NULL DEFAULT ''"},
 		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
-		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'"},
+		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'"},
 		"checks":   {"http_scope TEXT NOT NULL DEFAULT 'local'"},
 	}
 	for table, defs := range columns {
@@ -116,7 +120,8 @@ CREATE INDEX IF NOT EXISTS commands_collection_idx ON commands(collection_id);
 CREATE INDEX IF NOT EXISTS stacks_collection_idx ON stacks(collection_id);
 CREATE INDEX IF NOT EXISTS checks_owner_idx ON checks(owner_type,owner_id,name);
 CREATE INDEX IF NOT EXISTS checks_command_idx ON checks(command_id);
-CREATE INDEX IF NOT EXISTS runs_check_idx ON runs(check_definition_id,created_at);`)
+CREATE INDEX IF NOT EXISTS runs_check_idx ON runs(check_definition_id,created_at);
+INSERT OR IGNORE INTO environment_library(id, names, keys, value_json) VALUES('workspace', '["local"]', '[]', '{}');`)
 	return err
 }
 
@@ -576,7 +581,11 @@ func (s *Store) DeleteCommand(ctx context.Context, id string) error {
 }
 
 func (s *Store) SaveStack(ctx context.Context, v *domain.Stack) error {
-	_, e := s.db.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), ts(v.CreatedAt), ts(v.UpdatedAt))
+	envName := strings.TrimSpace(v.Environment)
+	if envName == "" {
+		envName = domain.DefaultEnvironmentName
+	}
+	_, e := s.db.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,environment=excluded.environment,env=excluded.env,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), envName, js(v.Env), ts(v.CreatedAt), ts(v.UpdatedAt))
 	if e != nil && strings.Contains(strings.ToLower(e.Error()), "unique constraint") {
 		return fmt.Errorf("%w: stack stable key already exists", ErrConflict)
 	}
@@ -584,9 +593,9 @@ func (s *Store) SaveStack(ctx context.Context, v *domain.Stack) error {
 }
 func scanStack(row scanner) (domain.Stack, error) {
 	var v domain.Stack
-	var members, prereqs, c, u string
+	var members, prereqs, envJSON, c, u string
 	var fav int
-	e := row.Scan(&v.ID, &v.ProjectID, &v.CollectionID, &v.StableKey, &v.Name, &v.Description, &v.StartStrategy, &v.FailurePolicy, &fav, &members, &prereqs, &c, &u)
+	e := row.Scan(&v.ID, &v.ProjectID, &v.CollectionID, &v.StableKey, &v.Name, &v.Description, &v.StartStrategy, &v.FailurePolicy, &fav, &members, &prereqs, &v.Environment, &envJSON, &c, &u)
 	if errors.Is(e, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -598,10 +607,40 @@ func scanStack(row scanner) (domain.Stack, error) {
 	v.UpdatedAt = parseTime(u)
 	_ = json.Unmarshal([]byte(members), &v.Members)
 	_ = json.Unmarshal([]byte(prereqs), &v.DependsOnStacks)
+	_ = json.Unmarshal([]byte(envJSON), &v.Env)
+	if strings.TrimSpace(v.Environment) == "" {
+		v.Environment = domain.DefaultEnvironmentName
+	}
+	v.ResolvedEnvironment = domain.StackResolvedEnvironment(v.Environment, v.Members)
 	return v, nil
 }
 
-const stackCols = `id,project_id,collection_id,stable_key,name,description,start_strategy,failure_policy,favorite,members,depends_on_stacks,created_at,updated_at`
+const stackCols = `id,project_id,collection_id,stable_key,name,description,start_strategy,failure_policy,favorite,members,depends_on_stacks,environment,env,created_at,updated_at`
+
+func (s *Store) EnvironmentLibrary(ctx context.Context) (domain.EnvironmentLibrary, error) {
+	var names, keys, values string
+	err := s.db.QueryRowContext(ctx, `SELECT names,keys,value_json FROM environment_library WHERE id=?`, domain.WorkspaceLibraryID).Scan(&names, &keys, &values)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.EnvironmentLibrary{Names: []string{domain.DefaultEnvironmentName}}, nil
+	}
+	if err != nil {
+		return domain.EnvironmentLibrary{}, err
+	}
+	var lib domain.EnvironmentLibrary
+	_ = json.Unmarshal([]byte(names), &lib.Names)
+	_ = json.Unmarshal([]byte(keys), &lib.Keys)
+	_ = json.Unmarshal([]byte(values), &lib.Values)
+	return lib, nil
+}
+
+func (s *Store) SaveEnvironmentLibrary(ctx context.Context, lib domain.EnvironmentLibrary) error {
+	normalized, err := domain.NormalizeEnvironmentLibrary(lib)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO environment_library(id,names,keys,value_json) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET names=excluded.names,keys=excluded.keys,value_json=excluded.value_json`, domain.WorkspaceLibraryID, js(normalized.Names), js(normalized.Keys), js(normalized.Values))
+	return err
+}
 
 func (s *Store) Stack(ctx context.Context, id string) (domain.Stack, error) {
 	return scanStack(s.db.QueryRowContext(ctx, `SELECT `+stackCols+` FROM stacks WHERE id=?`, id))

@@ -134,7 +134,9 @@ test('dashboard navigation, details and launcher controls work', async ({ page }
 
   await page.getByRole('button', { name: 'Stacks' }).click()
   await expect(page.getByTestId('stack-card-stack-internal')).toBeVisible()
+  await expect(page.getByTestId('stack-card-stack-internal').getByTestId('stack-env-badge')).toHaveText('local')
 	await page.getByTestId('stack-card-stack-internal').click()
+	await expect(page.getByTestId('stack-environment-stack-internal')).toHaveValue('local')
 	const stackDrawer = page.getByTestId('stack-detail-drawer')
 	await expect(stackDrawer).toContainText('Choose members to start')
 	await expect(stackDrawer.locator('label').filter({ hasText: 'Backend API' }).getByRole('checkbox')).toBeDisabled()
@@ -493,4 +495,13 @@ test('tests page lists, searches, runs and opens the owning stack or launcher', 
   await page.getByTestId('open-test-owner-check-smoke').click()
   await expect(page.getByTestId('command-detail-drawer')).toBeVisible()
   await expect(page.getByTestId('command-detail-drawer')).toContainText('Backend API')
+})
+
+test('settings exposes the workspace environment table', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open settings' }).click()
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect(page.getByTestId('environments-panel')).toBeVisible()
+  await expect(page.getByTestId('environments-table')).toContainText('API_URL')
+  await expect(page.getByTestId('environments-table')).toContainText('prod')
 })

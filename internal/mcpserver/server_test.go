@@ -73,10 +73,10 @@ func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 			t.Errorf("tool %s does not communicate AgentShell intent", tool.Name)
 		}
 	}
-	if len(names) != 41 {
+	if len(names) != 43 {
 		t.Fatalf("published %d tools: %v", len(names), names)
 	}
-	for _, name := range []string{"get_runtime", "list_ports", "shutdown_runtime", "run", "list_runs", "inspect_run", "get_logs", "stop_run", "restart_run", "get_workspace_context", "inspect_project", "list_projects", "save_project", "update_project", "delete_project", "list_collections", "save_collection", "update_collection", "delete_collection", "promote_run", "apply_catalog", "save_command", "start_command", "save_stack", "restart_stack", "list_checks", "save_check", "update_check", "delete_check", "run_check", "run_checks"} {
+	for _, name := range []string{"get_runtime", "list_ports", "shutdown_runtime", "run", "list_runs", "inspect_run", "get_logs", "stop_run", "restart_run", "get_workspace_context", "inspect_project", "list_projects", "save_project", "update_project", "delete_project", "list_collections", "save_collection", "update_collection", "delete_collection", "promote_run", "apply_catalog", "save_command", "start_command", "save_stack", "restart_stack", "list_environments", "update_environments", "list_checks", "save_check", "update_check", "delete_check", "run_check", "run_checks"} {
 		if !names[name] {
 			t.Errorf("missing tool %q", name)
 		}
@@ -180,7 +180,7 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 		}},
 		{Name: "save_command", Arguments: map[string]any{"name": "Vault", "command": "vault operator unseal -", "cwd": "/tmp/internal", "kind": "task", "parameters": []any{map[string]any{"key": "unseal_key", "label": "Vault key", "type": "secret", "required": true, "binding": "stdin"}}}},
 		{Name: "start_command", Arguments: map[string]any{"id": "command-param", "parameters": map[string]any{"unseal_key": "one-shot-only"}}},
-		{Name: "start_stack", Arguments: map[string]any{"id": "stack-1", "command_ids": []any{"command-1", "command-2"}, "parameters": map[string]any{"command-2": map[string]any{"token": "transient-only"}}}},
+		{Name: "start_stack", Arguments: map[string]any{"id": "stack-1", "command_ids": []any{"command-1", "command-2"}, "parameters": map[string]any{"command-2": map[string]any{"token": "transient-only"}}, "environment": "prod"}},
 	}
 	for _, call := range calls {
 		result, callErr := session.CallTool(ctx, call)
@@ -245,6 +245,9 @@ func TestMCPRevision3CatalogToolsForwardStrictPayloads(t *testing.T) {
 	}
 	if start["parameters"].(map[string]any)["command-2"].(map[string]any)["token"] != "transient-only" {
 		t.Errorf("start_stack transient parameters = %#v", start)
+	}
+	if start["environment"] != "prod" {
+		t.Errorf("start_stack environment = %#v", start)
 	}
 }
 

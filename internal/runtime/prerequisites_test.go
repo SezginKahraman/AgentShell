@@ -71,7 +71,7 @@ func TestStartStackRequiresUnreadyPrerequisites(t *testing.T) {
 		t.Fatal("app started without confirmed prerequisites")
 	}
 
-	runs, err = m.StartStackMembersWithPrerequisites(ctx, app.ID, nil, nil, true)
+	runs, err = m.StartStackMembersWithPrerequisites(ctx, app.ID, nil, nil, true, "")
 	if err != nil || len(runs) != 1 || runs[0].CommandDefinitionID != appCmd.ID {
 		t.Fatalf("confirmed start runs=%+v err=%v", runs, err)
 	}
@@ -117,7 +117,7 @@ func TestStartStackSubsetStillRequiresAllPrerequisiteMembers(t *testing.T) {
 	if !errors.As(err, &needed) || needed.Needed[0].TotalCount != 2 {
 		t.Fatalf("subset without flag runs=%+v err=%v", runs, err)
 	}
-	runs, err = m.StartStackMembersWithPrerequisites(ctx, app.ID, []string{ui.ID}, nil, true)
+	runs, err = m.StartStackMembersWithPrerequisites(ctx, app.ID, []string{ui.ID}, nil, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestPrerequisiteWaitTimeoutFailsBeforeStartingDependents(t *testing.T) {
 	appCmd := saveTestCommand(t, s, domain.CommandDefinition{ID: "timeout-app", Name: "App", Command: "touch " + strconv.Quote(marker), Cwd: root})
 	infra := saveTestStack(t, s, domain.Stack{ID: "timeout-infra-stack", Name: "Setup", Members: []domain.StackMember{{CommandID: infraCmd.ID, Position: 0, WaitFor: "exit", WaitTimeoutMS: 3000}}})
 	app := saveTestStack(t, s, domain.Stack{ID: "timeout-app-stack", Name: "App", Members: []domain.StackMember{{CommandID: appCmd.ID, Position: 0, WaitFor: "exit", WaitTimeoutMS: 3000}}, DependsOnStacks: []domain.StackPrerequisite{{StackID: infra.ID, WaitTimeoutMS: 150}}})
-	runs, err := m.StartStackMembersWithPrerequisites(ctx, app.ID, nil, nil, true)
+	runs, err := m.StartStackMembersWithPrerequisites(ctx, app.ID, nil, nil, true, "")
 	if err == nil || !strings.Contains(err.Error(), "not ready after") {
 		t.Fatalf("runs=%+v err=%v, want prerequisite timeout", runs, err)
 	}

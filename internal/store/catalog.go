@@ -37,6 +37,8 @@ type CatalogStackMember struct {
 	DependsOnKeys []string
 	WaitFor       string
 	WaitTimeoutMS int
+	Environment   string
+	Env           map[string]string
 }
 type CatalogBundle struct {
 	Project     domain.Project
@@ -199,7 +201,7 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 			if timeout == 0 {
 				timeout = 30000
 			}
-			members = append(members, domain.StackMember{CommandID: resolved[spec.CommandKey], Position: i, DependsOn: dependencies, WaitFor: waitFor, WaitTimeoutMS: timeout})
+			members = append(members, domain.StackMember{CommandID: resolved[spec.CommandKey], Position: i, DependsOn: dependencies, WaitFor: waitFor, WaitTimeoutMS: timeout, Environment: spec.Environment, Env: spec.Env})
 		}
 		if missing != "" {
 			result.Conflicts = append(result.Conflicts, CatalogResultItem{Type: "stack", Key: item.Key, Message: "unknown stack dependency command_key: " + missing})
@@ -211,6 +213,9 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		v.StableKey = firstNonEmpty(item.Key, strings.ToLower(strings.TrimSpace(v.Name)))
 		v.Members = members
 		v.UpdatedAt = now
+		if strings.TrimSpace(v.Environment) == "" {
+			v.Environment = domain.DefaultEnvironmentName
+		}
 		if v.CreatedAt.IsZero() {
 			v.CreatedAt = now
 		}
@@ -229,7 +234,7 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		} else {
 			v.ID = catalogID("stack", project.ID, v.StableKey)
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), ts(v.CreatedAt), ts(v.UpdatedAt)); e != nil {
+		if _, e = tx.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,environment=excluded.environment,env=excluded.env,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), v.Environment, js(v.Env), ts(v.CreatedAt), ts(v.UpdatedAt)); e != nil {
 			return result, e
 		}
 		appendResult(&result, action, CatalogResultItem{Type: "stack", Key: item.Key, ID: v.ID})
@@ -395,11 +400,12 @@ func commandComparable(a, b domain.CommandDefinition) bool {
 }
 func stackComparable(v domain.Stack) any {
 	return struct {
-		ProjectID, CollectionID, StableKey, Name, Description, StartStrategy, FailurePolicy string
-		Favorite                                                                            bool
-		Members                                                                             string
-		DependsOnStacks                                                                     string
-	}{v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks)}
+		ProjectID, CollectionID, StableKey, Name, Description, StartStrategy, FailurePolicy, Environment string
+		Favorite                                                                                         bool
+		Members                                                                                          string
+		DependsOnStacks                                                                                  string
+		Env                                                                                              string
+	}{v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Environment, v.Favorite, js(v.Members), js(v.DependsOnStacks), js(v.Env)}
 }
 
 var _ = fmt.Sprintf

@@ -3,15 +3,31 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/agentshell/agentshell/internal/domain"
 )
 
-func (m *Manager) startStack(ctx context.Context, id string, commandIDs []string, values map[string]map[string]string, startPrerequisites bool) ([]domain.Run, error) {
+func (m *Manager) startStack(ctx context.Context, id string, commandIDs []string, values map[string]map[string]string, startPrerequisites bool, environment string) ([]domain.Run, error) {
 	stack, err := m.store.Stack(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if env := strings.TrimSpace(environment); env != "" {
+		lib, libErr := m.store.EnvironmentLibrary(ctx)
+		if libErr != nil {
+			return nil, libErr
+		}
+		name, nameErr := domain.NormalizeStackEnvironment(env, lib.Names)
+		if nameErr != nil {
+			return nil, nameErr
+		}
+		domain.ApplyStackEnvironment(&stack, name)
+		stack.UpdatedAt = time.Now().UTC()
+		if err = m.store.SaveStack(ctx, &stack); err != nil {
+			return nil, err
+		}
 	}
 	needed, err := m.unreadyPrerequisites(ctx, stack)
 	if err != nil {

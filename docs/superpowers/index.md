@@ -10,3 +10,4 @@ timestamp: 2026-08-17T14:15:00Z
 # Superpowers docs
 
 - [Specs](specs/index.md)
+- [Plans](plans/index.md)

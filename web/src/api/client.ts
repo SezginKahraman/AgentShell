@@ -1,4 +1,4 @@
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, EnvironmentLibrary, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -17,7 +17,7 @@ export interface AgentShellApi {
   stopRun(id: string): Promise<void>
   restartRun(id: string): Promise<void>
   commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>): Promise<void>
-  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean): Promise<void>
+  stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean, environment?: string): Promise<void>
   promoteRun(id: string, input: PromoteRunInput): Promise<PromoteRunResult>
   updateCommand(id: string, input: Partial<SavedCommand>): Promise<SavedCommand>
   updateStack(id: string, input: Partial<Stack>): Promise<Stack>
@@ -28,6 +28,8 @@ export interface AgentShellApi {
   createCollection(input: CollectionInput): Promise<Collection>
   updateCollection(id: string, input: CollectionInput): Promise<Collection>
   deleteCollection(id: string): Promise<void>
+  getEnvironments(): Promise<EnvironmentLibrary>
+  updateEnvironments(library: EnvironmentLibrary): Promise<EnvironmentLibrary>
   subscribe(onChange: (event?: string) => void): () => void
 }
 
@@ -86,8 +88,8 @@ export class HttpApi implements AgentShellApi {
   async stopRun(id: string) { await request(`/api/runs/${id}/stop`, { method: 'POST' }) }
   async restartRun(id: string) { await request(`/api/runs/${id}/restart`, { method: 'POST' }) }
   async commandAction(id: string, action: 'start' | 'stop' | 'restart', parameters?: Record<string, string>) { await request(`/api/commands/${id}/${action}`, { method: 'POST', body: parameters ? JSON.stringify({ parameters }) : undefined }) }
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean) {
-		const payload = { ...(action === 'start' && commandIDs ? { command_ids: commandIDs } : {}), ...(parameters ? { parameters } : {}), ...(startPrerequisites ? { start_prerequisites: true } : {}) }
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean, environment?: string) {
+		const payload = { ...(action === 'start' && commandIDs ? { command_ids: commandIDs } : {}), ...(parameters ? { parameters } : {}), ...(startPrerequisites ? { start_prerequisites: true } : {}), ...(environment ? { environment } : {}) }
 		await request(`/api/stacks/${id}/${action}`, { method: 'POST', body: Object.keys(payload).length ? JSON.stringify(payload) : undefined })
 	}
   promoteRun(id: string, input: PromoteRunInput) { return request<PromoteRunResult>(`/api/runs/${id}/promote`, { method: 'POST', body: JSON.stringify(input) }) }
@@ -100,6 +102,8 @@ export class HttpApi implements AgentShellApi {
   createCollection(input: CollectionInput) { return request<Collection>('/api/collections', { method: 'POST', body: JSON.stringify(input) }) }
   updateCollection(id: string, input: CollectionInput) { return request<Collection>(`/api/collections/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   async deleteCollection(id: string) { await request(`/api/collections/${id}`, { method: 'DELETE' }) }
+  getEnvironments() { return request<EnvironmentLibrary>('/api/environments') }
+  updateEnvironments(library: EnvironmentLibrary) { return request<EnvironmentLibrary>('/api/environments', { method: 'PUT', body: JSON.stringify(library) }) }
   subscribe(onChange: (event?: string) => void) {
     const source = new EventSource('/api/events')
     const handler = (event: Event) => onChange(event.type)

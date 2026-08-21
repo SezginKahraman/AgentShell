@@ -338,23 +338,27 @@ type ApplyCatalogCommand struct {
 }
 
 type ApplyCatalogStack struct {
-	Key             string                    `json:"key,omitempty" jsonschema:"Request-local stack key"`
-	Name            string                    `json:"name" jsonschema:"Stack name"`
-	Description     string                    `json:"description,omitempty" jsonschema:"Stack purpose"`
-	CollectionKey   string                    `json:"collection_key,omitempty" jsonschema:"Request-local owning collection key"`
-	CommandKeys     []string                  `json:"command_keys,omitempty" jsonschema:"Backward-compatible ordered request-local command keys"`
-	Members         []ApplyCatalogStackMember `json:"members,omitempty" jsonschema:"Members referencing command keys with dependency orchestration"`
-	StartStrategy   string                    `json:"start_strategy,omitempty" jsonschema:"parallel or sequential"`
-	FailurePolicy   string                    `json:"failure_policy,omitempty" jsonschema:"continue or stop"`
-	Favorite        bool                      `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
-	DependsOnStacks []StackPrerequisiteInput  `json:"depends_on_stacks,omitempty" jsonschema:"Persisted prerequisite stack_id values, including cross-project shared infrastructure; same-payload stack keys are not resolved in v1"`
+	Key             string                       `json:"key,omitempty" jsonschema:"Request-local stack key"`
+	Name            string                       `json:"name" jsonschema:"Stack name"`
+	Description     string                       `json:"description,omitempty" jsonschema:"Stack purpose"`
+	CollectionKey   string                       `json:"collection_key,omitempty" jsonschema:"Request-local owning collection key"`
+	CommandKeys     []string                     `json:"command_keys,omitempty" jsonschema:"Backward-compatible ordered request-local command keys"`
+	Members         []ApplyCatalogStackMember    `json:"members,omitempty" jsonschema:"Members referencing command keys with dependency orchestration"`
+	StartStrategy   string                       `json:"start_strategy,omitempty" jsonschema:"parallel or sequential"`
+	FailurePolicy   string                       `json:"failure_policy,omitempty" jsonschema:"continue or stop"`
+	Favorite        bool                         `json:"favorite,omitempty" jsonschema:"Show prominently in the dashboard"`
+	DependsOnStacks []StackPrerequisiteInput     `json:"depends_on_stacks,omitempty" jsonschema:"Persisted prerequisite stack_id values, including cross-project shared infrastructure; same-payload stack keys are not resolved in v1"`
+	Environment     string                       `json:"environment,omitempty" jsonschema:"Active workspace environment name for this stack"`
+	Env             map[string]map[string]string `json:"env,omitempty" jsonschema:"Stack extras: key to environment name to value"`
 }
 
 type ApplyCatalogStackMember struct {
-	CommandKey    string   `json:"command_key" jsonschema:"Request-local command key"`
-	DependsOnKeys []string `json:"depends_on,omitempty" jsonschema:"Stack command keys that must satisfy their wait conditions first"`
-	WaitFor       string   `json:"wait_for,omitempty" jsonschema:"spawn, ready, or exit"`
-	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty" jsonschema:"Wait timeout; defaults to 30000 and must be 100..600000"`
+	CommandKey    string            `json:"command_key" jsonschema:"Request-local command key"`
+	DependsOnKeys []string          `json:"depends_on,omitempty" jsonschema:"Stack command keys that must satisfy their wait conditions first"`
+	WaitFor       string            `json:"wait_for,omitempty" jsonschema:"spawn, ready, or exit"`
+	WaitTimeoutMS int               `json:"wait_timeout_ms,omitempty" jsonschema:"Wait timeout; defaults to 30000 and must be 100..600000"`
+	Environment   string            `json:"environment,omitempty" jsonschema:"Optional pin to a workspace environment name"`
+	Env           map[string]string `json:"env,omitempty" jsonschema:"Member overlay values"`
 }
 
 type ApplyCatalogInput struct {
@@ -854,24 +858,28 @@ type StackPrerequisiteInput struct {
 }
 
 type StackMemberInput struct {
-	CommandID     string   `json:"command_id" jsonschema:"Saved command identifier"`
-	Position      int      `json:"position,omitempty" jsonschema:"Stable zero-based display and sequential-start position"`
-	DependsOn     []string `json:"depends_on,omitempty" jsonschema:"Stack command identifiers that must satisfy their wait condition before this member starts"`
-	WaitFor       string   `json:"wait_for,omitempty" jsonschema:"Condition this member must satisfy before dependents start: spawn, ready, or exit"`
-	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty" jsonschema:"Condition timeout in milliseconds; defaults to 30000 and must be 100..600000"`
+	CommandID     string            `json:"command_id" jsonschema:"Saved command identifier"`
+	Position      int               `json:"position,omitempty" jsonschema:"Stable zero-based display and sequential-start position"`
+	DependsOn     []string          `json:"depends_on,omitempty" jsonschema:"Stack command identifiers that must satisfy their wait condition before this member starts"`
+	WaitFor       string            `json:"wait_for,omitempty" jsonschema:"Condition this member must satisfy before dependents start: spawn, ready, or exit"`
+	WaitTimeoutMS int               `json:"wait_timeout_ms,omitempty" jsonschema:"Condition timeout in milliseconds; defaults to 30000 and must be 100..600000"`
+	Environment   string            `json:"environment,omitempty" jsonschema:"Optional pin to a workspace environment name; empty follows the stack"`
+	Env           map[string]string `json:"env,omitempty" jsonschema:"Member overlay values; win over library and stack extras for this member"`
 }
 
 type SaveStackInput struct {
-	Name            string                   `json:"name" jsonschema:"Human-readable stack name"`
-	Description     string                   `json:"description,omitempty" jsonschema:"Purpose of this collection of saved commands"`
-	ProjectID       string                   `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
-	CollectionID    string                   `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
-	CommandIDs      []string                 `json:"command_ids,omitempty" jsonschema:"Backward-compatible ordered command identifiers; use members for dependency orchestration"`
-	Members         []StackMemberInput       `json:"members,omitempty" jsonschema:"Ordered members with dependency, readiness, and timeout configuration"`
-	StartStrategy   string                   `json:"start_strategy,omitempty" jsonschema:"Start strategy: parallel starts each unblocked wave together; sequential starts one at a time"`
-	FailurePolicy   string                   `json:"failure_policy,omitempty" jsonschema:"Behavior after a member fails its start or wait condition: continue independent branches or stop scheduling"`
-	Favorite        bool                     `json:"favorite,omitempty" jsonschema:"Show this stack prominently in the dashboard"`
-	DependsOnStacks []StackPrerequisiteInput `json:"depends_on_stacks,omitempty" jsonschema:"Other stacks that must be up enough before this stack starts; use persisted stack_id values, including cross-project shared infrastructure"`
+	Name            string                       `json:"name" jsonschema:"Human-readable stack name"`
+	Description     string                       `json:"description,omitempty" jsonschema:"Purpose of this collection of saved commands"`
+	ProjectID       string                       `json:"project_id,omitempty" jsonschema:"Optional owning project identifier"`
+	CollectionID    string                       `json:"collection_id,omitempty" jsonschema:"Optional owning collection identifier returned by save_collection or list_collections"`
+	CommandIDs      []string                     `json:"command_ids,omitempty" jsonschema:"Backward-compatible ordered command identifiers; use members for dependency orchestration"`
+	Members         []StackMemberInput           `json:"members,omitempty" jsonschema:"Ordered members with dependency, readiness, and timeout configuration"`
+	StartStrategy   string                       `json:"start_strategy,omitempty" jsonschema:"Start strategy: parallel starts each unblocked wave together; sequential starts one at a time"`
+	FailurePolicy   string                       `json:"failure_policy,omitempty" jsonschema:"Behavior after a member fails its start or wait condition: continue independent branches or stop scheduling"`
+	Favorite        bool                         `json:"favorite,omitempty" jsonschema:"Show this stack prominently in the dashboard"`
+	DependsOnStacks []StackPrerequisiteInput     `json:"depends_on_stacks,omitempty" jsonschema:"Other stacks that must be up enough before this stack starts; use persisted stack_id values, including cross-project shared infrastructure"`
+	Environment     string                       `json:"environment,omitempty" jsonschema:"Active workspace environment name such as local or prod; do not clone the stack per environment"`
+	Env             map[string]map[string]string `json:"env,omitempty" jsonschema:"Optional stack extras: key to environment name to value; overrides the workspace library for this stack"`
 }
 
 func (in SaveStackInput) validate() error {
@@ -908,17 +916,19 @@ func (in SaveStackInput) validate() error {
 }
 
 type UpdateStackInput struct {
-	ID              string                    `json:"id" jsonschema:"Stack identifier"`
-	Name            *string                   `json:"name,omitempty" jsonschema:"New stack name"`
-	Description     *string                   `json:"description,omitempty" jsonschema:"New description"`
-	ProjectID       *string                   `json:"project_id,omitempty" jsonschema:"New owning project identifier; empty makes the stack global"`
-	CollectionID    *string                   `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the stack to the project root"`
-	CommandIDs      *[]string                 `json:"command_ids,omitempty" jsonschema:"Backward-compatible replacement ordered command identifiers"`
-	Members         *[]StackMemberInput       `json:"members,omitempty" jsonschema:"Replacement members with dependency orchestration settings"`
-	StartStrategy   *string                   `json:"start_strategy,omitempty" jsonschema:"New start strategy: parallel or sequential"`
-	FailurePolicy   *string                   `json:"failure_policy,omitempty" jsonschema:"New failure policy: continue or stop"`
-	Favorite        *bool                     `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
-	DependsOnStacks *[]StackPrerequisiteInput `json:"depends_on_stacks,omitempty" jsonschema:"Replacement prerequisite stacks; empty clears them"`
+	ID              string                        `json:"id" jsonschema:"Stack identifier"`
+	Name            *string                       `json:"name,omitempty" jsonschema:"New stack name"`
+	Description     *string                       `json:"description,omitempty" jsonschema:"New description"`
+	ProjectID       *string                       `json:"project_id,omitempty" jsonschema:"New owning project identifier; empty makes the stack global"`
+	CollectionID    *string                       `json:"collection_id,omitempty" jsonschema:"New collection identifier; empty moves the stack to the project root"`
+	CommandIDs      *[]string                     `json:"command_ids,omitempty" jsonschema:"Backward-compatible replacement ordered command identifiers"`
+	Members         *[]StackMemberInput           `json:"members,omitempty" jsonschema:"Replacement members with dependency orchestration settings"`
+	StartStrategy   *string                       `json:"start_strategy,omitempty" jsonschema:"New start strategy: parallel or sequential"`
+	FailurePolicy   *string                       `json:"failure_policy,omitempty" jsonschema:"New failure policy: continue or stop"`
+	Favorite        *bool                         `json:"favorite,omitempty" jsonschema:"New dashboard favorite state"`
+	DependsOnStacks *[]StackPrerequisiteInput     `json:"depends_on_stacks,omitempty" jsonschema:"Replacement prerequisite stacks; empty clears them"`
+	Environment     *string                       `json:"environment,omitempty" jsonschema:"Replacement active environment name; clears member pins when members are omitted"`
+	Env             *map[string]map[string]string `json:"env,omitempty" jsonschema:"Replacement stack extras"`
 }
 
 func (in UpdateStackInput) validate() error {
@@ -1067,6 +1077,7 @@ type StartStackInput struct {
 	CommandIDs         []string                     `json:"command_ids,omitempty" jsonschema:"Optional non-empty subset of this stack's command identifiers to start; omitted starts all non-running members"`
 	Parameters         map[string]map[string]string `json:"parameters,omitempty" jsonschema:"Transient values by command ID and then saved parameter key; include selected dependencies too"`
 	StartPrerequisites bool                         `json:"start_prerequisites,omitempty" jsonschema:"Set true only after the user confirmed starting listed prerequisite stacks; default false returns needed_stacks instead of starting them"`
+	Environment        string                       `json:"environment,omitempty" jsonschema:"Optional workspace environment name to persist as the stack's active profile, clear member pins, and inject on start; do not create a second stack"`
 }
 
 func (in StartStackInput) validate() error {
@@ -1085,6 +1096,9 @@ func (in StartStackInput) validate() error {
 		if err := validateParameterValues("parameters."+commandID, values); err != nil {
 			return err
 		}
+	}
+	if in.Environment != "" && !domain.ValidEnvironmentName(strings.ToLower(strings.TrimSpace(in.Environment))) {
+		return fmt.Errorf("environment %q is invalid", in.Environment)
 	}
 	return nil
 }
@@ -1422,4 +1436,15 @@ func validateStrings(field string, values []string, maxItems, maxLength int) err
 		seen[trimmed] = struct{}{}
 	}
 	return nil
+}
+
+type UpdateEnvironmentsInput struct {
+	Names  []string                     `json:"names" jsonschema:"Named environment columns such as local and prod; custom is reserved"`
+	Keys   []string                     `json:"keys,omitempty" jsonschema:"Workspace-wide environment variable names defined once"`
+	Values map[string]map[string]string `json:"values,omitempty" jsonschema:"Values keyed by environment variable then environment name"`
+}
+
+func (in UpdateEnvironmentsInput) validate() error {
+	_, err := domain.NormalizeEnvironmentLibrary(domain.EnvironmentLibrary{Names: in.Names, Keys: in.Keys, Values: in.Values})
+	return err
 }

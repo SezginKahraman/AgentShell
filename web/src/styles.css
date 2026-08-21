@@ -203,3 +203,20 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 
 .status-started_unverified { color: var(--blue); }
 .stack-member-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.env-badge { background: var(--surface-hover); border: 1px solid var(--line); border-radius: 999px; color: var(--text-secondary); font: 8px 'DM Mono', monospace; font-style: normal; margin-left: 8px; padding: 2px 7px; text-transform: uppercase; vertical-align: middle; }
+.env-badge.custom { color: var(--amber-text); border-color: var(--amber-border); background: var(--amber-soft); }
+.stack-env-row { align-items: center; display: flex; gap: 12px; margin-bottom: 14px; }
+.stack-env-row label { align-items: center; display: flex; gap: 8px; font-size: 11px; }
+.env-panel { grid-column: 1 / -1; }
+.env-lead { color: var(--muted); font-size: 11px; margin: 0; padding: 0 15px 12px; }
+.env-toolbar { align-items: end; display: flex; flex-wrap: wrap; gap: 10px; padding: 0 15px 14px; }
+.env-toolbar label { display: grid; gap: 4px; font-size: 10px; }
+.env-error { color: var(--red); font-size: 11px; padding: 0 15px 10px; }
+.env-table-wrap { overflow: auto; padding: 0 15px 15px; }
+.env-table { border-collapse: collapse; font-size: 11px; width: 100%; }
+.env-table th, .env-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+.env-table input { width: 100%; }
+.stack-extras { border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 8px; margin: 0 0 16px; padding: 12px; }
+.stack-extras legend { font-size: 11px; font-weight: 700; padding: 0 6px; }
+.stack-extras > span { color: var(--muted); font-size: 10px; }
+.stack-extras label { display: grid; font-size: 10px; gap: 4px; }

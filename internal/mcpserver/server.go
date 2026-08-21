@@ -271,16 +271,20 @@ func registerRuntimeTools(server *mcp.Server, client *daemonClient) {
 }
 
 func registerCatalogTools(server *mcp.Server, client *daemonClient) {
-	addTool(server, "get_workspace_context", "Get workspace context", toolIntent+"Read the explicitly configured MCP workspace root. This never infers a path from the daemon working directory and executes nothing.", readOnly("Get workspace context"), nil,
-		func(_ context.Context, _ EmptyInput) (map[string]any, error) {
-			if client.config.workspaceRoot == "" {
-				return map[string]any{"configured": false}, nil
+	addTool(server, "get_workspace_context", "Get workspace context", toolIntent+"Read the explicitly configured MCP workspace root and the workspace environment names. This never infers a path from the daemon working directory and executes nothing. Use those environment names with start_stack instead of cloning a stack per profile.", readOnly("Get workspace context"), nil,
+		func(ctx context.Context, _ EmptyInput) (map[string]any, error) {
+			out := map[string]any{"configured": false}
+			if client.config.workspaceRoot != "" {
+				out["configured"] = true
+				out["root"] = client.config.workspaceRoot
+				out["name"] = filepath.Base(client.config.workspaceRoot)
 			}
-			return map[string]any{
-				"configured": true,
-				"root":       client.config.workspaceRoot,
-				"name":       filepath.Base(client.config.workspaceRoot),
-			}, nil
+			if client.config.baseURL != nil {
+				if lib, err := client.do(ctx, http.MethodGet, "/api/environments", nil, nil); err == nil {
+					out["environments"] = lib
+				}
+			}
+			return out, nil
 		})
 
 	addTool(server, "inspect_project", "Inspect project commands", toolIntent+"Read a local project without executing anything and return candidate Makefile targets, package scripts, Go commands, Compose commands, and AgentShell config hints. Review candidates before save_command.", readOnly("Inspect project commands"), InspectProjectInput.validate,
@@ -422,12 +426,22 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.waitForRun(ctx, result, input.WaitFor, input.WaitTimeoutMS)
 		})
 
-	addTool(server, "list_stacks", "List stacks", toolIntent+"List reusable groups of saved commands and their aggregate/member runtime states.", readOnly("List stacks"), nil,
+	addTool(server, "list_stacks", "List stacks", toolIntent+"List reusable groups of saved commands and their aggregate/member runtime states, including resolved_environment (a named profile or custom when member pins differ).", readOnly("List stacks"), nil,
 		func(ctx context.Context, _ EmptyInput) (map[string]any, error) {
 			return client.do(ctx, http.MethodGet, "/api/stacks", nil, nil)
 		})
 
-	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Use depends_on_stacks with persisted stack_id values when another stack, including shared infrastructure in another project, must be up first. Preserve project_id and collection_id. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
+	addTool(server, "list_environments", "List environments", toolIntent+"Read the workspace environment library: named columns such as local and prod, keys defined once, and their values. Do not store secrets here.", readOnly("List environments"), nil,
+		func(ctx context.Context, _ EmptyInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodGet, "/api/environments", nil, nil)
+		})
+
+	addTool(server, "update_environments", "Update environments", toolIntent+"Replace the workspace environment library. Keys are defined once; names are columns. custom is reserved. Deleting a name remaps stacks that used it. Never put real secrets in this table.", mutating("Update environments", false, false), UpdateEnvironmentsInput.validate,
+		func(ctx context.Context, input UpdateEnvironmentsInput) (map[string]any, error) {
+			return client.do(ctx, http.MethodPut, "/api/environments", nil, input)
+		})
+
+	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Use depends_on_stacks with persisted stack_id values when another stack, including shared infrastructure in another project, must be up first. Set environment and optional env extras instead of cloning the stack per profile. Preserve project_id and collection_id. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
 		func(ctx context.Context, input SaveStackInput) (map[string]any, error) {
 			payload, err := stackPayload(input)
 			if err != nil {
@@ -451,7 +465,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodDelete, stackPath(input.ID), nil, nil)
 		})
 
-	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or the optional command_ids subset, through AgentShell. Supply transient parameters by command ID for every selected member and dependency that requires them. Selected members automatically include transitive dependencies. Dependents wait for each dependency's configured spawn, ready, or exit condition. If prerequisite stacks are not up enough, the tool returns needed_stacks and does not start this stack; pass start_prerequisites=true only after the user confirmed starting those stacks. Preserve partial results and errors.", mutating("Start stack", false, false), StartStackInput.validate,
+	addTool(server, "start_stack", "Start stack", toolIntent+"Start all non-running members, or the optional command_ids subset, through AgentShell. Supply transient parameters by command ID for every selected member and dependency that requires them. Selected members automatically include transitive dependencies. Dependents wait for each dependency's configured spawn, ready, or exit condition. If prerequisite stacks are not up enough, the tool returns needed_stacks and does not start this stack; pass start_prerequisites=true only after the user confirmed starting those stacks. Pass environment to select a named workspace profile (for example prod) instead of creating another stack; that persists the stack's active environment, clears member pins, and injects the merged env. Preserve partial results and errors.", mutating("Start stack", false, false), StartStackInput.validate,
 		func(ctx context.Context, input StartStackInput) (map[string]any, error) {
 			payload, err := objectPayload(input, "id")
 			if err != nil {
@@ -465,7 +479,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, stackPath(input.ID)+"/stop", nil, nil)
 		})
 
-	addTool(server, "restart_stack", "Restart stack", toolIntent+"Restart the running members and start stopped members of a saved stack, preserving partial and per-member outcomes. The same prerequisite gate as start_stack applies; do not pass start_prerequisites=true unless the user confirmed starting those stacks.", mutating("Restart stack", true, false), StartStackInput.validate,
+	addTool(server, "restart_stack", "Restart stack", toolIntent+"Restart the running members and start stopped members of a saved stack, preserving partial and per-member outcomes. The same prerequisite gate as start_stack applies; do not pass start_prerequisites=true unless the user confirmed starting those stacks. Pass environment to switch the named profile and inject the new values.", mutating("Restart stack", true, false), StartStackInput.validate,
 		func(ctx context.Context, input StartStackInput) (map[string]any, error) {
 			payload, err := objectPayload(input, "id", "command_ids")
 			if err != nil {
@@ -570,7 +584,7 @@ var projectFields = []string{"name", "root_path"}
 var collectionFields = []string{"project_id", "name", "parent_id", "sort_order"}
 
 var stackFields = []string{
-	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members", "depends_on_stacks",
+	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members", "depends_on_stacks", "environment", "env",
 }
 
 func runtimePayload(input RunInput) (map[string]any, error) {

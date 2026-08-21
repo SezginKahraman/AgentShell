@@ -1,5 +1,5 @@
 import type { AgentShellApi } from './client'
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, EnvironmentLibrary, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
 
 const now = Date.now()
 const iso = (minutes: number) => new Date(now - minutes * 60_000).toISOString()
@@ -41,9 +41,11 @@ const collections: Collection[] = [
 ]
 
 const stacks: Stack[] = [
-	{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 2, depends_on_stacks: [{ stack_id: 'stack-external', wait_timeout_ms: 90000 }], members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] },
-	{ id: 'stack-external', name: 'External infrastructure', description: 'Detached resources with port-based observed state.', status: 'running', start_strategy: 'parallel', failure_policy: 'stop', running_count: 1, total_count: 1, members: [{ command_id: 'cmd-external-infra', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Detached infrastructure', status: 'external', lifecycle_mode: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'Expected MySQL port is listening; process ownership remains external.', port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], can_stop: true }] },
+	{ id: 'stack-internal', name: 'Internal Microservices', project_id: 'project-api', collection_id: 'collection-core', description: 'Core APIs and background workers', favorite: true, created_by: 'Claude Code', status: 'partial', start_strategy: 'parallel', failure_policy: 'stop', environment: 'local', resolved_environment: 'local', running_count: 1, total_count: 2, depends_on_stacks: [{ stack_id: 'stack-external', wait_timeout_ms: 90000 }], members: [{ command_id: 'cmd-api', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Backend API', status: 'running', active_run_id: 'run-api' }, { command_id: 'cmd-worker', position: 1, depends_on: ['cmd-api'], wait_for: 'spawn', wait_timeout_ms: 30000, name: 'Notification Worker', status: 'stopped' }] },
+	{ id: 'stack-external', name: 'External infrastructure', description: 'Detached resources with port-based observed state.', status: 'running', start_strategy: 'parallel', failure_policy: 'stop', environment: 'local', resolved_environment: 'local', running_count: 1, total_count: 1, members: [{ command_id: 'cmd-external-infra', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Detached infrastructure', status: 'external', lifecycle_mode: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'Expected MySQL port is listening; process ownership remains external.', port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], can_stop: true }] },
 ]
+
+let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod'], keys: ['API_URL'], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com' } } }
 
 const checks: CheckDefinition[] = [
 	{ id: 'check-health', owner_type: 'stack', owner_id: 'stack-internal', name: 'API health', description: 'Verify the stack API is accepting requests.', kind: 'http', http_method: 'GET', http_url: 'http://127.0.0.1:8080/health', expected_status: [200], timeout_ms: 5000, trigger: 'after_ready' },
@@ -129,8 +131,13 @@ export class DemoApi implements AgentShellApi {
 		})
 		this.emit()
 	}
-  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], _parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean) {
+  async stackAction(id: string, action: 'start' | 'stop' | 'restart', commandIDs?: string[], _parameters?: Record<string, Record<string, string>>, startPrerequisites?: boolean, environment?: string) {
 		const stack = stacks.find(s => s.id === id); if (!stack) return
+		if (environment) {
+			stack.environment = environment
+			stack.resolved_environment = environment
+			stack.members?.forEach(member => { member.environment = undefined })
+		}
 		const memberReady = (member: NonNullable<Stack['members']>[number]) => member.lifecycle_mode === 'external'
 			? member.observed_state === 'running' || member.observed_state === 'checking' || (member.observed_state === 'unknown' && !!member.can_stop)
 			: !!(member.can_stop ?? runningStatus(member.status))
@@ -180,8 +187,22 @@ export class DemoApi implements AgentShellApi {
     commands.push(command); this.emit(); return { action: 'created', command: structuredClone(command) }
   }
   async updateCommand(id: string, input: Partial<SavedCommand>) { const item = commands.find(value => value.id === id); if (!item) throw new Error('Command not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
-  async updateStack(id: string, input: Partial<Stack>) { const item = stacks.find(value => value.id === id); if (!item) throw new Error('Stack not found'); const members = input.members?.map(member => ({ ...(item.members?.find(current => current.command_id === member.command_id) ?? {}), ...member })); Object.assign(item, input, members ? { members } : {}); this.emit(); return structuredClone(item) }
-  async createStack(input: StackInput) { const item: Stack = { ...input, id: `stack-${Date.now()}`, status: 'stopped', running_count: 0, total_count: input.members.length }; stacks.push(item); this.emit(); return structuredClone(item) }
+  async updateStack(id: string, input: Partial<Stack>) {
+		const item = stacks.find(value => value.id === id)
+		if (!item) throw new Error('Stack not found')
+		const members = input.members?.map(member => ({ ...(item.members?.find(current => current.command_id === member.command_id) ?? {}), ...member }))
+		Object.assign(item, input, members ? { members } : {})
+		if (input.environment && !input.members) {
+			item.members?.forEach(member => { member.environment = undefined })
+			item.resolved_environment = input.environment
+		} else {
+			const pins = new Set((item.members ?? []).map(member => member.environment || item.environment || 'local'))
+			item.resolved_environment = pins.size > 1 ? 'custom' : (item.environment || 'local')
+		}
+		this.emit()
+		return structuredClone(item)
+	}
+  async createStack(input: StackInput) { const item: Stack = { ...input, id: `stack-${Date.now()}`, status: 'stopped', running_count: 0, total_count: input.members.length, environment: input.environment || 'local', resolved_environment: input.environment || 'local' }; stacks.push(item); this.emit(); return structuredClone(item) }
 	async deleteCommand(id: string) {
 		const item = commands.find(value => value.id === id)
 		if (!item) throw new Error('Launcher not found')
@@ -200,6 +221,13 @@ export class DemoApi implements AgentShellApi {
   async createCollection(input: CollectionInput) { const item: Collection = { ...input, id: `collection-${Date.now()}` }; collections.push(item); this.emit(); return structuredClone(item) }
   async updateCollection(id: string, input: CollectionInput) { const item = collections.find(value => value.id === id); if (!item) throw new Error('Collection not found'); Object.assign(item, input); this.emit(); return structuredClone(item) }
   async deleteCollection(id: string) { const index = collections.findIndex(value => value.id === id); if (index >= 0) collections.splice(index, 1); commands.filter(value => value.collection_id === id).forEach(value => value.collection_id = undefined); this.emit() }
+  async getEnvironments() { return structuredClone(environmentLibrary) }
+  async updateEnvironments(library: EnvironmentLibrary) {
+		if (!library.names?.length) throw new Error('at least one environment name is required')
+		environmentLibrary = structuredClone({ names: library.names, keys: library.keys ?? [], values: library.values ?? {} })
+		this.emit()
+		return structuredClone(environmentLibrary)
+	}
   subscribe(onChange: () => void) { this.listeners.add(onChange); return () => this.listeners.delete(onChange) }
 }
 

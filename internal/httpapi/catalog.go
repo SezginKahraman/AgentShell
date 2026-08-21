@@ -50,22 +50,26 @@ type catalogCommandInput struct {
 	Parameters        []domain.CommandParameter `json:"parameters,omitempty"`
 }
 type catalogStackInput struct {
-	Key             string                     `json:"key,omitempty"`
-	Name            string                     `json:"name"`
-	Description     string                     `json:"description,omitempty"`
-	CollectionKey   string                     `json:"collection_key,omitempty"`
-	CommandKeys     []string                   `json:"command_keys,omitempty"`
-	Members         []catalogStackMemberInput  `json:"members,omitempty"`
-	StartStrategy   string                     `json:"start_strategy,omitempty"`
-	FailurePolicy   string                     `json:"failure_policy,omitempty"`
-	Favorite        bool                       `json:"favorite,omitempty"`
-	DependsOnStacks []domain.StackPrerequisite `json:"depends_on_stacks,omitempty"`
+	Key             string                       `json:"key,omitempty"`
+	Name            string                       `json:"name"`
+	Description     string                       `json:"description,omitempty"`
+	CollectionKey   string                       `json:"collection_key,omitempty"`
+	CommandKeys     []string                     `json:"command_keys,omitempty"`
+	Members         []catalogStackMemberInput    `json:"members,omitempty"`
+	StartStrategy   string                       `json:"start_strategy,omitempty"`
+	FailurePolicy   string                       `json:"failure_policy,omitempty"`
+	Favorite        bool                         `json:"favorite,omitempty"`
+	DependsOnStacks []domain.StackPrerequisite   `json:"depends_on_stacks,omitempty"`
+	Environment     string                       `json:"environment,omitempty"`
+	Env             map[string]map[string]string `json:"env,omitempty"`
 }
 type catalogStackMemberInput struct {
-	CommandKey    string   `json:"command_key"`
-	DependsOnKeys []string `json:"depends_on,omitempty"`
-	WaitFor       string   `json:"wait_for,omitempty"`
-	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty"`
+	CommandKey    string            `json:"command_key"`
+	DependsOnKeys []string          `json:"depends_on,omitempty"`
+	WaitFor       string            `json:"wait_for,omitempty"`
+	WaitTimeoutMS int               `json:"wait_timeout_ms,omitempty"`
+	Environment   string            `json:"environment,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
 }
 
 func (s *Server) catalogAPI(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -221,7 +225,7 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 				depSeen[dependency] = true
 			}
 			dependencies[member.CommandKey] = member.DependsOnKeys
-			catalogMembers = append(catalogMembers, store.CatalogStackMember{CommandKey: member.CommandKey, DependsOnKeys: member.DependsOnKeys, WaitFor: member.WaitFor, WaitTimeoutMS: member.WaitTimeoutMS})
+			catalogMembers = append(catalogMembers, store.CatalogStackMember{CommandKey: member.CommandKey, DependsOnKeys: member.DependsOnKeys, WaitFor: member.WaitFor, WaitTimeoutMS: member.WaitTimeoutMS, Environment: member.Environment, Env: member.Env})
 		}
 		visiting, visited := map[string]bool{}, map[string]bool{}
 		var visit func(string) error
@@ -247,7 +251,7 @@ func (s *Server) validateCatalogInput(r *http.Request, input *catalogApplyInput)
 				return out, err
 			}
 		}
-		st := domain.Stack{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), StartStrategy: strings.TrimSpace(v.StartStrategy), FailurePolicy: strings.TrimSpace(v.FailurePolicy), Favorite: v.Favorite, DependsOnStacks: v.DependsOnStacks}
+		st := domain.Stack{Name: strings.TrimSpace(v.Name), Description: strings.TrimSpace(v.Description), StartStrategy: strings.TrimSpace(v.StartStrategy), FailurePolicy: strings.TrimSpace(v.FailurePolicy), Favorite: v.Favorite, DependsOnStacks: v.DependsOnStacks, Environment: v.Environment, Env: v.Env}
 		defaultsStack(&st)
 		if st.StartStrategy != "parallel" && st.StartStrategy != "sequential" {
 			return out, errors.New("invalid stack start_strategy")

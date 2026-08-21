@@ -258,11 +258,13 @@ type CommandDefinition struct {
 }
 
 type StackMember struct {
-	CommandID     string   `json:"command_id"`
-	Position      int      `json:"position"`
-	DependsOn     []string `json:"depends_on,omitempty"`
-	WaitFor       string   `json:"wait_for,omitempty"`
-	WaitTimeoutMS int      `json:"wait_timeout_ms,omitempty"`
+	CommandID     string            `json:"command_id"`
+	Position      int               `json:"position"`
+	DependsOn     []string          `json:"depends_on,omitempty"`
+	WaitFor       string            `json:"wait_for,omitempty"`
+	WaitTimeoutMS int               `json:"wait_timeout_ms,omitempty"`
+	Environment   string            `json:"environment,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
 }
 
 // StackPrerequisite is a start-time dependency on another stack, including
@@ -275,19 +277,22 @@ type StackPrerequisite struct {
 const DefaultStackPrerequisiteTimeoutMS = 90000
 
 type Stack struct {
-	ID               string               `json:"id"`
-	ProjectID        string               `json:"project_id,omitempty"`
-	CollectionID     string               `json:"collection_id,omitempty"`
-	StableKey        string               `json:"stable_key,omitempty"`
-	Name             string               `json:"name"`
-	Description      string               `json:"description,omitempty"`
-	StartStrategy    string               `json:"start_strategy"`
-	FailurePolicy    string               `json:"failure_policy"`
-	Favorite         bool                 `json:"favorite"`
-	Members          []StackMember        `json:"members"`
-	DependsOnStacks  []StackPrerequisite  `json:"depends_on_stacks,omitempty"`
-	CreatedAt        time.Time            `json:"created_at"`
-	UpdatedAt        time.Time            `json:"updated_at"`
+	ID                  string                       `json:"id"`
+	ProjectID           string                       `json:"project_id,omitempty"`
+	CollectionID        string                       `json:"collection_id,omitempty"`
+	StableKey           string                       `json:"stable_key,omitempty"`
+	Name                string                       `json:"name"`
+	Description         string                       `json:"description,omitempty"`
+	StartStrategy       string                       `json:"start_strategy"`
+	FailurePolicy       string                       `json:"failure_policy"`
+	Favorite            bool                         `json:"favorite"`
+	Members             []StackMember                `json:"members"`
+	DependsOnStacks     []StackPrerequisite          `json:"depends_on_stacks,omitempty"`
+	Environment         string                       `json:"environment,omitempty"`
+	Env                 map[string]map[string]string `json:"env,omitempty"`
+	ResolvedEnvironment string                       `json:"resolved_environment,omitempty"`
+	CreatedAt           time.Time                    `json:"created_at"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
 }
 
 // PrerequisiteMemberReady is the v1 gate for a prerequisite stack member.
