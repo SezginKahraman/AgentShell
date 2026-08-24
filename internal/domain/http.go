@@ -15,6 +15,9 @@ var (
 const DefaultHTTPRequestTimeoutMS = 10000
 const MaxHTTPRequestTimeoutMS = 120000
 const MaxHTTPRequestBody = 256 << 10
+const MaxHTTPBodyTemplates = 20
+const DefaultHTTPBodyTemplateID = "default"
+const DefaultHTTPBodyTemplateName = "Default"
 
 func HTTPCollectionEnvironment(lib EnvironmentLibrary, collectionEnv string, stack *Stack) string {
 	if stack != nil {
@@ -85,6 +88,114 @@ func NormalizeHTTPMethod(method string) (string, error) {
 	default:
 		return "", fmt.Errorf("%w: unsupported HTTP method %q", ErrHTTPRequest, method)
 	}
+}
+
+func NormalizeHTTPBodyTemplates(body string, templates []HTTPBodyTemplate, activeID string) (string, []HTTPBodyTemplate, string) {
+	out := make([]HTTPBodyTemplate, 0, len(templates))
+	seen := map[string]bool{}
+	for _, item := range templates {
+		id := strings.TrimSpace(item.ID)
+		name := strings.TrimSpace(item.Name)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if name == "" {
+			name = "Template"
+		}
+		out = append(out, HTTPBodyTemplate{ID: id, Name: name, Body: item.Body})
+		if len(out) >= MaxHTTPBodyTemplates {
+			break
+		}
+	}
+	if len(out) == 0 {
+		out = []HTTPBodyTemplate{{ID: DefaultHTTPBodyTemplateID, Name: DefaultHTTPBodyTemplateName, Body: body}}
+		return body, out, DefaultHTTPBodyTemplateID
+	}
+	active := strings.TrimSpace(activeID)
+	found := false
+	for i := range out {
+		if out[i].ID == active {
+			out[i].Body = body
+			found = true
+			break
+		}
+	}
+	if !found {
+		active = out[0].ID
+		out[0].Body = body
+	}
+	return body, out, active
+}
+
+func SwitchHTTPBodyTemplate(body string, templates []HTTPBodyTemplate, activeID, nextID string) (string, []HTTPBodyTemplate, string, error) {
+	body, templates, activeID = NormalizeHTTPBodyTemplates(body, templates, activeID)
+	nextID = strings.TrimSpace(nextID)
+	for _, item := range templates {
+		if item.ID == nextID {
+			return item.Body, templates, nextID, nil
+		}
+	}
+	return body, templates, activeID, fmt.Errorf("%w: unknown body template", ErrHTTPRequest)
+}
+
+func AddHTTPBodyTemplate(body string, templates []HTTPBodyTemplate, activeID, id, name, newBody string) (string, []HTTPBodyTemplate, string, error) {
+	body, templates, activeID = NormalizeHTTPBodyTemplates(body, templates, activeID)
+	if len(templates) >= MaxHTTPBodyTemplates {
+		return body, templates, activeID, fmt.Errorf("%w: at most %d body templates", ErrHTTPRequest, MaxHTTPBodyTemplates)
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return body, templates, activeID, fmt.Errorf("%w: body template id is required", ErrHTTPRequest)
+	}
+	for _, item := range templates {
+		if item.ID == id {
+			return body, templates, activeID, fmt.Errorf("%w: duplicate body template", ErrHTTPRequest)
+		}
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = fmt.Sprintf("Template %d", len(templates)+1)
+	}
+	templates = append(append([]HTTPBodyTemplate{}, templates...), HTTPBodyTemplate{ID: id, Name: name, Body: newBody})
+	return newBody, templates, id, nil
+}
+
+func RemoveHTTPBodyTemplate(body string, templates []HTTPBodyTemplate, activeID, removeID string) (string, []HTTPBodyTemplate, string, error) {
+	body, templates, activeID = NormalizeHTTPBodyTemplates(body, templates, activeID)
+	if len(templates) <= 1 {
+		return body, templates, activeID, fmt.Errorf("%w: keep at least one body template", ErrHTTPRequest)
+	}
+	removeID = strings.TrimSpace(removeID)
+	out := make([]HTTPBodyTemplate, 0, len(templates)-1)
+	for _, item := range templates {
+		if item.ID != removeID {
+			out = append(out, item)
+		}
+	}
+	if len(out) == len(templates) {
+		return body, templates, activeID, fmt.Errorf("%w: unknown body template", ErrHTTPRequest)
+	}
+	if activeID == removeID {
+		return out[0].Body, out, out[0].ID, nil
+	}
+	return body, out, activeID, nil
+}
+
+func RenameHTTPBodyTemplate(templates []HTTPBodyTemplate, id, name string) ([]HTTPBodyTemplate, error) {
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return templates, fmt.Errorf("%w: body template name is required", ErrHTTPRequest)
+	}
+	out := append([]HTTPBodyTemplate{}, templates...)
+	for i := range out {
+		if out[i].ID == id {
+			out[i].Name = name
+			return out, nil
+		}
+	}
+	return templates, fmt.Errorf("%w: unknown body template", ErrHTTPRequest)
 }
 
 func NormalizeHTTPRequestTimeout(ms int) int {

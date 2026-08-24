@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -298,6 +299,10 @@ func (s *Server) validateHTTPRequest(ctx context.Context, request *domain.HTTPRe
 			return errors.New("header names must not be empty")
 		}
 	}
+	if len(request.BodyTemplates) > domain.MaxHTTPBodyTemplates {
+		return fmt.Errorf("at most %d body templates", domain.MaxHTTPBodyTemplates)
+	}
+	request.Body, request.BodyTemplates, request.ActiveBodyID = domain.NormalizeHTTPBodyTemplates(request.Body, request.BodyTemplates, request.ActiveBodyID)
 	return nil
 }
 
@@ -328,14 +333,16 @@ func (p httpCollectionPatch) apply(collection *domain.HTTPCollection) {
 }
 
 type httpRequestPatch struct {
-	CollectionID *string            `json:"collection_id"`
-	Name         *string            `json:"name"`
-	Method       *string            `json:"method"`
-	URL          *string            `json:"url"`
-	Headers      *map[string]string `json:"headers"`
-	Body         *string            `json:"body"`
-	TimeoutMS    *int               `json:"timeout_ms"`
-	SortOrder    *int               `json:"sort_order"`
+	CollectionID  *string                    `json:"collection_id"`
+	Name          *string                    `json:"name"`
+	Method        *string                    `json:"method"`
+	URL           *string                    `json:"url"`
+	Headers       *map[string]string         `json:"headers"`
+	Body          *string                    `json:"body"`
+	BodyTemplates *[]domain.HTTPBodyTemplate `json:"body_templates"`
+	ActiveBodyID  *string                    `json:"active_body_id"`
+	TimeoutMS     *int                       `json:"timeout_ms"`
+	SortOrder     *int                       `json:"sort_order"`
 }
 
 func (p httpRequestPatch) apply(request *domain.HTTPRequest) {
@@ -354,8 +361,21 @@ func (p httpRequestPatch) apply(request *domain.HTTPRequest) {
 	if p.Headers != nil {
 		request.Headers = *p.Headers
 	}
+	if p.BodyTemplates != nil {
+		request.BodyTemplates = *p.BodyTemplates
+	}
+	if p.ActiveBodyID != nil {
+		request.ActiveBodyID = *p.ActiveBodyID
+	}
 	if p.Body != nil {
 		request.Body = *p.Body
+	} else if p.BodyTemplates != nil || p.ActiveBodyID != nil {
+		for _, item := range request.BodyTemplates {
+			if item.ID == request.ActiveBodyID {
+				request.Body = item.Body
+				break
+			}
+		}
 	}
 	if p.TimeoutMS != nil {
 		request.TimeoutMS = *p.TimeoutMS

@@ -376,7 +376,18 @@ function Dashboard({ data, select, runAction, busy, navigate, promote, accepting
   if (workspaceName) {
     return <>
       {!!data.stacks.length && <Panel title="Environments / Stacks" action={<button className="text-button" onClick={() => navigate('stacks')}>View all <ChevronRight /></button>}>
-        <div className="workspace-stack-list">{data.stacks.map(stack => <button type="button" className="workspace-stack-row" data-testid={`workspace-stack-${stack.id}`} key={stack.id} onClick={() => openStack(stack)}><span><strong>{stack.name}</strong><small>{stack.running_count ?? 0}/{stack.total_count ?? (stack.members ?? stack.commands ?? []).length} running · {stack.resolved_environment || stack.environment || 'local'}</small></span><EnvBadge stack={stack} /><Status value={stack.status} /></button>)}</div>
+        <div className="workspace-stack-list">{data.stacks.slice().sort((left, right) => {
+          const rank = (status?: string) => status === 'running' ? 0 : status === 'partial' ? 1 : status === 'stopped' ? 2 : 3
+          const byStatus = rank(left.status) - rank(right.status)
+          return byStatus || left.name.localeCompare(right.name)
+        }).map(stack => {
+          const total = stack.total_count ?? (stack.members ?? stack.commands ?? []).length
+          const active = stack.running_count ?? 0
+          return <button type="button" className={`workspace-stack-row status-${stack.status || 'unknown'}`} data-testid={`workspace-stack-${stack.id}`} key={stack.id} onClick={() => openStack(stack)}>
+            <span className="workspace-stack-copy"><strong>{stack.name}</strong><small>{active}/{total} running</small></span>
+            <span className="workspace-stack-meta"><EnvBadge stack={stack} /><Status value={stack.status} /></span>
+          </button>
+        })}</div>
       </Panel>}
       {!!activeRuns.length && <Panel title="Running now" action={<button className="text-button" onClick={() => navigate('runs')}>View all <ChevronRight /></button>}>
         <div className="run-list">{activeRuns.slice(0, 5).map(run => <RunCard key={run.id} run={run} select={tab => select(run, tab)} act={a => runAction(run, a)} busy={busy === run.id} accepting={accepting} />)}</div>
@@ -944,24 +955,13 @@ function StackDrawer({ stack, stacks, commands, project, collection, checks, htt
 	const [logsError, setLogsError] = useState('')
 	const [library, setLibrary] = useState<EnvironmentLibrary>(emptyEnvironmentLibrary)
 	const [openLogIDs, setOpenLogIDs] = useState<Set<string>>(() => new Set())
-	const prevActiveRef = useRef<Set<string>>(new Set())
 	const memberRunSignature = members.map(member => `${member.command_id}:${member.active_run_id ?? ''}:${member.status ?? ''}`).join('|')
 	const serverEnv = stack.environment || 'local'
 	const [draftEnv, setDraftEnv] = useState(serverEnv)
 	const envNames = library.names.includes(draftEnv) ? library.names : [...library.names, draftEnv]
-	useEffect(() => { setSelectedIDs([]); setEditing(initialEditing); setViewTab('Overview'); setDraft(normalized()); setStrategy(stack.start_strategy ?? 'parallel'); setFailurePolicy(stack.failure_policy ?? 'continue'); setPrereqs(stack.depends_on_stacks ?? []); setMemberRuns({}); setLogMemberID(''); setLogRunID(''); setOpenLogIDs(new Set()); prevActiveRef.current = new Set(); setDraftEnv(stack.environment || 'local') }, [stack.id, initialEditing])
+	useEffect(() => { setSelectedIDs([]); setEditing(initialEditing); setViewTab('Overview'); setDraft(normalized()); setStrategy(stack.start_strategy ?? 'parallel'); setFailurePolicy(stack.failure_policy ?? 'continue'); setPrereqs(stack.depends_on_stacks ?? []); setMemberRuns({}); setLogMemberID(''); setLogRunID(''); setOpenLogIDs(new Set()); setDraftEnv(stack.environment || 'local') }, [stack.id, initialEditing])
 	useEffect(() => { setDraftEnv(serverEnv) }, [serverEnv])
 	useEffect(() => { api.getEnvironments().then(setLibrary).catch(() => setLibrary(emptyEnvironmentLibrary)) }, [api, stack.id])
-	useEffect(() => {
-		const now = new Set(members.filter(isActive).map(member => member.command_id))
-		const started = [...now].filter(id => !prevActiveRef.current.has(id))
-		if (started.length) setOpenLogIDs(current => {
-			const next = new Set(current)
-			started.forEach(id => next.add(id))
-			return next
-		})
-		prevActiveRef.current = now
-	}, [memberRunSignature, stack.id])
 	useEffect(() => {
 		if (viewTab !== 'Logs') return
 		let cancelled = false
@@ -1073,10 +1073,36 @@ function StackDrawer({ stack, stacks, commands, project, collection, checks, htt
 				const active = isActive(member)
 				const external = (member.lifecycle_mode ?? command?.lifecycle_mode) === 'external'
 				const currentState = memberDisplayState(member, command)
-				return <div className={`stack-member-block${openLogIDs.has(member.command_id) ? ' log-open' : ''}`} key={member.command_id}><div className={`stack-member-row ${active ? "active" : ""}`} data-testid={`stack-member-${member.command_id}`}><label className="stack-member-select" title={active ? `${member.name ?? command?.name} has already been started` : `Select ${member.name ?? command?.name}`}><input type="checkbox" checked={selectedIDs.includes(member.command_id)} disabled={active || busy} onChange={() => toggle(member.command_id)} /><span><strong>{member.name ?? command?.name ?? member.command_id}</strong><code>{command?.command ?? member.command_id}</code><small>{command?.cwd ?? "Saved stack member"}</small></span></label><div className="stack-member-state"><span><Status value={currentState} />{external && <em className="external-badge">External</em>}</span>{member.state_detail && <small title={member.state_detail}>{member.state_detail}</small>}<div className="stack-member-actions">{active && command && <button className="button small danger" data-testid={`stack-member-stop-${member.command_id}`} onClick={() => memberAction(command, 'stop')} disabled={globalBusy === member.command_id}><Square /> Stop</button>}<button className="button small" data-testid={`stack-member-logs-${member.command_id}`} aria-pressed={openLogIDs.has(member.command_id)} onClick={() => toggleLog(member.command_id)}><ScrollText /> Logs</button><button className="button small" data-testid={`stack-member-details-${member.command_id}`} onClick={() => openMember(member.command_id)}><ChevronRight /> Details</button></div></div></div>{openLogIDs.has(member.command_id) && <MemberLogCard api={api} commandID={member.command_id} runID={member.active_run_id} live={active} onOpen={() => { setLogMemberID(member.command_id); setLogRunID(member.active_run_id ?? ''); setViewTab('Logs') }} onClose={() => toggleLog(member.command_id)} testId={`stack-member-log-${member.command_id}`} />}</div>
+				const logOpen = openLogIDs.has(member.command_id)
+				const memberName = member.name ?? command?.name ?? member.command_id
+				return <div className={`stack-member-block${logOpen ? ' log-open' : ''}`} key={member.command_id}>
+					<div className={`stack-member-row ${active ? 'active' : ''}`} data-testid={`stack-member-${member.command_id}`} aria-expanded={logOpen} onClick={() => toggleLog(member.command_id)}>
+						<div className="stack-member-select">
+							<label title={active ? `${memberName} has already been started` : `Select ${memberName}`} onClick={event => event.stopPropagation()}>
+								<input type="checkbox" aria-label={`Select ${memberName}`} checked={selectedIDs.includes(member.command_id)} disabled={active || busy} onChange={() => toggle(member.command_id)} />
+							</label>
+							<span>
+								<strong>{memberName}</strong>
+								<code>{command?.command ?? member.command_id}</code>
+								<small>{command?.cwd ?? 'Saved stack member'}</small>
+							</span>
+							<span className="stack-member-toggle" aria-hidden="true">{logOpen ? <ChevronUp /> : <ChevronDown />}</span>
+						</div>
+						<div className="stack-member-state" onClick={event => event.stopPropagation()}>
+							<span><Status value={currentState} />{external && <em className="external-badge">External</em>}</span>
+							{member.state_detail && <small title={member.state_detail}>{member.state_detail}</small>}
+							<div className="stack-member-actions">
+								{active && command && <button className="button small danger" data-testid={`stack-member-stop-${member.command_id}`} onClick={() => memberAction(command, 'stop')} disabled={globalBusy === member.command_id}><Square /> Stop</button>}
+								<button className="button small" data-testid={`stack-member-logs-${member.command_id}`} aria-pressed={logOpen} onClick={() => toggleLog(member.command_id)}><ScrollText /> Logs</button>
+								<button className="button small" data-testid={`stack-member-details-${member.command_id}`} onClick={() => openMember(member.command_id)}><ChevronRight /> Details</button>
+							</div>
+						</div>
+					</div>
+					{logOpen && <MemberLogCard api={api} commandID={member.command_id} runID={member.active_run_id} live={active} onOpen={() => { setLogMemberID(member.command_id); setLogRunID(member.active_run_id ?? ''); setViewTab('Logs') }} onClose={() => toggleLog(member.command_id)} testId={`stack-member-log-${member.command_id}`} />}
+				</div>
 			})}</div>
 		</>}
-	</div>{!editing && <footer className="drawer-actions stack-drawer-actions"><button className="button danger subtle" data-testid={`drawer-delete-stack-${stack.id}`} onClick={remove} disabled={busy || hasActive}><Trash2 /> Delete</button>{hasActive && <><button className="button danger" onClick={() => action("stop")} disabled={busy}><Square /> Stop all</button><button className="button" onClick={() => action("restart")} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button className="button primary" data-testid={`start-selected-stack-${stack.id}`} onClick={() => { setOpenLogIDs(current => new Set([...current, ...selectedIDs])); action("start", selectedIDs); setSelectedIDs([]) }} disabled={busy || !accepting || selectedIDs.length === 0}><Play /> Start selected ({selectedIDs.length})</button></footer>}</aside></>
+	</div>{!editing && <footer className="drawer-actions stack-drawer-actions"><button className="button danger subtle" data-testid={`drawer-delete-stack-${stack.id}`} onClick={remove} disabled={busy || hasActive}><Trash2 /> Delete</button>{hasActive && <><button className="button danger" onClick={() => action("stop")} disabled={busy}><Square /> Stop all</button><button className="button" onClick={() => action("restart")} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button className="button primary" data-testid={`start-selected-stack-${stack.id}`} onClick={() => { action("start", selectedIDs); setSelectedIDs([]) }} disabled={busy || !accepting || selectedIDs.length === 0}><Play /> Start selected ({selectedIDs.length})</button></footer>}</aside></>
 }
 
 function StackExtrasEditor({ stack, envName, save, busy }: { stack: Stack; envName: string; save: (input: Partial<Stack>) => void; busy: boolean }) {

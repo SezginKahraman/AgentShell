@@ -148,6 +148,11 @@ export interface HTTPResult {
 	environment?: string
 	sent_at?: string
 }
+export interface HTTPBodyTemplate {
+	id: string
+	name: string
+	body: string
+}
 export interface HTTPRequest {
 	id: string
 	collection_id: string
@@ -156,6 +161,8 @@ export interface HTTPRequest {
 	url: string
 	headers?: Record<string, string>
 	body?: string
+	body_templates?: HTTPBodyTemplate[]
+	active_body_id?: string
 	timeout_ms?: number
 	sort_order?: number
 	last_result?: HTTPResult

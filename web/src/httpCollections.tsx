@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Globe2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
+import { Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
-import { applyCurlToDraft, curlFromDraft, draftFromRequest, isRequestDraftDirty, type HTTPRequestDraft } from './httpDraft'
+import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
 import { httpCollectionVars, interpolateTemplate } from './httpInterpolate'
 import { TemplateField } from './httpTemplate'
 import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Snapshot, Stack } from './types'
@@ -45,8 +45,10 @@ function responseStatusTone(status?: number, error?: string) {
   return 'ok'
 }
 
-function HTTPResponsePane({ result, testId, empty, headerTestId, actions }: {
+function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, headerTestId, actions }: {
   result?: HTTPResult
+  sending?: boolean
+  pendingLabel?: string
   testId: string
   empty: string
   headerTestId?: string
@@ -60,25 +62,29 @@ function HTTPResponsePane({ result, testId, empty, headerTestId, actions }: {
   const dump = result ? [result.error, ...headers.map(([key, value]) => `${key}: ${value}`), body].filter(Boolean).join('\n\n') : ''
   const summary = result ? `${result.method ?? ''} ${result.url ?? ''}`.trim() : ''
 
-  return <section className="http-response" data-testid={testId}>
+  return <section className={`http-response${sending ? ' sending' : ''}`} data-testid={testId} aria-busy={sending || undefined}>
     <header className="http-response-chrome">
       <span className="terminal-lights" aria-hidden="true"><i /><i /><i /></span>
       <div className="http-response-title">
         <strong>Response</strong>
-        <small title={summary || undefined}>{summary || 'idle'}</small>
+        <small title={sending ? pendingLabel || undefined : summary || undefined}>{sending ? (pendingLabel || 'Sending…') : (summary || 'idle')}</small>
       </div>
-      {result && <div className="http-response-pills">
+      {sending ? <div className="http-response-pills"><span className="http-response-status sending">Sending</span></div> : result ? <div className="http-response-pills">
         <span className={`http-response-status ${tone}`}>{result.status || 'error'}</span>
         {result.environment ? <span>{result.environment}</span> : null}
         {result.duration_ms ? <span>{result.duration_ms}ms</span> : null}
-      </div>}
+      </div> : null}
       <div className="http-response-actions">
-        {dump ? <button type="button" className="button small" data-testid={`${testId}-copy`} onClick={() => { void navigator.clipboard?.writeText(dump).then(() => setCopied(true)) }}>{copied ? 'Copied' : 'Copy'}</button> : null}
+        {dump && !sending ? <button type="button" className="button small" data-testid={`${testId}-copy`} onClick={() => { void navigator.clipboard?.writeText(dump).then(() => setCopied(true)) }}>{copied ? 'Copied' : 'Copy'}</button> : null}
         {actions}
       </div>
     </header>
     <div className="http-response-screen">
-      {!result ? <p className="http-response-idle">{empty}</p> : <>
+      {sending ? <div className="http-response-pending" data-testid={`${testId}-pending`}>
+        <Loader2 className="http-spin" aria-hidden="true" />
+        <p>Waiting for response…</p>
+        {pendingLabel ? <small>{pendingLabel}</small> : null}
+      </div> : !result ? <p className="http-response-idle">{empty}</p> : <>
         {result.error && <pre className="http-response-error">{result.error}</pre>}
         {!!headers.length && <dl className="http-response-headers" data-testid={headerTestId}>{headers.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
         {body && <pre className="http-response-body">{body}</pre>}
@@ -101,7 +107,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const [selectedCollectionID, setSelectedCollectionID] = useState(collections[0]?.id ?? '')
   const [selectedRequestID, setSelectedRequestID] = useState(collections[0]?.requests?.[0]?.id ?? '')
   const [library, setLibrary] = useState<EnvironmentLibrary>({ names: ['local', 'prod', 'stage', 'test'], keys: [], values: {} })
-  const [draft, setDraft] = useState<HTTPRequestDraft>({ name: '', method: 'GET', url: '', headers: '{\n}', body: '', timeout: '10000' })
+  const [draft, setDraft] = useState<HTTPRequestDraft>(() => draftFromRequest(emptyRequest('')))
   const [collectionName, setCollectionName] = useState('')
   const [curl, setCurl] = useState('')
   const [importOpen, setImportOpen] = useState(false)
@@ -111,9 +117,11 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const [notice, setNotice] = useState('')
   const [creating, setCreating] = useState(false)
   const [sending, setSending] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [collapsed, setCollapsed] = useState(readCollapsedPanels)
   const [httpEnv, setHttpEnv] = useState('local')
   const draftRef = useRef(draft)
+  const baselineRef = useRef<HTTPRequestDraft | null>(null)
   const curlFocusedRef = useRef(false)
   draftRef.current = draft
 
@@ -135,8 +143,10 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   useEffect(() => { if (collection) setCollectionName(collection.name) }, [collection?.id])
   useEffect(() => {
     if (!request) return
-    setDraft(draftFromRequest(request))
-    setRequestCurl(curlFromDraft(draftFromRequest(request)))
+    const next = draftFromRequest(request)
+    setDraft(next)
+    baselineRef.current = next
+    setRequestCurl(curlFromDraft(next))
     setCurl('')
     setCopiedCurl(false)
     curlFocusedRef.current = false
@@ -161,33 +171,63 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const persistDraft = async (target = request, next = draftRef.current) => {
     if (!target?.id) return false
-    if (!isRequestDraftDirty(target, next)) return true
+    const baseline = baselineRef.current ?? draftFromRequest(target)
+    if (!isDraftDirty(baseline, next)) return true
     let headers: Record<string, string> = {}
     try { headers = JSON.parse(next.headers || '{}') as Record<string, string> } catch { setError('Headers must be a JSON object'); return false }
     const timeout = Number(next.timeout)
     setError('')
+    setSaving(true)
     try {
-      await api.updateHTTPRequest(target.id, { name: next.name, method: next.method, url: next.url, headers, body: next.body, timeout_ms: Number.isFinite(timeout) ? timeout : 10000 })
+      await api.updateHTTPRequest(target.id, {
+        name: next.name,
+        method: next.method,
+        url: next.url,
+        headers,
+        body: next.body,
+        body_templates: next.bodyTemplates,
+        active_body_id: next.activeBodyID,
+        timeout_ms: Number.isFinite(timeout) ? timeout : 10000,
+      })
+      baselineRef.current = next
       return true
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save request')
       return false
+    } finally {
+      setSaving(false)
     }
   }
 
+  const dirty = baselineRef.current ? isDraftDirty(baselineRef.current, draft) : false
+  const saveLabel = saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved'
+
+  useEffect(() => {
+    const onLeave = (event: BeforeUnloadEvent) => {
+      if (!dirty) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onLeave)
+    return () => window.removeEventListener('beforeunload', onLeave)
+  }, [dirty])
+
+  const confirmDiscard = () => !dirty || window.confirm('You have unsaved changes. Leave anyway? They will be gone.')
+
   const selectRequest = (id: string) => {
-    if (request && id !== request.id) void persistDraft()
+    if (request && id !== request.id && !confirmDiscard()) return
     setSelectedRequestID(id)
   }
 
   const selectCollection = (id: string) => {
-    if (request) void persistDraft()
+    if (request && !confirmDiscard()) return
     const next = collections.find(item => item.id === id)
     setSelectedCollectionID(id)
     setSelectedRequestID(next?.requests?.[0]?.id ?? '')
   }
 
   const createCollection = async () => {
+    if (!confirmDiscard()) return
     setCreating(true)
     setError('')
     setNotice('')
@@ -253,7 +293,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const addRequest = async () => {
     if (!collection) return
-    if (request) await persistDraft()
+    if (!confirmDiscard()) return
     setError('')
     try {
       const created = await api.createHTTPRequest({ ...emptyRequest(collection.id), sort_order: collection.requests?.length ?? 0 })
@@ -266,7 +306,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const importCurl = async () => {
     if (!collection) return
-    if (request) await persistDraft()
+    if (!confirmDiscard()) return
     setError('')
     try {
       const created = await api.importHTTPRequest(collection.id, curl)
@@ -381,9 +421,9 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         {request ? <div className="http-editor">
           <div className="http-url-row">
             <select aria-label="HTTP method" value={draft.method} onChange={event => setDraft(current => ({ ...current, method: event.target.value as HTTPRequestDraft['method'] }))}>{methods.map(method => <option key={method}>{method}</option>)}</select>
-            <TemplateField ariaLabel="Request URL" testId="http-request-url" value={draft.url} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={url => setDraft(current => ({ ...current, url }))} onBlur={() => persistDraft()} />
+            <TemplateField ariaLabel="Request URL" testId="http-request-url" value={draft.url} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={url => setDraft(current => ({ ...current, url }))} />
             <div className="http-url-actions">
-              <button type="button" className="button primary" data-testid="send-http-request" onClick={send} disabled={sending || busy === request.id || !accepting}><Play /> {sending ? 'Sending…' : 'Send'}</button>
+              <button type="button" className="button primary" data-testid="send-http-request" onClick={send} disabled={sending || busy === request.id || !accepting}>{sending ? <Loader2 className="http-spin" /> : <Play />} {sending ? 'Sending…' : 'Send'}</button>
             </div>
           </div>
           {importOpen && <div className="http-curl">
@@ -397,7 +437,6 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
               if (next) {
                 setDraft(next)
                 setRequestCurl(curlFromDraft(next))
-                void persistDraft(request, next)
               } else if (requestCurl.trim()) setError('curl is invalid')
             }} /></label>
             <button type="button" className="button small" data-testid="copy-curl" onClick={() => { void navigator.clipboard?.writeText(requestCurl).then(() => setCopiedCurl(true)) }}>{copiedCurl ? 'Copied' : 'Copy'}</button>
@@ -405,13 +444,49 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <button type="button" className="button primary small" data-testid="import-curl-submit" onClick={importCurl} disabled={!curl.trim()}>Import</button>
           </div>}
           <div className="http-meta-row">
-            <input aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} onBlur={() => persistDraft()} />
-            <label>Timeout ms<input aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} onBlur={() => persistDraft()} /></label>
+            <label>Request name<input aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} /></label>
+            <label>Timeout ms<input aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} /></label>
           </div>
           <p className="http-preview" data-testid="http-url-preview">{resolved.preview}</p>
-          <label>Headers<TemplateField multiline minHeight={72} ariaLabel="Request headers" value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} onBlur={() => persistDraft()} /></label>
-          <label>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={body => setDraft(current => ({ ...current, body }))} onBlur={() => persistDraft()} /></label>
-          <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} empty="Send to capture the last result here. This is not a process Run." />
+          <label>Headers<TemplateField multiline minHeight={72} ariaLabel="Request headers" value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} /></label>
+          <div className="http-body-block">
+            <div className="http-body-toolbar">
+              <label>Saved body
+                <select aria-label="Saved body" data-testid="http-body-template" value={draft.activeBodyID} onChange={event => {
+                  setDraft(switchBodyTemplate(draft, event.target.value))
+                }}>
+                  {draft.bodyTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              <label>Name
+                <input aria-label="Body template name" data-testid="http-body-template-name" value={draft.bodyTemplates.find(item => item.id === draft.activeBodyID)?.name ?? ''} onChange={event => setDraft(current => ({
+                  ...current,
+                  bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, name: event.target.value } : item),
+                }))} onBlur={() => {
+                  setDraft(renameBodyTemplate(draft, draft.activeBodyID, draft.bodyTemplates.find(item => item.id === draft.activeBodyID)?.name ?? ''))
+                }} />
+              </label>
+              <div className="http-body-actions">
+                <button type="button" className="button small primary" data-testid="http-save-body" disabled={!dirty || saving} onClick={() => void persistDraft()}>Save</button>
+                <button type="button" className="button small" data-testid="http-add-body-template" disabled={draft.bodyTemplates.length >= MAX_BODY_TEMPLATES} onClick={() => {
+                  setDraft(addBodyTemplate(draft, newBodyTemplateID(), `Template ${draft.bodyTemplates.length + 1}`, draft.body))
+                }}>New</button>
+                <button type="button" className="button small" data-testid="http-delete-body-template" disabled={draft.bodyTemplates.length <= 1} onClick={() => {
+                  setDraft(removeBodyTemplate(draft, draft.activeBodyID))
+                }}>Delete</button>
+              </div>
+            </div>
+            <p className="http-body-hint">
+              <span className={`http-save-state ${saving ? 'saving' : dirty ? 'unsaved' : 'saved'}`} data-testid="http-save-state">{saveLabel}</span>
+              New copies this body as a draft. Save to keep it, Delete to drop it. Refresh warns, then discards.
+            </p>
+            <label>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={body => setDraft(current => ({
+              ...current,
+              body,
+              bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, body } : item),
+            }))} /></label>
+          </div>
+          <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} sending={sending} pendingLabel={`${draft.method} ${resolved.preview || draft.url}`.trim()} empty="Send to capture the last result here. This is not a process Run." />
         </div> : <div className="http-empty-main"><strong>No requests</strong><span>Add a request or import curl.</span></div>}
       </div>
     </div>}
@@ -462,8 +537,10 @@ export function StackHTTPPanel({ collections, api, accepting, refresh, openHTTP 
       {selected && <HTTPResponsePane
         testId="stack-http-response"
         result={selected.last_result}
+        sending={sending === selected.id}
+        pendingLabel={`${selected.method ?? 'GET'} ${selected.url}`}
         empty="Send to capture the last result here."
-        actions={<button type="button" className="button primary small" data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}><Play /> {sending === selected.id ? 'Sending…' : 'Send'}</button>}
+        actions={<button type="button" className="button primary small" data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}>{sending === selected.id ? <Loader2 className="http-spin" /> : <Play />} {sending === selected.id ? 'Sending…' : 'Send'}</button>}
       />}
     </>}
   </div>

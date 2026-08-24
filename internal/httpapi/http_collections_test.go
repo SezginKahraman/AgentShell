@@ -54,6 +54,9 @@ func TestHTTPCollectionCRUDAndSend(t *testing.T) {
 	}, &reqBody); status != http.StatusCreated {
 		t.Fatalf("request status=%d body=%v", status, reqBody)
 	}
+	if reqBody["active_body_id"] != "default" {
+		t.Fatalf("new request seeds a default body template: %v", reqBody)
+	}
 	var sent map[string]any
 	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-requests/"+reqBody["id"].(string)+"/send", nil, &sent); status != http.StatusOK {
 		t.Fatalf("send status=%d body=%v", status, sent)
@@ -70,6 +73,24 @@ func TestHTTPCollectionCRUDAndSend(t *testing.T) {
 	}
 	if imported["method"] != "POST" || imported["url"] != "{{API_URL}}/v1/hotels" || imported["body"] != `{"city":"IST"}` {
 		t.Fatalf("imported=%v", imported)
+	}
+	templates, _ := imported["body_templates"].([]any)
+	if imported["active_body_id"] != "default" || len(templates) != 1 {
+		t.Fatalf("imported templates=%v", imported)
+	}
+	var updated map[string]any
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/http-requests/"+imported["id"].(string), map[string]any{
+		"body":           `{"city":"ANK"}`,
+		"active_body_id": "promo",
+		"body_templates": []map[string]string{
+			{"id": "default", "name": "Default", "body": `{"city":"IST"}`},
+			{"id": "promo", "name": "Promo", "body": `{"city":"ANK"}`},
+		},
+	}, &updated); status != http.StatusOK {
+		t.Fatalf("update templates status=%d body=%v", status, updated)
+	}
+	if updated["body"] != `{"city":"ANK"}` || updated["active_body_id"] != "promo" {
+		t.Fatalf("updated templates=%v", updated)
 	}
 	var listed []map[string]any
 	if status := request(t, client, http.MethodGet, srv.URL+"/api/http-collections", nil, &listed); status != http.StatusOK || len(listed) != 1 || len(listed[0]["requests"].([]any)) != 2 {

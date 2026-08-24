@@ -109,10 +109,11 @@ CREATE TABLE IF NOT EXISTS http_requests (
 		return err
 	}
 	columns := map[string][]string{
-		"runs":     {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'", "check_definition_id TEXT NOT NULL DEFAULT ''", "check_owner_type TEXT NOT NULL DEFAULT ''", "check_owner_id TEXT NOT NULL DEFAULT ''"},
-		"commands": {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
-		"stacks":   {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'"},
-		"checks":   {"http_scope TEXT NOT NULL DEFAULT 'local'"},
+		"runs":          {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'", "check_definition_id TEXT NOT NULL DEFAULT ''", "check_owner_type TEXT NOT NULL DEFAULT ''", "check_owner_id TEXT NOT NULL DEFAULT ''"},
+		"commands":      {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
+		"stacks":        {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'"},
+		"checks":        {"http_scope TEXT NOT NULL DEFAULT 'local'"},
+		"http_requests": {"body_templates TEXT NOT NULL DEFAULT '[]'", "active_body_id TEXT NOT NULL DEFAULT ''"},
 	}
 	for table, defs := range columns {
 		for _, def := range defs {
@@ -817,7 +818,7 @@ func (s *Store) DeleteCheck(ctx context.Context, id string) error {
 }
 
 const httpCollectionCols = `id,name,description,stack_id,environment,sort_order,created_at,updated_at`
-const httpRequestCols = `id,collection_id,name,method,url,headers,body,timeout_ms,sort_order,last_result,created_at,updated_at`
+const httpRequestCols = `id,collection_id,name,method,url,headers,body,body_templates,active_body_id,timeout_ms,sort_order,last_result,created_at,updated_at`
 
 func (s *Store) SaveHTTPCollection(ctx context.Context, v *domain.HTTPCollection) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO http_collections(`+httpCollectionCols+`) VALUES(?,?,?,?,?,?,?,?)
@@ -903,18 +904,18 @@ func (s *Store) SaveHTTPRequest(ctx context.Context, v *domain.HTTPRequest) erro
 	if v.LastResult != nil {
 		last = js(v.LastResult)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO http_requests(`+httpRequestCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO http_requests(`+httpRequestCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET collection_id=excluded.collection_id,name=excluded.name,method=excluded.method,url=excluded.url,
-headers=excluded.headers,body=excluded.body,timeout_ms=excluded.timeout_ms,sort_order=excluded.sort_order,
-last_result=excluded.last_result,updated_at=excluded.updated_at`,
-		v.ID, v.CollectionID, v.Name, v.Method, v.URL, js(v.Headers), v.Body, v.TimeoutMS, v.SortOrder, last, ts(v.CreatedAt), ts(v.UpdatedAt))
+headers=excluded.headers,body=excluded.body,body_templates=excluded.body_templates,active_body_id=excluded.active_body_id,
+timeout_ms=excluded.timeout_ms,sort_order=excluded.sort_order,last_result=excluded.last_result,updated_at=excluded.updated_at`,
+		v.ID, v.CollectionID, v.Name, v.Method, v.URL, js(v.Headers), v.Body, js(v.BodyTemplates), v.ActiveBodyID, v.TimeoutMS, v.SortOrder, last, ts(v.CreatedAt), ts(v.UpdatedAt))
 	return err
 }
 
 func scanHTTPRequest(row scanner) (domain.HTTPRequest, error) {
 	var v domain.HTTPRequest
-	var headers, last, created, updated string
-	err := row.Scan(&v.ID, &v.CollectionID, &v.Name, &v.Method, &v.URL, &headers, &v.Body, &v.TimeoutMS, &v.SortOrder, &last, &created, &updated)
+	var headers, templates, last, created, updated string
+	err := row.Scan(&v.ID, &v.CollectionID, &v.Name, &v.Method, &v.URL, &headers, &v.Body, &templates, &v.ActiveBodyID, &v.TimeoutMS, &v.SortOrder, &last, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -924,6 +925,8 @@ func scanHTTPRequest(row scanner) (domain.HTTPRequest, error) {
 	v.CreatedAt = parseTime(created)
 	v.UpdatedAt = parseTime(updated)
 	_ = json.Unmarshal([]byte(headers), &v.Headers)
+	_ = json.Unmarshal([]byte(templates), &v.BodyTemplates)
+	v.Body, v.BodyTemplates, v.ActiveBodyID = domain.NormalizeHTTPBodyTemplates(v.Body, v.BodyTemplates, v.ActiveBodyID)
 	if strings.TrimSpace(last) != "" && last != "null" {
 		var result domain.HTTPResult
 		if json.Unmarshal([]byte(last), &result) == nil {

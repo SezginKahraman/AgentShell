@@ -1500,14 +1500,16 @@ func (in UpdateHTTPCollectionInput) validate() error {
 }
 
 type SaveHTTPRequestInput struct {
-	CollectionID string            `json:"collection_id" jsonschema:"Parent HTTP collection identifier"`
-	Name         string            `json:"name" jsonschema:"Request name"`
-	Method       string            `json:"method,omitempty" jsonschema:"HTTP method; defaults to GET"`
-	URL          string            `json:"url" jsonschema:"URL template; may include {{KEY}} from the workspace environment library"`
-	Headers      map[string]string `json:"headers,omitempty" jsonschema:"Non-sensitive headers; values may include {{KEY}}"`
-	Body         string            `json:"body,omitempty" jsonschema:"Optional non-sensitive body; may include {{KEY}}"`
-	TimeoutMS    int               `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms; default 10000, max 120000"`
-	SortOrder    int               `json:"sort_order,omitempty" jsonschema:"Display order inside the collection"`
+	CollectionID  string                    `json:"collection_id" jsonschema:"Parent HTTP collection identifier"`
+	Name          string                    `json:"name" jsonschema:"Request name"`
+	Method        string                    `json:"method,omitempty" jsonschema:"HTTP method; defaults to GET"`
+	URL           string                    `json:"url" jsonschema:"URL template; may include {{KEY}} from the workspace environment library"`
+	Headers       map[string]string         `json:"headers,omitempty" jsonschema:"Non-sensitive headers; values may include {{KEY}}"`
+	Body          string                    `json:"body,omitempty" jsonschema:"Optional non-sensitive body; may include {{KEY}}. This is the active template text used by send and curl"`
+	BodyTemplates []domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Named saved bodies for this request; send uses the active one"`
+	ActiveBodyID  string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active; Body is kept in sync with that template"`
+	TimeoutMS     int                       `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms; default 10000, max 120000"`
+	SortOrder     int                       `json:"sort_order,omitempty" jsonschema:"Display order inside the collection"`
 }
 
 func (in SaveHTTPRequestInput) validate() error {
@@ -1530,15 +1532,17 @@ func (in SaveHTTPRequestInput) validate() error {
 }
 
 type UpdateHTTPRequestInput struct {
-	ID           string             `json:"id" jsonschema:"HTTP request identifier"`
-	CollectionID *string            `json:"collection_id,omitempty" jsonschema:"Move to another HTTP collection"`
-	Name         *string            `json:"name,omitempty" jsonschema:"New request name"`
-	Method       *string            `json:"method,omitempty" jsonschema:"New HTTP method"`
-	URL          *string            `json:"url,omitempty" jsonschema:"New URL template"`
-	Headers      *map[string]string `json:"headers,omitempty" jsonschema:"Replacement header map"`
-	Body         *string            `json:"body,omitempty" jsonschema:"New body"`
-	TimeoutMS    *int               `json:"timeout_ms,omitempty" jsonschema:"New timeout in ms"`
-	SortOrder    *int               `json:"sort_order,omitempty" jsonschema:"New display order"`
+	ID            string                     `json:"id" jsonschema:"HTTP request identifier"`
+	CollectionID  *string                    `json:"collection_id,omitempty" jsonschema:"Move to another HTTP collection"`
+	Name          *string                    `json:"name,omitempty" jsonschema:"New request name"`
+	Method        *string                    `json:"method,omitempty" jsonschema:"New HTTP method"`
+	URL           *string                    `json:"url,omitempty" jsonschema:"New URL template"`
+	Headers       *map[string]string         `json:"headers,omitempty" jsonschema:"Replacement header map"`
+	Body          *string                    `json:"body,omitempty" jsonschema:"New active body"`
+	BodyTemplates *[]domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Replacement named body templates"`
+	ActiveBodyID  *string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active"`
+	TimeoutMS     *int                       `json:"timeout_ms,omitempty" jsonschema:"New timeout in ms"`
+	SortOrder     *int                       `json:"sort_order,omitempty" jsonschema:"New display order"`
 }
 
 func (in UpdateHTTPRequestInput) validate() error {

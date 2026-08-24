@@ -325,9 +325,33 @@ func TestHTTPCollectionsCRUDAndStackUnbind(t *testing.T) {
 	if err = s.SaveHTTPRequest(ctx, &request); err != nil {
 		t.Fatal(err)
 	}
+	request.Body = `{"q":"ist"}`
+	request.BodyTemplates = []domain.HTTPBodyTemplate{
+		{ID: "search", Name: "Search", Body: `{"q":"ist"}`},
+		{ID: "detail", Name: "Detail", Body: `{"id":1}`},
+	}
+	request.ActiveBodyID = "search"
+	if err = s.SaveHTTPRequest(ctx, &request); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.HTTPRequest(ctx, request.ID)
+	if err != nil || stored.ActiveBodyID != "search" || len(stored.BodyTemplates) != 2 || stored.BodyTemplates[1].Body != `{"id":1}` {
+		t.Fatalf("body templates: %+v err=%v", stored, err)
+	}
+	legacy := domain.HTTPRequest{ID: "http-req-legacy", CollectionID: collection.ID, Name: "Legacy", Method: "POST", URL: "{{API_URL}}/search", Body: `{"legacy":true}`, TimeoutMS: 5000, CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveHTTPRequest(ctx, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = s.HTTPRequest(ctx, legacy.ID)
+	if err != nil || stored.ActiveBodyID != domain.DefaultHTTPBodyTemplateID || len(stored.BodyTemplates) != 1 || stored.BodyTemplates[0].Body != `{"legacy":true}` {
+		t.Fatalf("legacy body hydrates default template: %+v err=%v", stored, err)
+	}
 	got, err := s.HTTPCollection(ctx, collection.ID)
-	if err != nil || got.StackID != stack.ID || len(got.Requests) != 1 || got.Requests[0].URL != request.URL {
+	if err != nil || got.StackID != stack.ID || len(got.Requests) != 2 {
 		t.Fatalf("collection=%+v err=%v", got, err)
+	}
+	if got.Requests[0].URL != request.URL && got.Requests[1].URL != request.URL {
+		t.Fatalf("collection requests=%+v", got.Requests)
 	}
 	if err = s.DeleteStack(ctx, stack.ID); err != nil {
 		t.Fatal(err)

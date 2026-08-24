@@ -569,7 +569,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodDelete, httpCollectionPath(input.ID), nil, nil)
 		})
 
-	addTool(server, "save_http_request", "Save HTTP request", toolIntent+"Add an independent HTTP request to an HTTP collection. URL, headers, and body may use {{KEY}} from the workspace environment library. Never store secrets. This does not send the request and is not save_check.", mutating("Save HTTP request", false, false), SaveHTTPRequestInput.validate,
+	addTool(server, "save_http_request", "Save HTTP request", toolIntent+"Add an independent HTTP request to an HTTP collection. URL, headers, and body may use {{KEY}} from the workspace environment library. Optional named body_templates; body is the active template used by send. Never store secrets. This does not send the request and is not save_check.", mutating("Save HTTP request", false, false), SaveHTTPRequestInput.validate,
 		func(ctx context.Context, input SaveHTTPRequestInput) (map[string]any, error) {
 			payload, err := objectPayload(input)
 			if err != nil {

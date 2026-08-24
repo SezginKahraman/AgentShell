@@ -31,3 +31,8 @@ timestamp: 2026-08-17T17:20:00Z
 - 2026-08-21: Resolved HTTP `{{KEY}}` chips also open the profile editor on click.
 - 2026-08-21: README and MCP `read.md` distinguish UI workspace (`/w/{slug}`) from MCP `-workspace-root`.
 - 2026-08-21: HTTP last result renders in a compact terminal pane (headers + pretty-printed body).
+- 2026-08-24: HTTP requests can store multiple named body templates; Send uses the active body.
+- 2026-08-24: HTTP body templates use Save / Save as, and send shows a waiting state in the response pane.
+- 2026-08-24: HTTP body New copies the current body as a draft; Save keeps it, refresh discards unsaved work.
+- 2026-08-24: Stack Overview member logs stay closed until the row is clicked; rows have a small gap.
+- 2026-08-24: Workspace dashboard stack list is a compact two-column rack instead of stretched full-width rows.

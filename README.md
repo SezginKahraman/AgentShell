@@ -184,7 +184,7 @@ is independent.
 
 History rows can open logs, run again, or be saved as a launcher. Ports observed
 during a Run are suggestions during promotion and are never selected as expected
-ports without an explicit choice. In the HTTP editor, `{{KEY}}` chips (resolved
+ports without an explicit choice. In the HTTP editor, a request can keep named body templates; Send and curl use the active body. `{{KEY}}` chips (resolved
 or not) open a popover to set the current environment-profile value in the
 workspace library.
 

@@ -45,7 +45,8 @@ Catalog **collection** (existing) = folder for commands and stacks.
 ### HTTP request
 
 - `collection_id` — required parent.
-- `name`, `method` (default GET), `url`, optional `headers` and `body`, `timeout_ms` (default 10000, max 120000), `sort_order`.
+- `name`, `method` (default GET), `url`, optional `headers` and `body`, optional `body_templates` and `active_body_id`, `timeout_ms` (default 10000, max 120000), `sort_order`.
+- `body` is the active template text used by Send and curl. Named templates stay on the request; switching copies the current body onto the previous template.
 - `url` / headers / body may contain `{{KEY}}` (optional spaces). `KEY` must be a process env name.
 - `last_result` — last send only: resolved URL, status, duration, truncated body (256 KiB cap), error, environment name used. Not a Run.
 
@@ -64,7 +65,7 @@ Send one request. Follow at most five redirects, each hop still `http`/`https` w
 
 ## Surfaces
 
-**Dashboard.** Library → HTTP. Left: collections. Bound collections show the stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send + last result). Selecting a collection lists requests. The editor is method + URL + headers + body + Send. The response pane shows the last result. Unbound collections still interpolate from the workspace library.
+**Dashboard.** Library → HTTP. Left: collections. Bound collections show the stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send + last result). Selecting a collection lists requests. The editor is method + URL + headers + named body templates + Send. The response pane shows the last result. Unbound collections still interpolate from the workspace library.
 
 **HTTP.** `GET/POST /api/http-collections`, `GET/PUT/DELETE /api/http-collections/{id}` (GET includes nested requests), `POST /api/http-collections/{id}/import` (curl). `POST /api/http-requests`, `GET/PUT/DELETE /api/http-requests/{id}`, `POST /api/http-requests/{id}/send`. Snapshot includes `http_collections`.
 

@@ -374,18 +374,27 @@ type HTTPCollection struct {
 
 // HTTPRequest is one saved API call inside an HTTPCollection.
 type HTTPRequest struct {
-	ID           string            `json:"id"`
-	CollectionID string            `json:"collection_id"`
-	Name         string            `json:"name"`
-	Method       string            `json:"method"`
-	URL          string            `json:"url"`
-	Headers      map[string]string `json:"headers,omitempty"`
-	Body         string            `json:"body,omitempty"`
-	TimeoutMS    int               `json:"timeout_ms,omitempty"`
-	SortOrder    int               `json:"sort_order"`
-	LastResult   *HTTPResult       `json:"last_result,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ID            string             `json:"id"`
+	CollectionID  string             `json:"collection_id"`
+	Name          string             `json:"name"`
+	Method        string             `json:"method"`
+	URL           string             `json:"url"`
+	Headers       map[string]string  `json:"headers,omitempty"`
+	Body          string             `json:"body,omitempty"`
+	BodyTemplates []HTTPBodyTemplate `json:"body_templates,omitempty"`
+	ActiveBodyID  string             `json:"active_body_id,omitempty"`
+	TimeoutMS     int                `json:"timeout_ms,omitempty"`
+	SortOrder     int                `json:"sort_order"`
+	LastResult    *HTTPResult        `json:"last_result,omitempty"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+}
+
+// HTTPBodyTemplate is a named saved body for one HTTPRequest. Send and curl use Body.
+type HTTPBodyTemplate struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Body string `json:"body"`
 }
 
 // HTTPResult is the last send of an HTTPRequest. It is not a process Run.

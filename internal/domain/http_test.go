@@ -55,3 +55,50 @@ func TestResolveHTTPRequestVarsBoundStackBeatsLibrary(t *testing.T) {
 		t.Fatalf("unbound default local: name=%q vars=%v", name, vars)
 	}
 }
+
+func TestNormalizeHTTPBodyTemplatesSeedsDefault(t *testing.T) {
+	body, templates, active := NormalizeHTTPBodyTemplates(`{"ok":true}`, nil, "")
+	if body != `{"ok":true}` || active != DefaultHTTPBodyTemplateID || len(templates) != 1 {
+		t.Fatalf("seeded: body=%q active=%q templates=%+v", body, active, templates)
+	}
+	if templates[0].ID != DefaultHTTPBodyTemplateID || templates[0].Name != DefaultHTTPBodyTemplateName || templates[0].Body != body {
+		t.Fatalf("default template: %+v", templates[0])
+	}
+}
+
+func TestNormalizeHTTPBodyTemplatesSyncsActiveBody(t *testing.T) {
+	templates := []HTTPBodyTemplate{
+		{ID: "search", Name: "Search", Body: `{"q":"ist"}`},
+		{ID: "detail", Name: "Detail", Body: `{"id":1}`},
+	}
+	body, got, active := NormalizeHTTPBodyTemplates(`{"q":"ank"}`, templates, "search")
+	if body != `{"q":"ank"}` || active != "search" || got[0].Body != `{"q":"ank"}` || got[1].Body != `{"id":1}` {
+		t.Fatalf("sync: body=%q active=%q templates=%+v", body, active, got)
+	}
+	body, got, active = NormalizeHTTPBodyTemplates(`{"id":9}`, templates, "missing")
+	if active != "search" || body != `{"id":9}` || got[0].Body != `{"id":9}` {
+		t.Fatalf("missing active falls back to first: active=%q body=%q templates=%+v", active, body, got)
+	}
+}
+
+func TestSwitchAddRemoveHTTPBodyTemplates(t *testing.T) {
+	templates := []HTTPBodyTemplate{
+		{ID: "search", Name: "Search", Body: `{"q":"ist"}`},
+		{ID: "detail", Name: "Detail", Body: `{"id":1}`},
+	}
+	body, got, active, err := SwitchHTTPBodyTemplate(`{"q":"izmir"}`, templates, "search", "detail")
+	if err != nil || body != `{"id":1}` || active != "detail" || got[0].Body != `{"q":"izmir"}` {
+		t.Fatalf("switch: body=%q active=%q templates=%+v err=%v", body, active, got, err)
+	}
+	body, got, active, err = AddHTTPBodyTemplate(body, got, active, "promo", "Promo", `{"code":"X"}`)
+	if err != nil || body != `{"code":"X"}` || active != "promo" || len(got) != 3 {
+		t.Fatalf("add: body=%q active=%q templates=%+v err=%v", body, active, got, err)
+	}
+	body, got, active, err = RemoveHTTPBodyTemplate(body, got, active, "promo")
+	if err != nil || active != "search" || body != `{"q":"izmir"}` || len(got) != 2 {
+		t.Fatalf("remove active: body=%q active=%q templates=%+v err=%v", body, active, got, err)
+	}
+	if _, _, _, err = RemoveHTTPBodyTemplate(body, got[:1], "search", "search"); err == nil || !errors.Is(err, ErrHTTPRequest) {
+		t.Fatalf("keep one template: %v", err)
+	}
+}
