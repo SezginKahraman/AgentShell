@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="web/public/agent_shell_lockup.svg" alt="AgentShell" width="280" />
+</p>
+
 # AgentShell
 
 AgentShell is a local-first runtime manager for commands started by people and AI agents. Every invocation becomes a durable `Run` with its process group, child processes, logs, ports, exit state, and resource usage. The same state is exposed through the dashboard, CLI, REST API, and MCP.

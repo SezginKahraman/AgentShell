@@ -8,8 +8,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .app-shell { min-height: 100vh; }
 .sidebar { background: var(--sidebar-bg); border-right: 1px solid var(--line); bottom: 0; display: flex; flex-direction: column; left: 0; max-width: 100%; min-width: 0; overflow: hidden; padding: 20px 12px 14px; position: fixed; top: 0; width: 240px; z-index: 20; backdrop-filter: blur(18px); }
 .brand { align-items: center; display: flex; font-size: 19px; gap: 12px; padding: 0 7px 16px; }
-.brand-mark { align-items: center; border: 1px solid var(--line-strong); border-radius: 6px; display: flex; flex: 0 0 auto; height: 34px; justify-content: center; width: 34px; }
-.brand-mark svg { width: 20px; }
+.brand-mark { align-items: center; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text-strong); display: flex; flex: 0 0 auto; height: 34px; justify-content: center; width: 34px; }
+.brand-mark svg { display: block; height: 22px; width: 22px; }
 .brand strong { flex: 1; min-width: 0; }
 .brand .icon-button { display: none; margin-left: auto; }
 .brand .sidebar-pin { display: inline-flex; height: 32px; min-height: 32px; width: 32px; }

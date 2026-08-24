@@ -436,7 +436,8 @@ test('a stack can be created in the UI and opens directly in orchestration', asy
 
 test('parameterized launcher prompts for one-shot secret input', async ({ page }) => {
   await page.goto('/')
-  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/agent_shell_logo.png')
+  await expect(page.locator('link[rel="icon"][type="image/svg+xml"]')).toHaveAttribute('href', '/agent_shell_logo.svg')
+  expect((await page.request.get('/agent_shell_logo.svg')).status()).toBe(200)
   expect((await page.request.get('/agent_shell_logo.png')).status()).toBe(200)
 
   await page.getByRole('button', { name: 'Tasks', exact: true }).click()
@@ -552,6 +553,7 @@ test('main sidebar can collapse, expand on hover, and pin open', async ({ page }
   await pin.click()
   await expect(pin).toHaveAttribute('aria-label', 'Pin sidebar open')
   await expect(page.getByTestId('app-shell')).toHaveClass(/sidebar-collapsed/)
+  await expect(page.getByTestId('main-sidebar').locator('.brand-mark svg')).toBeVisible()
   await expect(page.getByTestId('main-sidebar').locator('.brand strong')).toBeHidden()
   await page.mouse.move(800, 200)
   await page.getByTestId('main-sidebar').hover()

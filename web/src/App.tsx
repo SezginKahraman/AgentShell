@@ -7,6 +7,7 @@ import {
   Layers3, Check, Tag, Save, ArrowLeft, ArrowRight, Globe2, Trash2, ChevronDown, ChevronUp, Sun, TestTube2,
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
+import { BrandMark } from './BrandMark'
 import { resolveApi } from './api'
 import type { AgentShellApi } from './api/client'
 import { classifiedLogLines, displayedLogText, logLineClass, splitLogLines, stripAnsi } from './logs'
@@ -223,7 +224,7 @@ function Sidebar({ page, setPage, open, close, runtime, mode, pinned, onTogglePi
       }}
     >
       <div className="brand">
-        <span className="brand-mark"><Terminal /></span>
+        <span className="brand-mark" aria-hidden="true"><BrandMark /></span>
         <strong>AgentShell</strong>
         <IconButton testId="sidebar-pin" className="sidebar-pin" label={pinned ? 'Collapse sidebar' : 'Pin sidebar open'} pressed={pinned} onClick={togglePin}>{pinned ? <PanelLeftClose /> : <PanelLeftOpen />}</IconButton>
         <IconButton className="sidebar-close" label="Close navigation" onClick={close}><X /></IconButton>
