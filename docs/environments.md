@@ -14,7 +14,10 @@ Related: [stack environments design](superpowers/specs/2026-08-21-stack-environm
 
 ## Library
 
-One workspace document (`GET`/`PUT /api/environments`, MCP `list_environments` / `update_environments`):
+One document (`GET`/`PUT /api/environments`, MCP `list_environments` / `update_environments`).
+It is **runtime-global, not per Project**: `/api/environments?project_id=...` returns the same
+document for every workspace, so keys defined for one Project are visible and injectable in the
+others. Name keys so they do not collide across Projects.
 
 - `names` — columns such as `local`, `prod`, `stage`, and `test`. `custom` is reserved.
 - `keys` — variable names defined once.

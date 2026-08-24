@@ -64,7 +64,7 @@ Send one request. Follow at most five redirects, each hop still `http`/`https` w
 
 ## Surfaces
 
-**Dashboard.** Library → HTTP. Left: collections. Bound collections show the stack name, env badge, and Open stack. The stack drawer has an HTTP tab for bound requests (Send + last result). Selecting a collection lists requests. The editor is method + URL + headers + body + Send. The response pane shows the last result. Unbound collections still interpolate from the workspace library.
+**Dashboard.** Library → HTTP. Left: collections. Bound collections show the stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send + last result). Selecting a collection lists requests. The editor is method + URL + headers + body + Send. The response pane shows the last result. Unbound collections still interpolate from the workspace library.
 
 **HTTP.** `GET/POST /api/http-collections`, `GET/PUT/DELETE /api/http-collections/{id}` (GET includes nested requests), `POST /api/http-collections/{id}/import` (curl). `POST /api/http-requests`, `GET/PUT/DELETE /api/http-requests/{id}`, `POST /api/http-requests/{id}/send`. Snapshot includes `http_collections`.
 

@@ -10,10 +10,10 @@ tags: [tags, catalog, ui]
 
 Saved launchers and tests can carry tags. Every list that shows those tags also has a tag filter.
 
-1. Open **Services**, **Tasks**, **Projects**, or **Tests**. Pills appear for every tag in that list.
+1. Open **Services**, **Tasks**, or **Tests**. Pills appear for every tag in that list. On Services and Tasks, collection pills sit above the tag row when a workspace is selected.
 2. Click a tag to keep only items that have it. Click more tags to require all of them.
 3. Click **All tags** to clear. Clicking a tag chip on a card toggles the same filter.
 
-On **Projects**, stacks stay visible when a selected member has the tags. Checks & Tests inside a stack or launcher drawer uses the same pills.
+Checks & Tests inside a stack or launcher drawer uses the same pills.
 
 Related: [HTTP collections](../http-collections.md) do not use launcher tags.

@@ -9,6 +9,20 @@ const seededNames = new Set(['local', 'prod', 'stage', 'test'])
 
 export const emptyEnvironmentLibrary = (): EnvironmentLibrary => ({ names: ['local', 'prod', 'stage', 'test'], keys: [], values: {} })
 
+export function setLibraryValue(library: EnvironmentLibrary, key: string, envName: string, value: string): EnvironmentLibrary {
+  const trimmedKey = key.trim()
+  const name = envName.trim().toLowerCase()
+  if (!trimmedKey || !name) return library
+  const keys = library.keys.includes(trimmedKey) ? library.keys : [...library.keys, trimmedKey]
+  const values = { ...(library.values ?? {}) }
+  const row = { ...(values[trimmedKey] ?? {}) }
+  if (value === '') delete row[name]
+  else row[name] = value
+  if (Object.keys(row).length) values[trimmedKey] = row
+  else delete values[trimmedKey]
+  return { ...library, keys, values }
+}
+
 export function envTone(name: string): EnvTone {
   const n = (name || 'local').trim().toLowerCase()
   if (n === 'prod' || n === 'production') return 'prod'
@@ -132,7 +146,7 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
         <div className="env-pills">
           {library.names.map(name => {
             const seeded = seededNames.has(name)
-            return <span key={name} className={`env-profile-chip env-${envTone(name)}`}>
+            return <span key={name} className={`env-profile-chip env-${envTone(name)}${seeded ? ' seeded' : ''}`}>
               {name}
               {seeded ? null : <button type="button" className="icon-button danger subtle" data-testid={`env-remove-name-${name}`} aria-label={`Remove ${name} profile`} title={`Remove ${name}`} disabled={busy} onClick={() => removeName(name)}><Trash2 /></button>}
             </span>

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Globe2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
-import { EnvBadge, EnvPicker } from './environments'
+import { EnvPicker, setLibraryValue } from './environments'
 import { applyCurlToDraft, curlFromDraft, draftFromRequest, isRequestDraftDirty, type HTTPRequestDraft } from './httpDraft'
 import { httpCollectionVars, interpolateTemplate } from './httpInterpolate'
 import { TemplateField } from './httpTemplate'
-import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, Snapshot, Stack } from './types'
+import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Snapshot, Stack } from './types'
 
 const methods: NonNullable<HTTPRequest['method']>[] = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 const emptyRequest = (collectionID: string): HTTPRequest => ({
@@ -28,13 +28,74 @@ function writeCollapsedPanels(next: { collections: boolean; requests: boolean })
   try { localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(next)) } catch { /* ignore quota / private mode */ }
 }
 
-export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openStack }: {
+export function formatHTTPBody(body: string) {
+  const trimmed = body.trim()
+  if (!trimmed) return body
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2)
+  } catch {
+    return body
+  }
+}
+
+function responseStatusTone(status?: number, error?: string) {
+  if (error || !status) return 'error'
+  if (status >= 400) return 'error'
+  if (status >= 300) return 'warn'
+  return 'ok'
+}
+
+function HTTPResponsePane({ result, testId, empty, headerTestId, actions }: {
+  result?: HTTPResult
+  testId: string
+  empty: string
+  headerTestId?: string
+  actions?: ReactNode
+}) {
+  const headers = Object.entries(result?.headers ?? {})
+  const body = result?.body ? formatHTTPBody(result.body) : ''
+  const tone = responseStatusTone(result?.status, result?.error)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => { setCopied(false) }, [result])
+  const dump = result ? [result.error, ...headers.map(([key, value]) => `${key}: ${value}`), body].filter(Boolean).join('\n\n') : ''
+  const summary = result ? `${result.method ?? ''} ${result.url ?? ''}`.trim() : ''
+
+  return <section className="http-response" data-testid={testId}>
+    <header className="http-response-chrome">
+      <span className="terminal-lights" aria-hidden="true"><i /><i /><i /></span>
+      <div className="http-response-title">
+        <strong>Response</strong>
+        <small title={summary || undefined}>{summary || 'idle'}</small>
+      </div>
+      {result && <div className="http-response-pills">
+        <span className={`http-response-status ${tone}`}>{result.status || 'error'}</span>
+        {result.environment ? <span>{result.environment}</span> : null}
+        {result.duration_ms ? <span>{result.duration_ms}ms</span> : null}
+      </div>}
+      <div className="http-response-actions">
+        {dump ? <button type="button" className="button small" data-testid={`${testId}-copy`} onClick={() => { void navigator.clipboard?.writeText(dump).then(() => setCopied(true)) }}>{copied ? 'Copied' : 'Copy'}</button> : null}
+        {actions}
+      </div>
+    </header>
+    <div className="http-response-screen">
+      {!result ? <p className="http-response-idle">{empty}</p> : <>
+        {result.error && <pre className="http-response-error">{result.error}</pre>}
+        {!!headers.length && <dl className="http-response-headers" data-testid={headerTestId}>{headers.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
+        {body && <pre className="http-response-body">{body}</pre>}
+        {result.truncated && <p className="http-response-idle">Body truncated</p>}
+      </>}
+    </div>
+  </section>
+}
+
+export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openStack, workspaceName }: {
   data: Snapshot
   api: AgentShellApi
   busy: string
   accepting: boolean
   refresh: () => Promise<void>
   openStack: (stack: Stack) => void
+  workspaceName?: string
 }) {
   const collections = data.http_collections ?? []
   const [selectedCollectionID, setSelectedCollectionID] = useState(collections[0]?.id ?? '')
@@ -47,6 +108,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const [copiedCurl, setCopiedCurl] = useState(false)
   const [requestCurl, setRequestCurl] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [creating, setCreating] = useState(false)
   const [sending, setSending] = useState(false)
   const [collapsed, setCollapsed] = useState(readCollapsedPanels)
@@ -83,14 +145,14 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const resolved = useMemo(() => {
     if (!collection) return { vars: {} as Record<string, string>, preview: '' }
-    const { vars } = httpCollectionVars(library, collection, stack)
+    const { vars } = httpCollectionVars(library, { ...collection, environment: httpEnv }, stack ? { ...stack, environment: httpEnv } : undefined)
     let preview = ''
     if (draft.url) {
       try { preview = interpolateTemplate(draft.url, vars) }
       catch (err) { preview = err instanceof Error ? err.message : 'Unable to interpolate' }
     }
     return { vars, preview }
-  }, [collection, draft.url, library, stack])
+  }, [collection, draft.url, httpEnv, library, stack])
 
   useEffect(() => {
     if (curlFocusedRef.current) return
@@ -128,11 +190,16 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const createCollection = async () => {
     setCreating(true)
     setError('')
+    setNotice('')
     try {
       const created = await api.createHTTPCollection({ name: 'New HTTP collection', sort_order: collections.length })
       setSelectedCollectionID(created.id)
       setSelectedRequestID('')
       await refresh()
+      // A new collection starts unbound, and a scoped workspace only lists
+      // collections whose stack belongs to it. Say so instead of letting the
+      // row silently vanish.
+      if (workspaceName) setNotice(`New collections start unbound, so this one is listed under All Workspaces. Bind a stack to keep it in ${workspaceName}.`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create collection')
     } finally {
@@ -156,6 +223,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     setError('')
     try {
       await api.updateHTTPCollection(collection.id, { stack_id: stackID })
+      if (stackID) setNotice('')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to bind stack')
@@ -176,6 +244,11 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         setError(err instanceof Error ? err.message : 'Unable to set environment')
       }
     })()
+  }
+
+  const saveVar = async (key: string, value: string) => {
+    const saved = await api.updateEnvironments(setLibraryValue(library, key, httpEnv, value))
+    setLibrary(saved)
   }
 
   const addRequest = async () => {
@@ -253,7 +326,6 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     })
   }
 
-  const responseHeaders = Object.entries(request?.last_result?.headers ?? {})
   const envNames = [...(library.names ?? ['local'])]
   const envValue = (stack ? stack.environment : collection?.environment) || envNames[0] || 'local'
   if (envValue && !envNames.includes(envValue)) envNames.push(envValue)
@@ -267,6 +339,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         <strong>Collections</strong>
         <button type="button" className="button small" data-testid="new-http-collection" onClick={createCollection} disabled={creating}><Plus /> New</button>
       </div>
+      {!collapsed.collections && !!notice && <p className="http-empty" data-testid="http-workspace-notice">{notice}</p>}
       {!collapsed.collections && (!collections.length ? <p className="http-empty">No HTTP collections yet. Create one to save independent requests.</p> : collections.map(item => {
         const bound = data.stacks.find(stackItem => stackItem.id === item.stack_id)
         return <button key={item.id} type="button" className={item.id === collection?.id ? 'active' : ''} title={item.name} data-testid={`http-collection-${item.id}`} onClick={() => selectCollection(item.id)}>
@@ -282,7 +355,11 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
           <div className="http-bind">
             <label className="bind-field">Stack<select aria-label="Bound stack" data-testid="http-collection-stack" value={collection.stack_id ?? ''} onChange={event => saveCollectionBind(event.target.value)}><option value="">No stack</option>{data.stacks.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <EnvPicker compact label={stack ? 'Environment (stack)' : 'Environment'} names={envNames} value={httpEnv} testId="http-collection-environment" ariaLabel={stack ? 'Stack environment' : 'Collection environment'} onChange={saveEnvironment} />
-            {stack ? <><EnvBadge stack={stack} /><button type="button" className="button small" data-testid="http-open-stack" onClick={() => openStack(stack)}>Open stack</button></> : null}
+            {stack ? <button type="button" className="button small" data-testid="http-open-stack" onClick={() => openStack(stack)}>Open stack</button> : null}
+            {request ? <>
+              <button type="button" className="button small" data-testid="import-curl" aria-pressed={importOpen} title={importOpen ? 'Hide curl' : 'Show curl'} onClick={() => setImportOpen(open => !open)}>curl</button>
+              <button type="button" className="button small" data-testid="delete-http-request" onClick={removeRequest}><Trash2 /> Delete request</button>
+            </> : null}
           </div>
         </div>
         <button type="button" className="button small" data-testid="delete-http-collection" onClick={removeCollection}><Trash2 /> Delete</button>
@@ -304,14 +381,13 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         {request ? <div className="http-editor">
           <div className="http-url-row">
             <select aria-label="HTTP method" value={draft.method} onChange={event => setDraft(current => ({ ...current, method: event.target.value as HTTPRequestDraft['method'] }))}>{methods.map(method => <option key={method}>{method}</option>)}</select>
-            <TemplateField ariaLabel="Request URL" testId="http-request-url" value={draft.url} vars={resolved.vars} onChange={url => setDraft(current => ({ ...current, url }))} onBlur={() => persistDraft()} />
+            <TemplateField ariaLabel="Request URL" testId="http-request-url" value={draft.url} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={url => setDraft(current => ({ ...current, url }))} onBlur={() => persistDraft()} />
             <div className="http-url-actions">
-              <button type="button" className="button small" data-testid="import-curl" aria-pressed={importOpen} title={importOpen ? 'Hide curl' : 'Show curl'} onClick={() => setImportOpen(open => !open)}>curl</button>
               <button type="button" className="button primary" data-testid="send-http-request" onClick={send} disabled={sending || busy === request.id || !accepting}><Play /> {sending ? 'Sending…' : 'Send'}</button>
             </div>
           </div>
           {importOpen && <div className="http-curl">
-            <label>curl for this request<TemplateField multiline minHeight={90} ariaLabel="curl for this request" testId="curl-preview" value={requestCurl} vars={resolved.vars} onFocus={() => { curlFocusedRef.current = true }} onChange={value => {
+            <label>curl for this request<TemplateField multiline minHeight={90} ariaLabel="curl for this request" testId="curl-preview" value={requestCurl} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onFocus={() => { curlFocusedRef.current = true }} onChange={value => {
               setRequestCurl(value)
               const next = applyCurlToDraft(value, draftRef.current)
               if (next) { setDraft(next); setError('') }
@@ -325,7 +401,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
               } else if (requestCurl.trim()) setError('curl is invalid')
             }} /></label>
             <button type="button" className="button small" data-testid="copy-curl" onClick={() => { void navigator.clipboard?.writeText(requestCurl).then(() => setCopiedCurl(true)) }}>{copiedCurl ? 'Copied' : 'Copy'}</button>
-            <label>Import another request<TemplateField multiline minHeight={90} ariaLabel="curl command" testId="curl-input" value={curl} vars={resolved.vars} placeholder="Paste a curl command to add a new request" onChange={setCurl} /></label>
+            <label>Import another request<TemplateField multiline minHeight={90} ariaLabel="curl command" testId="curl-input" value={curl} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} placeholder="Paste a curl command to add a new request" onChange={setCurl} /></label>
             <button type="button" className="button primary small" data-testid="import-curl-submit" onClick={importCurl} disabled={!curl.trim()}>Import</button>
           </div>}
           <div className="http-meta-row">
@@ -333,18 +409,9 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <label>Timeout ms<input aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} onBlur={() => persistDraft()} /></label>
           </div>
           <p className="http-preview" data-testid="http-url-preview">{resolved.preview}</p>
-          <label>Headers<TemplateField multiline minHeight={72} ariaLabel="Request headers" value={draft.headers} vars={resolved.vars} onChange={headers => setDraft(current => ({ ...current, headers }))} onBlur={() => persistDraft()} /></label>
-          <label>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} onChange={body => setDraft(current => ({ ...current, body }))} onBlur={() => persistDraft()} /></label>
-          <div className="http-editor-foot"><button type="button" className="button small" onClick={removeRequest}><Trash2 /> Delete request</button></div>
-          <section className="http-response" data-testid="http-response">
-            <strong>Response</strong>
-            {!request.last_result ? <span>Send to capture the last result here. This is not a process Run.</span> : <>
-              <p>{request.last_result.method} {request.last_result.url} · {request.last_result.status || 'error'} · {request.last_result.environment}{request.last_result.duration_ms ? ` · ${request.last_result.duration_ms}ms` : ''}</p>
-              {request.last_result.error && <pre className="http-response-error">{request.last_result.error}</pre>}
-              {!!responseHeaders.length && <dl className="http-response-headers" data-testid="http-response-headers">{responseHeaders.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
-              {request.last_result.body && <pre>{request.last_result.body}</pre>}
-            </>}
-          </section>
+          <label>Headers<TemplateField multiline minHeight={72} ariaLabel="Request headers" value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} onBlur={() => persistDraft()} /></label>
+          <label>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={body => setDraft(current => ({ ...current, body }))} onBlur={() => persistDraft()} /></label>
+          <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} empty="Send to capture the last result here. This is not a process Run." />
         </div> : <div className="http-empty-main"><strong>No requests</strong><span>Add a request or import curl.</span></div>}
       </div>
     </div>}
@@ -363,7 +430,6 @@ export function StackHTTPPanel({ collections, api, accepting, refresh, openHTTP 
   const [sending, setSending] = useState('')
   const [error, setError] = useState('')
   const selected = requests.find(item => item.id === selectedID) ?? requests[0]
-  const headers = Object.entries(selected?.last_result?.headers ?? {})
 
   const send = async (id: string) => {
     if (!accepting) return
@@ -393,18 +459,12 @@ export function StackHTTPPanel({ collections, api, accepting, refresh, openHTTP 
           <span><strong>{item.name}</strong><small>{item.collectionName}{item.last_result?.status ? ` · ${item.last_result.status}` : ''}</small></span>
         </button>)}
       </div>
-      {selected && <section className="http-response" data-testid="stack-http-response">
-        <div className="stack-http-response-head">
-          <strong>{selected.method ?? 'GET'} {selected.url}</strong>
-          <button type="button" className="button primary small" data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}><Play /> {sending === selected.id ? 'Sending…' : 'Send'}</button>
-        </div>
-        {!selected.last_result ? <span>Send to capture the last result here.</span> : <>
-          <p>{selected.last_result.method} {selected.last_result.url} · {selected.last_result.status || 'error'} · {selected.last_result.environment}{selected.last_result.duration_ms ? ` · ${selected.last_result.duration_ms}ms` : ''}</p>
-          {selected.last_result.error && <pre className="http-response-error">{selected.last_result.error}</pre>}
-          {!!headers.length && <dl className="http-response-headers">{headers.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
-          {selected.last_result.body && <pre>{selected.last_result.body}</pre>}
-        </>}
-      </section>}
+      {selected && <HTTPResponsePane
+        testId="stack-http-response"
+        result={selected.last_result}
+        empty="Send to capture the last result here."
+        actions={<button type="button" className="button primary small" data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}><Play /> {sending === selected.id ? 'Sending…' : 'Send'}</button>}
+      />}
     </>}
   </div>
 }

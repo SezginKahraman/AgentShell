@@ -8,7 +8,7 @@ AgentShell is a local-first runtime manager for commands started by people and A
 - Process-group lifecycle with graceful stop and forced-kill fallback
 - Child process, CPU, memory, and listening-port discovery
 - Separate stdout, stderr, and combined logs
-- Saved projects, collections, service/task commands, and multi-command stacks
+- Saved projects (dashboard workspaces), collections, service/task commands, and multi-command stacks
 - Reusable HTTP and shell/task Checks & Tests attached to stacks, launchers, or individual Runs
 - Managed and external service lifecycles with launcher-level stop/restart actions
 - History-to-launcher promotion with duplicate-safe command fingerprints
@@ -171,11 +171,22 @@ closes is removed from `list_ports` without erasing its transition evidence.
 `list_ports` includes managed listeners and only currently listening external
 ports verified by this evidence.
 
-The dashboard exposes the same catalog under **Projects**. Project and global
-scopes are distinct; collections are organizational folders, while stacks are
-executable groups. History rows can open logs, run again, or be saved as a
-launcher. Ports observed during a Run are suggestions during promotion and are
-never selected as expected ports without an explicit choice.
+The dashboard has no Projects page. An AgentShell Project is the **UI
+workspace**: a picker under the AgentShell logo filters every screen the way
+Slack picks a team. `/` is All Workspaces. `/w/{slug}` (and `/w/{slug}/logs`,
+`/w/{slug}/services`, …) keeps that Project across refresh, share, and
+back/forward. Collections stay as in-page folders on Services, Tasks, and
+similar catalog pages.
+
+That picker never changes MCP `get_workspace_context`. Agents still use the
+explicit `-workspace-root` of the client that called them; the browser filter
+is independent.
+
+History rows can open logs, run again, or be saved as a launcher. Ports observed
+during a Run are suggestions during promotion and are never selected as expected
+ports without an explicit choice. In the HTTP editor, `{{KEY}}` chips (resolved
+or not) open a popover to set the current environment-profile value in the
+workspace library.
 
 Launcher cards open a detail drawer with their complete command definition,
 previous Runs, selectable historical logs, and lifecycle actions. When a

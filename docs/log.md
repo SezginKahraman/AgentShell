@@ -26,3 +26,8 @@ timestamp: 2026-08-17T17:20:00Z
 - 2026-08-21: Documented tag filters on launcher and test lists.
 - 2026-08-21: Settings environment library is one card per key with labeled profile fields.
 - 2026-08-21: Extra environment profiles can be removed from Settings; seeded names stay.
+- 2026-08-21: Unresolved HTTP `{{KEY}}` chips open a popover to set the current profile value.
+- 2026-08-21: Workspace is a sidebar picker and URL scope (`/w/{slug}`), not a Projects page; MCP root stays independent.
+- 2026-08-21: Resolved HTTP `{{KEY}}` chips also open the profile editor on click.
+- 2026-08-21: README and MCP `read.md` distinguish UI workspace (`/w/{slug}`) from MCP `-workspace-root`.
+- 2026-08-21: HTTP last result renders in a compact terminal pane (headers + pretty-printed body).

@@ -16,19 +16,22 @@ Amaç şudur:
 | --- | --- | --- |
 | Runtime | Süreçleri gerçekten başlatan ve izleyen yerel AgentShell servisi | `http://127.0.0.1:4242` |
 | MCP bridge | AI istemcisinin stdio üzerinden başlattığı ince köprü süreci | `agentshell mcp` |
-| Project | Fiziksel çalışma alanı ve kök klasör | `AgentShell → /Users/sezgin.kahraman/AgentShell` |
-| Collection | Bir Project içindeki isteğe bağlı düzenleme klasörü | `Internal Services`, `Tests`, `Build` |
+| MCP workspace root | MCP process'e explicit verilen `-workspace-root`; `get_workspace_context` bunu okur | Cursor'ın açık klasörü |
+| Project / UI workspace | Dashboard'daki Slack-benzeri bağlam: isimli kök klasör. Sidebar'da sayfa değil, logo altındaki seçici | `Enuygun Hotel` → `/w/enuygun-hotel` |
+| Collection | Bir Project içindeki isteğe bağlı katalog klasörü (Services/Tasks alt filtresi) | `Internal Services`, `Tests`, `Build` |
 | Launcher | Daha sonra tekrar çalıştırılabilecek kayıtlı service veya task komutu | `make go`, `npm test` |
 | Stack | Birden fazla launcher'ın isimlendirilmiş grubu | `Internal Microservices` |
 | Check / Test | Stack, launcher veya Run'a bağlı yeniden kullanılabilir doğrulama | `GET /health`, `bash ./smoke.sh` |
 | Run | Bir komutun belirli bir çalıştırma örneği | PID, log, port ve exit code taşıyan kayıt |
 | History | Tamamlanmış ve çalışan Run geçmişi | Başlatma, test ve build kayıtları |
 
-`Project` ve `Collection` aynı şey değildir:
+`Project`, `Collection` ve MCP workspace root aynı şey değildir:
 
-- Project bir gerçek workspace/root klasörünü temsil eder.
-- Collection yalnızca o projenin katalog içindeki düzenleme klasörüdür.
-- `Project launchers`, launcher'ın bir Project'e ait olduğu fakat isteğe bağlı bir Collection seçilmediği kök alanıdır.
+- Project bir gerçek kök klasördür ve dashboard **UI workspace**'idir. Kullanıcı onu logo altındaki seçiciden seçer; URL `/w/{slug}` olur. Eski **Projects** sayfası yoktur.
+- Collection yalnızca o Project'in katalog içindeki düzenleme klasörüdür; workspace değildir.
+- MCP `get_workspace_context` tarayıcıdaki seçiciyi okumaz. Cursor hangi klasörde açıksa `-workspace-root` odur. Dashboard'da Hotel filtresi açıkken B2B klasöründeki agent işini Hotel Project'ine yazmaz.
+- `project_id` olmayan launcher/Run'lar **All Workspaces** (`/`) görünümünde durur; tek bir UI workspace seçilince gizlenir.
+- Launcher bir Project'e ait olup Collection seçilmemişse katalog kökünde kalır.
 
 ## 2. Bağlantı mimarisi
 
@@ -282,13 +285,15 @@ Claude Code
 Cursor
 ```
 
-Her iki istemci de aynı verilere erişir:
+Her iki istemci de aynı Runtime kataloğuna erişir:
 
-- Aynı Projects ve Collections
+- Aynı Project kayıtları (`list_projects`) ve Collections
 - Aynı saved launchers
 - Aynı Stacks
 - Aynı Run History
 - Aynı log ve port bilgileri
+
+Dashboard'daki UI workspace seçici tarayıcıya aittir (`/` veya `/w/{slug}`). Claude Code ile Cursor aynı katalog satırlarını görür; birinin tarayıcısında Hotel filtresi açık olması diğerinin MCP root'unu değiştirmez.
 
 Örneğin Claude Code'un oluşturduğu `Internal Microservices` stack'i Cursor tarafından `list_stacks` ile bulunup başlatılabilir.
 
@@ -299,9 +304,10 @@ AgentShell kullanan bir AI agent'ın önerilen işlem sırası şöyledir:
 ### 7.1. Oturum başlangıcı
 
 1. `get_runtime` ile Runtime durumunu doğrula.
-2. `get_workspace_context` ile explicit workspace root'u oku.
-3. `configured: false` dönerse çalışma klasörünü tahmin etme.
-4. İlgili katalog durumunu `list_projects`, `list_collections`, `list_commands` ve `list_stacks` ile incele.
+2. `get_workspace_context` ile **MCP** workspace root'u oku (explicit `-workspace-root`).
+3. `configured: false` dönerse çalışma klasörünü tahmin etme; dashboard'daki UI workspace seçicisine de bakma.
+4. Dashboard filtresi (`/w/{slug}`) senin katalog yazacağın Project'i gizlice seçmez. Kullanıcı “bunu X workspace'ine koy” demedikçe MCP root / `inspect_project` sonucuna göre çalış.
+5. İlgili katalog durumunu `list_projects`, `list_collections`, `list_commands` ve `list_stacks` ile incele.
 
 ### 7.2. Proje keşfi
 
@@ -587,12 +593,13 @@ Hiçbir komutu çalıştırma ve katalogda değişiklik yapma.
 ### 9.2. Project, Collection ve launchers oluştur
 
 ```text
-Bu workspace'i AgentShell Project olarak düzenle.
+Bu MCP workspace root'unu AgentShell Project (UI workspace) olarak düzenle.
 Internal Services ve Build & Test collection'larını oluştur.
 Uzun yaşayan komutları service, build/test/lint komutlarını task yap.
 Önce apply_catalog dry-run çalıştır ve sonucu özetle.
 Uygulama aşamasında hiçbir launcher'ı başlatma.
 Aynı kayıt varsa duplicate oluşturma; reused sonucunu koru.
+Dashboard'daki seçili UI workspace'i MCP root sanma.
 ```
 
 ### 9.3. Internal servis stack'i oluştur

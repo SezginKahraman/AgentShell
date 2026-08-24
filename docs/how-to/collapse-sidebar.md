@@ -8,7 +8,7 @@ tags: [sidebar, ui]
 
 # Collapse the main sidebar
 
-The left navigation can stay open or sit as a narrow icon rail.
+The left navigation can stay open or sit as a narrow icon rail. Directly under the AgentShell logo, the workspace picker stays visible so the active Project is never implicit.
 
 1. Click **Collapse sidebar** in the brand row. The rail shrinks to icons. Main content uses the extra width. The rail stays collapsed until the pointer leaves and comes back.
 2. Move the pointer onto the collapsed rail. Labels appear as an overlay; the page layout does not shift.

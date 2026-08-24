@@ -3,8 +3,8 @@ import {
   Activity, Archive, Boxes, ChevronRight, CircleStop, Clock3, Code2, Copy, Database,
   ExternalLink, FileTerminal, Gauge, History, LayoutDashboard, ListChecks, Menu, Moon,
   Minus, Network, Play, Plus, RefreshCw, RotateCcw, Search, Server, Settings, Sparkles, Square,
-  Power, Star, Terminal, Unplug, X, Zap, FolderKanban, FolderOpen, BookmarkPlus, ScrollText,
-  Layers3, Check, Tag, Save, ArrowLeft, ArrowRight, Globe2, Trash2, ArrowUpDown, ChevronDown, ChevronUp, Sun, TestTube2,
+  Power, Star, Terminal, Unplug, X, Zap, FolderOpen, BookmarkPlus, ScrollText,
+  Layers3, Check, Tag, Save, ArrowLeft, ArrowRight, Globe2, Trash2, ChevronDown, ChevronUp, Sun, TestTube2,
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 import { resolveApi } from './api'
@@ -17,13 +17,14 @@ import { EnvBadge, EnvPicker, EnvironmentsPanel, emptyEnvironmentLibrary, envTon
 import { HTTPCollectionsPage, StackHTTPPanel } from './httpCollections'
 import { collectTags, hasAllTags, TagFilter, toggleTag } from './tags'
 import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandParameter, EnvironmentLibrary, ExpectedPort, HTTPCollection, Listener, NeededStack, PortVerification, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput, StackMember, StackPrerequisite } from './types'
+import { type AppPage, buildPath, parseLocation, projectForSlug, projectSlug, scopeSnapshot } from './workspace'
+import { WorkspaceCreateDialog, WorkspaceManageDialog, WorkspacePicker } from './workspacePicker'
 
-type Page = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'projects' | 'services' | 'tasks' | 'tests' | 'http' | 'stacks' | 'settings'
+type Page = AppPage
 type DetailTab = 'Overview' | 'Logs' | 'Processes' | 'Ports' | 'Details' | 'Checks & Tests'
 type CommandDetailTab = 'Overview' | 'Runs' | 'Logs' | 'Script' | 'Checks & Tests'
 type StackDetailTab = 'Overview' | 'Logs' | 'HTTP' | 'Checks & Tests'
 type DeleteTarget = { type: 'command'; item: SavedCommand } | { type: 'stack'; item: Stack }
-type CatalogSort = 'default' | 'running' | 'stopped' | 'port'
 type Theme = 'light' | 'dark'
 type CheckDetailView = 'request' | 'response' | 'edit'
 type ParameterRequest = { title: string; commands: SavedCommand[]; submit: (values: Record<string, Record<string, string>>) => void }
@@ -32,25 +33,6 @@ type CheckDraft = { name: string; description: string; kind: 'http' | 'command';
 
 const isPrerequisiteError = (error: unknown): error is Error & { status?: number; needed_stacks?: NeededStack[] } =>
 	error instanceof Error && (error as Error & { status?: number }).status === 409 && Array.isArray((error as Error & { needed_stacks?: NeededStack[] }).needed_stacks)
-
-const pagePaths: Record<Page, string> = {
-	dashboard: '/',
-	runs: '/runs',
-	ports: '/ports',
-	logs: '/logs',
-	history: '/history',
-	projects: '/projects',
-	services: '/services',
-	tasks: '/tasks',
-	tests: '/tests',
-	http: '/http',
-	stacks: '/stacks',
-	settings: '/settings',
-}
-const pageFromPath = (pathname: string): Page => {
-	const normalized = pathname !== '/' ? pathname.replace(/\/+$/, '') : pathname
-	return (Object.entries(pagePaths).find(([, path]) => path === normalized)?.[0] as Page | undefined) ?? 'dashboard'
-}
 
 const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [], checks: [], http_collections: [] }
 const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
@@ -111,8 +93,9 @@ function LogOutput({ content, stderr = '', filter = 'all', testId, className = '
   return <pre ref={elementRef} className={className} data-testid={testId}>{visible.length ? visible.map(item => <span key={item.index} className={logLineClass(item.severity)}>{item.line || ' '}{'\n'}</span>) : <span className="log-filter-empty">$ no error or stderr lines in the last 300 lines</span>}</pre>
 }
 
-function Status({ value = 'unknown' }: { value?: string }) {
-  return <span className={`status status-${value}`}><i />{value.replaceAll('_', ' ')}</span>
+function Status({ value }: { value?: string | null }) {
+  const label = typeof value === 'string' && value.trim() && value !== 'null' ? value : 'unknown'
+  return <span className={`status status-${label}`}><i />{label.replaceAll('_', ' ')}</span>
 }
 
 function IconButton({ label, children, onClick, danger, disabled, testId, pressed, className = '' }: { label: string; children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; danger?: boolean; disabled?: boolean; testId?: string; pressed?: boolean; className?: string }) {
@@ -211,10 +194,9 @@ function writeSidebarPinned(pinned: boolean) {
   try { localStorage.setItem(SIDEBAR_PIN_KEY, String(pinned)) } catch { /* ignore quota / private mode */ }
 }
 
-function Sidebar({ page, setPage, open, close, runtime, mode, pinned, onTogglePin }: { page: Page; setPage: (p: Page) => void; open: boolean; close: () => void; runtime?: RuntimeInfo; mode: AgentShellApi['mode']; pinned: boolean; onTogglePin: () => void }) {
+function Sidebar({ page, setPage, open, close, runtime, mode, pinned, onTogglePin, data, workspaceID, onWorkspace, onNewWorkspace, onManageWorkspaces }: { page: Page; setPage: (p: Page) => void; open: boolean; close: () => void; runtime?: RuntimeInfo; mode: AgentShellApi['mode']; pinned: boolean; onTogglePin: () => void; data: Snapshot; workspaceID: string | null; onWorkspace: (id: string | null) => void; onNewWorkspace: () => void; onManageWorkspaces: () => void }) {
   const groups: { label: string; links: [Page, string, React.ReactNode][] }[] = [
     { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['logs', 'Logs', <ScrollText />], ['history', 'History', <History />]] },
-    { label: 'Workspace', links: [['projects', 'Projects', <FolderKanban />]] },
     { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['tests', 'Tests', <TestTube2 />], ['http', 'HTTP', <Globe2 />], ['stacks', 'Stacks', <Boxes />]] },
   ]
   const [hovered, setHovered] = useState(false)
@@ -246,6 +228,7 @@ function Sidebar({ page, setPage, open, close, runtime, mode, pinned, onTogglePi
         <IconButton testId="sidebar-pin" className="sidebar-pin" label={pinned ? 'Collapse sidebar' : 'Pin sidebar open'} pressed={pinned} onClick={togglePin}>{pinned ? <PanelLeftClose /> : <PanelLeftOpen />}</IconButton>
         <IconButton className="sidebar-close" label="Close navigation" onClick={close}><X /></IconButton>
       </div>
+      <WorkspacePicker data={data} selectedID={workspaceID} onSelect={id => { onWorkspace(id); close() }} onNew={onNewWorkspace} onManage={onManageWorkspaces} />
       <div className="connection" aria-label="Runtime and MCP connection status">
         <div className={`connection-row connection-${runtime?.status ?? 'unknown'}`}><i /><span>{mode === 'demo' ? 'Browser demo' : runtime ? `Runtime ${runtime.status}` : 'Runtime status loading'}</span></div>
         <div className={`connection-row ${runtime?.mcp.count ? 'connection-running' : 'connection-idle'}`}><i /><span>{runtime ? runtime.mcp.count ? `${runtime.mcp.count} MCP client${runtime.mcp.count === 1 ? '' : 's'}` : 'No MCP clients' : 'MCP status loading'}</span></div>
@@ -387,10 +370,28 @@ function QuickLaunchPanel({ data, busy, accepting, commandAction, stackAction, o
   </Panel>
 }
 
-function Dashboard({ data, select, runAction, busy, navigate, promote, accepting, commandAction, stackAction, openCommand, openStack }: { data: Snapshot; select: (r: Run, tab?: DetailTab) => void; runAction: (r: Run, a: 'stop' | 'restart') => void; busy: string; navigate: (p: Page) => void; promote: (r: Run) => void; accepting: boolean; commandAction: (command: SavedCommand, action: 'start' | 'stop' | 'restart') => void; stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart') => void; openCommand: (command: SavedCommand) => void; openStack: (stack: Stack) => void }) {
+function Dashboard({ data, select, runAction, busy, navigate, promote, accepting, commandAction, stackAction, openCommand, openStack, workspaceName }: { data: Snapshot; select: (r: Run, tab?: DetailTab) => void; runAction: (r: Run, a: 'stop' | 'restart') => void; busy: string; navigate: (p: Page) => void; promote: (r: Run) => void; accepting: boolean; commandAction: (command: SavedCommand, action: 'start' | 'stop' | 'restart') => void; stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart') => void; openCommand: (command: SavedCommand) => void; openStack: (stack: Stack) => void; workspaceName?: string }) {
   const activeRuns = data.runs.filter(r => running(r.status))
+  const failures = data.history.filter(run => run.status === 'failed')
+  if (workspaceName) {
+    return <>
+      {!!data.stacks.length && <Panel title="Environments / Stacks" action={<button className="text-button" onClick={() => navigate('stacks')}>View all <ChevronRight /></button>}>
+        <div className="workspace-stack-list">{data.stacks.map(stack => <button type="button" className="workspace-stack-row" data-testid={`workspace-stack-${stack.id}`} key={stack.id} onClick={() => openStack(stack)}><span><strong>{stack.name}</strong><small>{stack.running_count ?? 0}/{stack.total_count ?? (stack.members ?? stack.commands ?? []).length} running · {stack.resolved_environment || stack.environment || 'local'}</small></span><EnvBadge stack={stack} /><Status value={stack.status} /></button>)}</div>
+      </Panel>}
+      {!!activeRuns.length && <Panel title="Running now" action={<button className="text-button" onClick={() => navigate('runs')}>View all <ChevronRight /></button>}>
+        <div className="run-list">{activeRuns.slice(0, 5).map(run => <RunCard key={run.id} run={run} select={tab => select(run, tab)} act={a => runAction(run, a)} busy={busy === run.id} accepting={accepting} />)}</div>
+      </Panel>}
+      <QuickLaunchPanel data={data} busy={busy} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={openCommand} openStack={openStack} manage={() => navigate('services')} />
+      {!!failures.length && <Panel title="Recent failures" action={<button className="text-button" onClick={() => navigate('history')}>View all <ChevronRight /></button>}>
+        <HistoryTable runs={failures} onSelect={select} onPromote={promote} />
+      </Panel>}
+      <Panel title="Recent Runs" action={<button className="text-button" onClick={() => navigate('history')}>View all <ChevronRight /></button>}>
+        <HistoryTable runs={data.history} onSelect={select} onPromote={promote} />
+      </Panel>
+    </>
+  }
   return <><SummaryCards snapshot={data} />
-    <QuickLaunchPanel data={data} busy={busy} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={openCommand} openStack={openStack} manage={() => navigate('projects')} />
+    <QuickLaunchPanel data={data} busy={busy} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={openCommand} openStack={openStack} manage={() => navigate('services')} />
     {!!activeRuns.length && <Panel title="Active Runs" action={<button className="text-button" onClick={() => navigate('runs')}>View all <ChevronRight /></button>}>
       <div className="run-list">{activeRuns.slice(0, 3).map(run => <RunCard key={run.id} run={run} select={tab => select(run, tab)} act={a => runAction(run, a)} busy={busy === run.id} accepting={accepting} />)}</div>
     </Panel>}
@@ -401,7 +402,7 @@ function Dashboard({ data, select, runAction, busy, navigate, promote, accepting
   </>
 }
 
-function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
+function LogsPage({ data, api, workspaceLocked }: { data: Snapshot; api: AgentShellApi; workspaceLocked?: boolean }) {
   const [projectScope, setProjectScope] = useState('all')
   const [collectionScope, setCollectionScope] = useState('all')
   const [selectedKey, setSelectedKey] = useState('')
@@ -473,7 +474,7 @@ function LogsPage({ data, api }: { data: Snapshot; api: AgentShellApi }) {
 
   const chooseProject = (id: string) => { setProjectScope(id); setCollectionScope('all'); setSelectedKey('') }
   return <section className="logs-workspace" data-testid="logs-page">
-    <div className="log-scope"><span>Project</span><div className="log-scope-tabs" role="tablist" aria-label="Log projects">{projectTabs.map(tab => <button key={tab.id} role="tab" aria-selected={projectScope === tab.id} className={projectScope === tab.id ? 'active' : ''} onClick={() => chooseProject(tab.id)}>{tab.name}</button>)}</div></div>
+    {!workspaceLocked && <div className="log-scope"><span>Project</span><div className="log-scope-tabs" role="tablist" aria-label="Log projects">{projectTabs.map(tab => <button key={tab.id} role="tab" aria-selected={projectScope === tab.id} className={projectScope === tab.id ? 'active' : ''} onClick={() => chooseProject(tab.id)}>{tab.name}</button>)}</div></div>}
     <div className="log-scope"><span>Collection</span><div className="log-scope-tabs" role="tablist" aria-label="Log collections">{collectionTabs.map(tab => <button key={tab.id} role="tab" aria-selected={collectionScope === tab.id} className={collectionScope === tab.id ? 'active' : ''} onClick={() => { setCollectionScope(tab.id); setSelectedKey('') }}>{tab.name}</button>)}</div></div>
     {!entries.length ? <div className="logs-empty"><Empty title="No open port logs" detail="Start a service with a listening port to follow its shell output here." /></div> : !visibleEntries.length ? <div className="logs-empty"><Empty title="No ports in this scope" detail="Choose another project or collection." /></div> : <>
       <div className="port-log-tabs" role="tablist" aria-label="Open port logs">{visibleEntries.map(entry => <button key={entry.key} role="tab" aria-selected={selected?.key === entry.key} className={selected?.key === entry.key ? 'active' : ''} onClick={() => setSelectedKey(entry.key)}><span className="live-dot" /><strong>:{entry.port.port}</strong><span>{entry.port.name ?? entry.run.label}</span><small>{entry.projectName} · {entry.collectionName}</small></button>)}</div>
@@ -512,13 +513,22 @@ function ExpectedPortChip({ port, verification, external }: { port: ExpectedPort
   return <span className={`expected-port-chip port-verification-${status}`} title={title}>:{port.port} {port.name}{label && <small>{label}</small>}</span>
 }
 
-function TaggedCommandGrid({ commands, busy, accepting, action, favorite, open }: { commands: SavedCommand[]; busy: string; accepting: boolean; action: (command: SavedCommand, a: 'start' | 'stop' | 'restart') => void; favorite: (command: SavedCommand) => void; open: (command: SavedCommand) => void }) {
+function TaggedCommandGrid({ commands, collections, busy, accepting, action, favorite, open, onAddCollection }: { commands: SavedCommand[]; collections?: Collection[]; busy: string; accepting: boolean; action: (command: SavedCommand, a: 'start' | 'stop' | 'restart') => void; favorite: (command: SavedCommand) => void; open: (command: SavedCommand) => void; onAddCollection?: () => void }) {
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [selectedCollection, setSelectedCollection] = useState('all')
   const tags = collectTags(commands)
-  const visible = commands.filter(command => hasAllTags(command.tags, selectedTags))
+  const folders = (collections ?? []).filter(item => !item.parent_id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  const visible = commands.filter(command => (selectedCollection === 'all' || command.collection_id === selectedCollection) && hasAllTags(command.tags, selectedTags))
   return <>
+    {(folders.length > 0 || onAddCollection) && <div className="project-catalog-toolbar">
+      <div className="collection-filter" role="group" aria-label="Filter by collection">
+        <button type="button" className={selectedCollection === 'all' ? 'active' : ''} onClick={() => setSelectedCollection('all')}>All</button>
+        {folders.map(item => <button type="button" className={selectedCollection === item.id ? 'active' : ''} onClick={() => setSelectedCollection(item.id)} key={item.id}>{item.name}</button>)}
+      </div>
+      {onAddCollection ? <button className="button small" data-testid="add-collection" onClick={onAddCollection}><Plus /> Collection</button> : null}
+    </div>}
     <TagFilter tags={tags} selected={selectedTags} onChange={setSelectedTags} />
-    {!visible.length ? <Empty title="No matching launchers" detail="Clear the tag filter to see every launcher on this page." /> : <div className="catalog-grid">{visible.map(command => <CommandCard key={command.id} command={command} busy={busy === command.id} accepting={accepting} action={a => action(command, a)} favorite={() => favorite(command)} open={() => open(command)} onTag={tag => setSelectedTags(current => toggleTag(current, tag))} />)}</div>}
+    {!visible.length ? <Empty title="No matching launchers" detail="Clear the tag or collection filter to see every launcher on this page." /> : <div className="catalog-grid">{visible.map(command => <CommandCard key={command.id} command={command} busy={busy === command.id} accepting={accepting} action={a => action(command, a)} favorite={() => favorite(command)} open={() => open(command)} onTag={tag => setSelectedTags(current => toggleTag(current, tag))} />)}</div>}
   </>
 }
 
@@ -536,118 +546,6 @@ function StackCard({ stack, action, favorite, remove, open, busy, accepting }: {
 	return <article className="stack-card interactive" tabIndex={0} onKeyDown={activate} onClick={open} data-testid={`stack-card-${stack.id}`}><header><div><span className="eyebrow">STACK</span><h3>{stack.name} <EnvBadge stack={stack} /></h3><p>{stack.description}</p>{stack.created_by && <small className="provenance">Added by {stack.created_by}</small>}</div><div className="stack-summary" onClick={event => event.stopPropagation()}><IconButton label={`${stack.favorite ? 'Remove' : 'Add'} ${stack.name} ${stack.favorite ? 'from' : 'to'} favorites`} onClick={favorite} disabled={busy}><Star className={stack.favorite ? 'favorite' : ''} fill={stack.favorite ? 'currentColor' : 'none'} /></IconButton><div className="stack-count"><strong>{stack.running_count ?? members.filter(m => running(m.status)).length}/{stack.total_count ?? members.length}</strong><span>Running</span></div></div></header><div className="stack-members">{members.map(m => { const command = m.command; const external = (m.lifecycle_mode ?? command?.lifecycle_mode) === 'external'; return <div key={m.command_id}><Status value={memberDisplayState(m, command)} />{external && <small className="external-badge">External</small>}<span>{m.name ?? command?.name ?? m.command_id}</span></div> })}</div><footer onClick={event => event.stopPropagation()}><button data-testid={`delete-stack-${stack.id}`} className="button danger subtle" onClick={remove} disabled={busy || isRunning} title={isRunning ? 'Stop all stack members before deleting it' : `Delete ${stack.name}`}><Trash2 /> Delete</button>{isRunning && <><button data-testid={`stop-stack-${stack.id}`} className="button danger" onClick={() => action('stop')} disabled={busy}><Square /> Stop all</button><button data-testid={`restart-stack-${stack.id}`} className="button" onClick={() => action('restart')} disabled={busy || !accepting}><RotateCcw /> Restart all</button></>}<button data-testid={`start-stack-${stack.id}`} className="button primary" onClick={() => action('start')} disabled={busy || !accepting}><Play /> {isRunning ? 'Start missing' : 'Start all'}</button></footer></article>
 }
 
-interface CatalogHandlers {
-  commandAction: (command: SavedCommand, action: 'start' | 'stop' | 'restart') => void
-  stackAction: (stack: Stack, action: 'start' | 'stop' | 'restart', commandIDs?: string[], environment?: string) => void
-  favoriteCommand: (command: SavedCommand) => void
-	favoriteStack: (stack: Stack) => void
-	openCommand: (command: SavedCommand) => void
-	openStack: (stack: Stack) => void
-	deleteStack: (stack: Stack) => void
-}
-
-function ProjectCatalog({ data, selectedProject, setSelectedProject, busy, accepting, handlers, selectRun, runAgain, promote, addCollection }: { data: Snapshot; selectedProject: string; setSelectedProject: (id: string) => void; busy: string; accepting: boolean; handlers: CatalogHandlers; selectRun: (run: Run, tab?: DetailTab) => void; runAgain: (run: Run) => void; promote: (run: Run) => void; addCollection: () => void }) {
-  const [selectedCollection, setSelectedCollection] = useState('all')
-  const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [favoritesOpen, setFavoritesOpen] = useState(() => {
-    try { return window.localStorage.getItem('agentshell.projects.favorites-open') !== 'false' } catch { return true }
-  })
-  const [catalogSort, setCatalogSort] = useState<CatalogSort>(() => {
-    try {
-      const saved = window.localStorage.getItem('agentshell.projects.sort')
-      return saved === 'running' || saved === 'stopped' || saved === 'port' ? saved : 'default'
-    } catch { return 'default' }
-  })
-  useEffect(() => { setSelectedCollection('all'); setSelectedTags([]) }, [selectedProject])
-  useEffect(() => {
-    if (!data.projects.length) return
-    if (selectedProject === 'global' || !data.projects.some(item => item.id === selectedProject)) setSelectedProject(data.projects[0].id)
-  }, [data.projects, selectedProject, setSelectedProject])
-  useEffect(() => { try { window.localStorage.setItem('agentshell.projects.favorites-open', String(favoritesOpen)) } catch { /* storage may be unavailable */ } }, [favoritesOpen])
-  useEffect(() => { try { window.localStorage.setItem('agentshell.projects.sort', catalogSort) } catch { /* storage may be unavailable */ } }, [catalogSort])
-  const project = data.projects.find(item => item.id === selectedProject)
-  const inScope = <T extends { project_id?: string }>(items: T[]) => items.filter(item => selectedProject === 'global' ? !item.project_id : item.project_id === selectedProject)
-  const scopedCommands = inScope(data.commands)
-  const scopedStacks = inScope(data.stacks)
-  const scopedHistory = inScope(data.history)
-  const scopedCollections = inScope(data.collections).filter(item => !item.parent_id).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
-  const visibleCommands = (selectedCollection === 'all' ? scopedCommands : scopedCommands.filter(item => item.collection_id === selectedCollection)).filter(item => hasAllTags(item.tags, selectedTags))
-  const visibleStacks = (selectedCollection === 'all' ? scopedStacks : scopedStacks.filter(item => item.collection_id === selectedCollection)).filter(stack => {
-    if (!selectedTags.length) return true
-    const members = stack.members ?? stack.commands ?? []
-    return members.some(member => hasAllTags((member.command ?? data.commands.find(command => command.id === member.command_id))?.tags, selectedTags))
-  })
-  const favoriteCommands = scopedCommands.filter(item => item.favorite && hasAllTags(item.tags, selectedTags))
-  const favoriteStacks = scopedStacks.filter(stack => {
-    if (!stack.favorite) return false
-    if (!selectedTags.length) return true
-    const members = stack.members ?? stack.commands ?? []
-    return members.some(member => hasAllTags((member.command ?? data.commands.find(command => command.id === member.command_id))?.tags, selectedTags))
-  })
-  const favoriteCount = favoriteCommands.length + favoriteStacks.length
-  const scopeName = project?.name ?? (data.projects.length ? 'Projects' : 'No projects')
-  const commandsByID = new Map(data.commands.map(command => [command.id, command]))
-
-  type CatalogEntry = { type: 'command'; item: SavedCommand; originalIndex: number } | { type: 'stack'; item: Stack; originalIndex: number }
-  const isActive = (entry: CatalogEntry) => entry.type === 'command'
-    ? (entry.item.can_stop ?? running(entry.item.status))
-    : running(entry.item.status) || entry.item.status === 'partial' || (entry.item.running_count ?? 0) > 0
-  const lowestPort = (entry: CatalogEntry) => {
-    if (entry.type === 'command') return Math.min(...(entry.item.expected_ports ?? []).map(port => port.port), Number.POSITIVE_INFINITY)
-    const members = entry.item.members ?? entry.item.commands ?? []
-    return Math.min(...members.flatMap(member => (member.command ?? commandsByID.get(member.command_id))?.expected_ports?.map(port => port.port) ?? []), Number.POSITIVE_INFINITY)
-  }
-  const sortedEntries = (commands: SavedCommand[], stacks: Stack[]) => {
-    const entries: CatalogEntry[] = [
-      ...commands.map((item, originalIndex) => ({ type: 'command' as const, item, originalIndex })),
-      ...stacks.map((item, index) => ({ type: 'stack' as const, item, originalIndex: commands.length + index })),
-    ]
-    if (catalogSort === 'default') return entries
-    return entries.slice().sort((left, right) => {
-      if (catalogSort === 'port') {
-        const byPort = lowestPort(left) - lowestPort(right)
-        return Number.isNaN(byPort) || byPort === 0 ? left.originalIndex - right.originalIndex : byPort
-      }
-      const leftRank = isActive(left) === (catalogSort === 'running') ? 0 : 1
-      const rightRank = isActive(right) === (catalogSort === 'running') ? 0 : 1
-      return leftRank - rightRank || left.originalIndex - right.originalIndex
-    })
-  }
-
-  const commandCard = (command: SavedCommand) => <CommandCard key={command.id} command={command} busy={busy === command.id} accepting={accepting} action={action => handlers.commandAction(command, action)} favorite={() => handlers.favoriteCommand(command)} open={() => handlers.openCommand(command)} onTag={tag => setSelectedTags(current => toggleTag(current, tag))} />
-  const stackCard = (stack: Stack) => <StackCard key={stack.id} stack={stack} busy={busy === stack.id} accepting={accepting} action={action => handlers.stackAction(stack, action)} favorite={() => handlers.favoriteStack(stack)} remove={() => handlers.deleteStack(stack)} open={() => handlers.openStack(stack)} />
-  const catalogCards = (commands: SavedCommand[], stacks: Stack[]) => sortedEntries(commands, stacks).map(entry => entry.type === 'command' ? commandCard(entry.item) : stackCard(entry.item))
-
-  return <div className="projects-layout" data-testid="projects-page">
-    <aside className="project-rail" aria-label="Project scope">
-      <div className="project-rail-title"><span>Scope</span><strong>{data.projects.length} projects</strong></div>
-      {data.projects.map(item => <button data-testid={`project-${item.id}`} className={selectedProject === item.id ? 'active' : ''} key={item.id} onClick={() => setSelectedProject(item.id)}><FolderOpen /><span><strong>{item.name}</strong><small>{item.root_path}</small></span></button>)}
-      {!data.projects.length && <p className="project-rail-empty">No projects yet.</p>}
-    </aside>
-    <div className="project-content">
-      <div className="project-heading"><div><div className="breadcrumbs"><span>Projects</span><ChevronRight /><strong>{scopeName}</strong>{selectedCollection !== 'all' && <><ChevronRight /><span>{scopedCollections.find(item => item.id === selectedCollection)?.name}</span></>}</div><h2>{scopeName}</h2><p>{project?.description ?? project?.root_path ?? 'Create a project to organize launchers.'}</p></div>{project && <button className="button" data-testid="add-collection" onClick={addCollection}><Plus /> Collection</button>}</div>
-      <div className="project-catalog-toolbar">
-        <div className="collection-filter" role="group" aria-label="Filter by collection"><button className={selectedCollection === 'all' ? 'active' : ''} onClick={() => setSelectedCollection('all')}>All</button>{scopedCollections.map(item => <button className={selectedCollection === item.id ? 'active' : ''} onClick={() => setSelectedCollection(item.id)} key={item.id}>{item.name}</button>)}</div>
-        <TagFilter tags={collectTags(scopedCommands)} selected={selectedTags} onChange={setSelectedTags} testId="project-tag-filter" />
-        <label className="catalog-sort"><ArrowUpDown /><span>Sort</span><select aria-label="Sort launchers" value={catalogSort} onChange={event => setCatalogSort(event.target.value as CatalogSort)}><option value="default">Default</option><option value="running">Running first</option><option value="stopped">Stopped first</option><option value="port">Port (low to high)</option></select></label>
-      </div>
-
-      {!!favoriteCount && selectedCollection === 'all' && <Panel title="Pinned favorites" className={`project-section favorites-section ${favoritesOpen ? '' : 'collapsed'}`} action={<button className="favorites-toggle" data-testid="toggle-pinned-favorites" aria-expanded={favoritesOpen} onClick={() => setFavoritesOpen(open => !open)}><span>{favoritesOpen ? 'Hide' : `Show ${favoriteCount}`}</span>{favoritesOpen ? <ChevronUp /> : <ChevronDown />}</button>}>{favoritesOpen ? <div className="catalog-grid compact">{catalogCards(favoriteCommands, favoriteStacks)}</div> : <span className="sr-only">{favoriteCount} pinned favorites hidden</span>}</Panel>}
-
-      {scopedCollections.filter(collection => selectedCollection === 'all' || collection.id === selectedCollection).map(collection => {
-        const collectionCommands = visibleCommands.filter(item => item.collection_id === collection.id)
-        const collectionStacks = visibleStacks.filter(item => item.collection_id === collection.id)
-        if (!collectionCommands.length && !collectionStacks.length) return selectedTags.length ? null : <Panel key={collection.id} title={collection.name} className="project-section"><Empty title="Empty collection" detail="AI or you can add saved commands here." /></Panel>
-        return <Panel key={collection.id} title={collection.name} className="project-section"><div className="catalog-grid compact">{catalogCards(collectionCommands, collectionStacks)}</div></Panel>
-      })}
-
-      {(() => { const looseCommands = visibleCommands.filter(item => !item.collection_id); const looseStacks = visibleStacks.filter(item => !item.collection_id); return (looseCommands.length || looseStacks.length) ? <Panel title="Project launchers" className="project-section"><div className="catalog-grid compact">{catalogCards(looseCommands, looseStacks)}</div></Panel> : null })()}
-
-      {!visibleCommands.length && !visibleStacks.length && !scopedCollections.length && <Empty title="No launchers in this scope" detail="Save one from History or let an AI add it through MCP." />}
-      <Panel title="Project history" action={<span className="collection-description">{scopedHistory.length} runs</span>} className="project-section"><HistoryTable runs={scopedHistory.slice(0, 8)} onSelect={selectRun} onRunAgain={runAgain} onPromote={promote} accepting={accepting} full /></Panel>
-    </div>
-  </div>
-}
 
 function PromoteDialog({ run, projects, collections, close, submit, createProject, createCollection, busy }: { run: Run; projects: Project[]; collections: Collection[]; close: () => void; submit: (input: PromoteRunInput) => void; createProject: (input: ProjectInput) => Promise<Project>; createCollection: (input: CollectionInput) => Promise<Collection>; busy: boolean }) {
   const [name, setName] = useState(run.label || run.command)
@@ -749,10 +647,10 @@ function ParameterDialog({ request, close }: { request: ParameterRequest; close:
   return <><button className="modal-scrim" aria-label="Cancel runtime input" onClick={close} /><form className="modal parameter-modal" role="dialog" aria-modal="true" aria-labelledby="parameter-title" data-testid="parameter-dialog" onSubmit={submit}><span className="modal-icon"><Terminal /></span><h2 id="parameter-title">{request.title}</h2><p>Enter values for this execution. Secret fields are sent directly to the child process and are not saved in the launcher, Run, History, database, or logs.</p><div className="parameter-command-list">{request.commands.map(command => <fieldset key={command.id}><legend>{command.name}</legend>{command.parameters?.map(parameter => <div className={'parameter-field ' + (parameter.type === 'boolean' ? 'parameter-boolean' : '')} key={parameter.key}><label htmlFor={fieldKey(command, parameter)}>{parameter.label}{parameter.required && <span>Required</span>}</label>{control(command, parameter)}{parameter.description && <small>{parameter.description}</small>}<em>{parameter.binding === 'stdin' ? 'stdin' + (parameter.append_newline ? ' + newline' : '') : 'temporary env · ' + parameter.env_var}</em></div>)}</fieldset>)}</div>{validation && <p className="inline-error" role="alert">{validation}</p>}<div className="secret-notice"><Check /> Values exist only for this start attempt. AgentShell never reuses them on restart.</div><footer><button type="button" className="button" onClick={close}>Cancel</button><button className="button primary" data-testid="submit-parameters"><Play /> Continue</button></footer></form></>
 }
 
-function StackDialog({ commands, projects, collections, close, submit, busy }: { commands: SavedCommand[]; projects: Project[]; collections: Collection[]; close: () => void; submit: (input: StackInput) => void; busy: boolean }) {
+function StackDialog({ commands, projects, collections, selectedProject, close, submit, busy }: { commands: SavedCommand[]; projects: Project[]; collections: Collection[]; selectedProject?: string; close: () => void; submit: (input: StackInput) => void; busy: boolean }) {
 	const [name, setName] = useState('')
 	const [description, setDescription] = useState('')
-	const [projectID, setProjectID] = useState(projects[0]?.id ?? '')
+	const [projectID, setProjectID] = useState(selectedProject || projects[0]?.id || '')
 	const [collectionID, setCollectionID] = useState('')
 	const [selected, setSelected] = useState<string[]>([])
 	const eligible = commands.filter(command => command.project_id === projectID)
@@ -770,7 +668,7 @@ function StackDialog({ commands, projects, collections, close, submit, busy }: {
 }
 
 function PromotionReceipt({ result, project, onView, close }: { result: PromoteRunResult; project?: Project; onView: () => void; close: () => void }) {
-  return <div className="receipt" role="status" data-testid="promotion-receipt"><span className="receipt-icon"><Check /></span><div><strong>{result.action === 'reused' ? 'Existing launcher reused' : 'Launcher saved'}</strong><p>{result.command.name}{project ? ` · ${project.name}` : ''}</p></div><button className="button small" onClick={onView}>View project <ArrowRight /></button><IconButton label="Dismiss receipt" onClick={close}><X /></IconButton></div>
+  return <div className="receipt" role="status" data-testid="promotion-receipt"><span className="receipt-icon"><Check /></span><div><strong>{result.action === 'reused' ? 'Existing launcher reused' : 'Launcher saved'}</strong><p>{result.command.name}{project ? ` · ${project.name}` : ''}</p></div><button className="button small" onClick={onView}>Open workspace <ArrowRight /></button><IconButton label="Dismiss receipt" onClick={close}><X /></IconButton></div>
 }
 
 function RunLogPanel({ api, runs, runID, setRunID, testId, hideRunSelect = false, emptyDetail = 'Start this launcher to capture stdout and stderr here.' }: { api: AgentShellApi; runs: Run[]; runID: string; setRunID: (id: string) => void; testId: string; hideRunSelect?: boolean; emptyDetail?: string }) {
@@ -1274,7 +1172,8 @@ export default function App() {
   const [fallback, setFallback] = useState<string>()
   const [data, setData] = useState(empty)
   const [runtime, setRuntime] = useState<RuntimeInfo>()
-  const [page, setPageState] = useState<Page>(() => pageFromPath(window.location.pathname))
+  const [page, setPageState] = useState<Page>(() => parseLocation(window.location.pathname).page)
+  const [workspaceSlug, setWorkspaceSlug] = useState<string | null>(() => parseLocation(window.location.pathname).workspaceSlug)
   const [sidebar, setSidebar] = useState(false)
   const [sidebarPinned, setSidebarPinned] = useState(readSidebarPinned)
   const [selected, setSelected] = useState<Run | null>(null)
@@ -1291,7 +1190,8 @@ export default function App() {
   const [error, setError] = useState<string>()
   const [shutdownOpen, setShutdownOpen] = useState(false)
   const [shutdownRequested, setShutdownRequested] = useState(false)
-  const [selectedProject, setSelectedProject] = useState('')
+  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false)
+  const [workspaceManageOpen, setWorkspaceManageOpen] = useState(false)
   const [promoteRun, setPromoteRun] = useState<Run | null>(null)
   const [promotionReceipt, setPromotionReceipt] = useState<PromoteRunResult | null>(null)
   const [collectionOpen, setCollectionOpen] = useState(false)
@@ -1302,10 +1202,19 @@ export default function App() {
   const shutdownPollFailures = useRef(0)
   const quietCatalogUntil = useRef(0)
 	const setPage = useCallback((next: Page) => {
-		const target = pagePaths[next]
-		if (window.location.pathname !== target) window.history.pushState({ page: next }, '', target)
+		const target = buildPath(workspaceSlug, next)
+		if (window.location.pathname !== target) window.history.pushState({ page: next, workspaceSlug }, '', target)
 		setPageState(next)
-	}, [])
+	}, [workspaceSlug])
+	const setWorkspace = useCallback((projectID: string | null, nextPage?: Page) => {
+		const project = projectID ? data.projects.find(item => item.id === projectID) : undefined
+		const slug = project ? projectSlug(project, data.projects) : null
+		const pageToKeep = nextPage ?? page
+		const target = buildPath(slug, pageToKeep)
+		if (window.location.pathname !== target) window.history.pushState({ page: pageToKeep, workspaceSlug: slug }, '', target)
+		setWorkspaceSlug(slug)
+		if (nextPage) setPageState(nextPage)
+	}, [data.projects, page])
 	const openCommand = (id: string, parentStackID = '') => {
 		setCommandParentStackID(parentStackID)
 		setSelectedCommandID(id)
@@ -1360,12 +1269,25 @@ export default function App() {
   }, [theme])
   useEffect(() => { resolveApi().then(result => { setApi(result.api); setFallback(result.fallbackReason) }) }, [])
 	useEffect(() => {
-		const initial = pageFromPath(window.location.pathname)
-		if (window.location.pathname !== pagePaths[initial]) window.history.replaceState({ page: initial }, '', pagePaths[initial])
-		const onPopState = () => setPageState(pageFromPath(window.location.pathname))
+		const initial = parseLocation(window.location.pathname)
+		const target = buildPath(initial.workspaceSlug, initial.page)
+		if (window.location.pathname !== target) window.history.replaceState({ page: initial.page, workspaceSlug: initial.workspaceSlug }, '', target)
+		setPageState(initial.page)
+		setWorkspaceSlug(initial.workspaceSlug)
+		const onPopState = () => {
+			const route = parseLocation(window.location.pathname)
+			setPageState(route.page)
+			setWorkspaceSlug(route.workspaceSlug)
+		}
 		window.addEventListener('popstate', onPopState)
 		return () => window.removeEventListener('popstate', onPopState)
 	}, [])
+	useEffect(() => {
+		if (!workspaceSlug || !data.projects.length) return
+		if (projectForSlug(data.projects, workspaceSlug)) return
+		window.history.replaceState({ page, workspaceSlug: null }, '', buildPath(null, page))
+		setWorkspaceSlug(null)
+	}, [data.projects, page, workspaceSlug])
   const reload = useCallback(async () => { if (!api) return; try { const [snapshot, runtimeInfo] = await Promise.all([api.getSnapshot(), api.getRuntime()]); setData(snapshot); setRuntime(runtimeInfo); setError(undefined) } catch (e) { if (!shutdownRequested) setError(e instanceof Error ? e.message : 'Unable to load data') } }, [api, shutdownRequested])
   useEffect(() => { if (!api || runtime?.status === 'stopped') return; reload(); return api.subscribe(event => {
     if (Date.now() < quietCatalogUntil.current && event !== 'run' && event !== 'runtime') return
@@ -1500,7 +1422,6 @@ export default function App() {
     }
     perform(run.id, () => api.restartRun(run.id))
   }
-	const catalogHandlers: CatalogHandlers = { commandAction, stackAction, favoriteCommand, favoriteStack, openCommand: command => openCommand(command.id), openStack: stack => setSelectedStackID(stack.id), deleteStack: stack => setDeleteTarget({ type: 'stack', item: stack }) }
 	const deleteSaved = async () => {
 		if (!api || !deleteTarget) return
 		const target = deleteTarget
@@ -1517,10 +1438,13 @@ export default function App() {
 			setError(e instanceof Error ? e.message : 'Unable to delete saved item')
 		} finally { setBusy('') }
 	}
+  const workspace = projectForSlug(data.projects, workspaceSlug)
+  const workspaceID = workspace?.id ?? null
+  const view = scopeSnapshot(data, workspaceID)
   const savePromotion = async (input: PromoteRunInput) => {
     if (!api || !promoteRun) return
     setBusy(`promote-${promoteRun.id}`)
-    try { const result = await api.promoteRun(promoteRun.id, input); setPromotionReceipt(result); setSelectedProject(result.command.project_id ?? data.projects[0]?.id ?? ''); setPromoteRun(null); await reload() }
+    try { const result = await api.promoteRun(promoteRun.id, input); setPromotionReceipt(result); setPromoteRun(null); await reload() }
     catch (e) { setError(e instanceof Error ? e.message : 'Unable to save launcher') }
     finally { setBusy('') }
   }
@@ -1542,10 +1466,26 @@ export default function App() {
     return created
   }
   const createCollection = async (name: string) => {
-    if (!api || selectedProject === 'global' || !selectedProject) return
+    if (!api || !workspaceID) return
     setBusy('create-collection')
-    try { await api.createCollection({ name, project_id: selectedProject, sort_order: data.collections.filter(item => item.project_id === selectedProject).length }); setCollectionOpen(false); await reload() }
+    try { await api.createCollection({ name, project_id: workspaceID, sort_order: data.collections.filter(item => item.project_id === workspaceID).length }); setCollectionOpen(false); await reload() }
     catch (e) { setError(e instanceof Error ? e.message : 'Unable to create collection') }
+    finally { setBusy('') }
+  }
+  const createWorkspace = async (input: ProjectInput) => {
+    if (!api) return
+    setBusy('create-workspace')
+    try {
+      const created = await api.createProject(input)
+      const slug = projectSlug(created, [...data.projects, created])
+      setWorkspaceCreateOpen(false)
+      setWorkspaceManageOpen(false)
+      await reload()
+      const target = buildPath(slug, 'dashboard')
+      window.history.pushState({ page: 'dashboard', workspaceSlug: slug }, '', target)
+      setWorkspaceSlug(slug)
+      setPageState('dashboard')
+    } catch (e) { setError(e instanceof Error ? e.message : 'Unable to create workspace') }
     finally { setBusy('') }
   }
 	const createStack = async (input: StackInput) => {
@@ -1562,9 +1502,21 @@ export default function App() {
 	}
   const shutdown = async () => { if (!api) return; setBusy('runtime-shutdown'); try { await api.shutdownRuntime(); setShutdownOpen(false); setShutdownRequested(true); setSelected(null); setRuntime(current => current ? { ...current, status: 'stopping' } : current) } catch (e) { setError(e instanceof Error ? e.message : 'Shutdown failed') } finally { setBusy('') } }
   const select = (run: Run, selectedTab: DetailTab = 'Overview') => { setSelected(run); setTab(selectedTab) }
-  const titles: Record<Page, [string, string]> = { dashboard: ['Dashboard', 'Overview of your local environment'], runs: ['Active Runs', 'Processes managed by AgentShell'], ports: ['Listening Ports', 'Services available on localhost'], logs: ['Live Logs', 'Follow shell output from services with open ports'], history: ['Command History', 'Every command, exit and duration'], projects: ['Projects', 'Launchers organized by workspace and collection'], services: ['Saved Services', 'Reusable long-running development services'], tasks: ['Saved Tasks', 'Builds, tests and one-off commands'], tests: ['Tests', 'HTTP and task checks across stacks, launchers and Runs'], http: ['HTTP collections', 'Saved API requests, interpolated from stack environments'], stacks: ['Stacks', 'Start and stop complete environments'], settings: ['Settings', 'Runtime identity, MCP clients and shutdown'] }
+  const titles: Record<Page, [string, string]> = {
+    dashboard: ['Dashboard', workspace ? `${workspace.name} workspace` : 'Overview of your local environment'],
+    runs: ['Active Runs', workspace ? `${workspace.name} workspace` : 'Processes managed by AgentShell'],
+    ports: ['Listening Ports', workspace ? `${workspace.name} workspace` : 'Services available on localhost'],
+    logs: ['Live Logs', workspace ? `${workspace.name} workspace` : 'Follow shell output from services with open ports'],
+    history: ['Command History', workspace ? `${workspace.name} workspace` : 'Every command, exit and duration'],
+    services: ['Saved Services', workspace ? `${workspace.name} workspace` : 'Reusable long-running development services'],
+    tasks: ['Saved Tasks', workspace ? `${workspace.name} workspace` : 'Builds, tests and one-off commands'],
+    tests: ['Tests', workspace ? `${workspace.name} workspace` : 'HTTP and task checks across stacks, launchers and Runs'],
+    http: ['HTTP collections', workspace ? `${workspace.name} workspace` : 'Saved API requests, interpolated from stack environments'],
+    stacks: ['Stacks', workspace ? `${workspace.name} workspace` : 'Start and stop complete environments'],
+    settings: ['Settings', workspace ? `${workspace.name} workspace` : 'Runtime identity, MCP clients and shutdown'],
+  }
   const filter = <T extends { name?: string; label?: string; command?: string; tags?: string[] }>(items: T[]) => items.filter(i => `${i.name} ${i.label} ${i.command} ${(i.tags ?? []).join(' ')}`.toLowerCase().includes(query.toLowerCase()))
-  const commands = filter(data.commands)
+  const commands = filter(view.commands)
 	const selectedCommand = data.commands.find(command => command.id === selectedCommandID)
 	const selectedStack = data.stacks.find(stack => stack.id === selectedStackID)
 	const selectedCheck = data.checks.find(check => check.id === selectedCheckID)
@@ -1582,24 +1534,23 @@ export default function App() {
   })
 
   return <div className={`app-shell runtime-${runtime?.status ?? 'loading'} ${sidebarPinned ? 'sidebar-pinned' : 'sidebar-collapsed'}`} data-testid="app-shell">
-    <Sidebar page={page} setPage={setPage} open={sidebar} close={() => setSidebar(false)} runtime={runtime} mode={api?.mode ?? 'live'} pinned={sidebarPinned} onTogglePin={toggleSidebarPin} />
+    <Sidebar page={page} setPage={setPage} open={sidebar} close={() => setSidebar(false)} runtime={runtime} mode={api?.mode ?? 'live'} pinned={sidebarPinned} onTogglePin={toggleSidebarPin} data={data} workspaceID={workspaceID} onWorkspace={id => setWorkspace(id)} onNewWorkspace={() => setWorkspaceCreateOpen(true)} onManageWorkspaces={() => setWorkspaceManageOpen(true)} />
     <main className="main">
-      <header className="topbar"><div className="page-title"><IconButton label="Open navigation" onClick={() => setSidebar(true)}><Menu /></IconButton><div><h1>{titles[page][0]}</h1><p>{titles[page][1]}</p></div></div><div className="top-actions"><label className="search"><Search /><input aria-label="Search" placeholder="Search…" value={query} onChange={e => setQuery(e.target.value)} /></label><button className="button primary new-run" aria-label="Choose a saved service to run" onClick={() => setPage('services')} disabled={!accepting}><Plus /> New Run</button><IconButton testId="theme-toggle" label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} pressed={theme === 'dark'} onClick={() => setTheme(current => current === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <Sun /> : <Moon />}</IconButton><IconButton label="Open settings" onClick={() => setPage('settings')}><Settings /></IconButton></div></header>
+      <header className="topbar"><div className="page-title"><IconButton label="Open navigation" onClick={() => setSidebar(true)}><Menu /></IconButton><div><h1>{titles[page][0]}</h1><p>{titles[page][1]}</p></div></div><div className="top-actions"><label className="search"><Search /><input aria-label="Search" placeholder="Search…" value={query} onChange={e => setQuery(e.target.value)} /></label><button className="button primary all-runs" data-testid="all-runs" aria-label="View all active runs" onClick={() => setPage('runs')}><Activity /> All Runs</button><IconButton testId="theme-toggle" label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`} pressed={theme === 'dark'} onClick={() => setTheme(current => current === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <Sun /> : <Moon />}</IconButton><IconButton label="Open settings" onClick={() => setPage('settings')}><Settings /></IconButton></div></header>
       {runtime?.status === 'stopping' && <div className="stopping-banner" role="status"><RefreshCw /><span><strong>AgentShell is stopping.</strong> New starts are disabled while managed processes shut down.</span></div>}
       {fallback && <div className="demo-banner" role="status"><Sparkles /><span><strong>Demo data</strong> — no live Runtime data is shown ({fallback}). Actions stay inside the isolated browser demo adapter.</span></div>}
       {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={reload}>Try again</button></div>}
       <div className="content">
-		{page === 'dashboard' && <Dashboard data={data} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={command => openCommand(command.id)} openStack={stack => setSelectedStackID(stack.id)} />}
-        {page === 'runs' && <Panel title={`${filter(data.runs).filter(r => running(r.status)).length} active runs`}><div className="run-list">{filter(data.runs).filter(r => running(r.status)).map(r => <RunCard key={r.id} run={r} select={tab => select(r, tab)} act={a => runAction(r, a)} busy={busy === r.id} accepting={accepting} />)}</div></Panel>}
-        {page === 'ports' && <Panel title={`${data.ports.length} listening ports`}><PortsTable ports={data.ports} full /></Panel>}
-        {page === 'logs' && api && <LogsPage data={data} api={api} />}
-        {page === 'history' && <Panel title={`${data.history.length} commands`}><HistoryTable runs={filter(data.history)} onSelect={select} onRunAgain={runAgain} onPromote={setPromoteRun} accepting={accepting} full /></Panel>}
-        {page === 'projects' && <ProjectCatalog data={data} selectedProject={selectedProject} setSelectedProject={setSelectedProject} busy={busy} accepting={accepting} handlers={catalogHandlers} selectRun={select} runAgain={runAgain} promote={setPromoteRun} addCollection={() => setCollectionOpen(true)} />}
-		{page === 'services' && <TaggedCommandGrid commands={commands.filter(c => c.kind === 'service')} busy={busy} accepting={accepting} action={commandAction} favorite={favoriteCommand} open={command => openCommand(command.id)} />}
-		{page === 'tasks' && <TaggedCommandGrid commands={commands.filter(c => c.kind === 'task')} busy={busy} accepting={accepting} action={commandAction} favorite={favoriteCommand} open={command => openCommand(command.id)} />}
-		{page === 'tests' && <TestsPage data={data} query={query} busy={busy} accepting={accepting} run={checkAction} open={openCheck} openOwner={openCheckOwner} />}
-		{page === 'http' && api && <HTTPCollectionsPage data={data} api={api} busy={busy} accepting={accepting} refresh={reload} openStack={stack => { setEditStackID(''); setSelectedStackID(stack.id) }} />}
-		{page === 'stacks' && <><div className="library-toolbar"><div><strong>Reusable environments</strong><span>Dependency-aware groups of saved launchers.</span></div><button className="button primary" data-testid="new-stack" onClick={() => setStackOpen(true)}><Plus /> New stack</button></div><div className="stack-grid">{filter(data.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} remove={() => setDeleteTarget({ type: 'stack', item: s })} open={() => { setEditStackID(''); setSelectedStackID(s.id) }} />)}</div></>}
+		{page === 'dashboard' && <Dashboard data={view} select={select} runAction={runAction} busy={busy} navigate={setPage} promote={setPromoteRun} accepting={accepting} commandAction={commandAction} stackAction={stackAction} openCommand={command => openCommand(command.id)} openStack={stack => setSelectedStackID(stack.id)} workspaceName={workspace?.name} />}
+        {page === 'runs' && <Panel title={`${filter(view.runs).filter(r => running(r.status)).length} active runs`}><div className="run-list">{filter(view.runs).filter(r => running(r.status)).map(r => <RunCard key={r.id} run={r} select={tab => select(r, tab)} act={a => runAction(r, a)} busy={busy === r.id} accepting={accepting} />)}</div></Panel>}
+        {page === 'ports' && <Panel title={`${view.ports.length} listening ports`}><PortsTable ports={view.ports} full /></Panel>}
+        {page === 'logs' && api && <LogsPage data={view} api={api} workspaceLocked={!!workspaceID} />}
+        {page === 'history' && <Panel title={`${view.history.length} commands`}><HistoryTable runs={filter(view.history)} onSelect={select} onRunAgain={runAgain} onPromote={setPromoteRun} accepting={accepting} full /></Panel>}
+		{page === 'services' && <TaggedCommandGrid commands={commands.filter(c => c.kind === 'service')} collections={workspaceID ? view.collections : undefined} busy={busy} accepting={accepting} action={commandAction} favorite={favoriteCommand} open={command => openCommand(command.id)} onAddCollection={workspaceID ? () => setCollectionOpen(true) : undefined} />}
+		{page === 'tasks' && <TaggedCommandGrid commands={commands.filter(c => c.kind === 'task')} collections={workspaceID ? view.collections : undefined} busy={busy} accepting={accepting} action={commandAction} favorite={favoriteCommand} open={command => openCommand(command.id)} onAddCollection={workspaceID ? () => setCollectionOpen(true) : undefined} />}
+		{page === 'tests' && <TestsPage data={view} query={query} busy={busy} accepting={accepting} run={checkAction} open={openCheck} openOwner={openCheckOwner} />}
+		{page === 'http' && api && <HTTPCollectionsPage data={view} api={api} busy={busy} accepting={accepting} refresh={reload} openStack={stack => { setEditStackID(''); setSelectedStackID(stack.id) }} workspaceName={workspace?.name} />}
+		{page === 'stacks' && <><div className="library-toolbar"><div><strong>Reusable environments</strong><span>Dependency-aware groups of saved launchers.</span></div><button className="button primary" data-testid="new-stack" onClick={() => setStackOpen(true)}><Plus /> New stack</button></div><div className="stack-grid">{filter(view.stacks).map(s => <StackCard key={s.id} stack={s} busy={busy === s.id} accepting={accepting} action={a => stackAction(s, a)} favorite={() => favoriteStack(s)} remove={() => setDeleteTarget({ type: 'stack', item: s })} open={() => { setEditStackID(''); setSelectedStackID(s.id) }} />)}</div></>}
         {page === 'settings' && api && <SettingsPage runtime={runtime} mode={api.mode} api={api} onShutdown={() => setShutdownOpen(true)} />}
       </div>
     </main>
@@ -1608,9 +1559,11 @@ export default function App() {
 	{selectedCommand && api && <CommandDrawer command={selectedCommand} project={data.projects.find(project => project.id === selectedCommand.project_id)} collection={data.collections.find(collection => collection.id === selectedCommand.collection_id)} checks={data.checks.filter(check => check.owner_type === 'command' && check.owner_id === selectedCommand.id)} commands={data.commands} api={api} close={() => { closeCommand(); setCheckReturnID('') }} back={commandParentStack ? { label: commandParentStack.name, action: backToParentStack } : checkBack} action={action => commandAction(selectedCommand, action)} runCheck={checkAction} remove={() => setDeleteTarget({ type: 'command', item: selectedCommand })} busy={busy === selectedCommand.id} globalBusy={busy} accepting={accepting} refresh={reload} />}
 	{selectedStack && api && <StackDrawer stack={selectedStack} stacks={data.stacks} commands={data.commands} project={data.projects.find(project => project.id === selectedStack.project_id)} collection={data.collections.find(collection => collection.id === selectedStack.collection_id)} checks={data.checks.filter(check => check.owner_type === 'stack' && check.owner_id === selectedStack.id)} httpCollections={(data.http_collections ?? []).filter(item => item.stack_id === selectedStack.id)} api={api} close={() => { setSelectedStackID(''); setEditStackID(''); setCheckReturnID('') }} back={checkBack} openMember={id => { const parentID = selectedStack.id; setSelectedStackID(''); setEditStackID(''); openCommand(id, parentID) }} openHTTP={() => { setSelectedStackID(''); setEditStackID(''); setPage('http') }} action={(action, commandIDs, environment) => stackAction(selectedStack, action, commandIDs, environment)} memberAction={(command, action) => commandAction(command, action)} runCheck={checkAction} save={input => { saveStack(selectedStack, input); setEditStackID('') }} remove={() => setDeleteTarget({ type: 'stack', item: selectedStack })} busy={busy === selectedStack.id} globalBusy={busy} accepting={accepting} refresh={reload} initialEditing={editStackID === selectedStack.id} />}
     {promoteRun && api && <PromoteDialog run={promoteRun} projects={data.projects} collections={data.collections} close={() => setPromoteRun(null)} submit={savePromotion} createProject={createProjectForPromotion} createCollection={createCollectionForPromotion} busy={busy === `promote-${promoteRun.id}`} />}
-    {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === selectedProject)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
-	{stackOpen && <StackDialog commands={data.commands} projects={data.projects} collections={data.collections} close={() => setStackOpen(false)} submit={createStack} busy={busy === 'create-stack'} />}
-    {promotionReceipt && <PromotionReceipt result={promotionReceipt} project={data.projects.find(item => item.id === promotionReceipt.command.project_id)} onView={() => { setPage('projects'); setSelectedProject(promotionReceipt.command.project_id ?? data.projects[0]?.id ?? ''); setPromotionReceipt(null) }} close={() => setPromotionReceipt(null)} />}
+    {collectionOpen && <CollectionDialog project={data.projects.find(item => item.id === workspaceID)} close={() => setCollectionOpen(false)} submit={createCollection} busy={busy === 'create-collection'} />}
+	{stackOpen && <StackDialog commands={data.commands} projects={data.projects} collections={data.collections} selectedProject={workspaceID ?? undefined} close={() => setStackOpen(false)} submit={createStack} busy={busy === 'create-stack'} />}
+    {promotionReceipt && <PromotionReceipt result={promotionReceipt} project={data.projects.find(item => item.id === promotionReceipt.command.project_id)} onView={() => { if (promotionReceipt.command.project_id) setWorkspace(promotionReceipt.command.project_id, 'services'); setPromotionReceipt(null) }} close={() => setPromotionReceipt(null)} />}
+    {workspaceCreateOpen && <WorkspaceCreateDialog close={() => setWorkspaceCreateOpen(false)} submit={createWorkspace} busy={busy === 'create-workspace'} />}
+    {workspaceManageOpen && <WorkspaceManageDialog data={data} selectedID={workspaceID} onSelect={id => setWorkspace(id)} onNew={() => { setWorkspaceManageOpen(false); setWorkspaceCreateOpen(true) }} close={() => setWorkspaceManageOpen(false)} />}
 	{shutdownOpen && api && <ShutdownDialog data={data} close={() => setShutdownOpen(false)} confirm={shutdown} busy={busy === 'runtime-shutdown'} mode={api.mode} />}
 	{deleteTarget && <DeleteSavedDialog target={deleteTarget} close={() => setDeleteTarget(null)} confirm={deleteSaved} busy={busy === deleteTarget.item.id} />}
     {parameterRequest && <ParameterDialog request={parameterRequest} close={() => setParameterRequest(null)} />}
