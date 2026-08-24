@@ -8,7 +8,7 @@ tags: [stack, environment, catalog]
 
 # Environments
 
-AgentShell keeps **one stack identity** and injects a named profile at start. `prod` is a column name, not a remote host.
+AgentShell keeps **one stack identity** and injects a named profile at start. `prod` is a profile name, not a remote host.
 
 Related: [stack environments design](superpowers/specs/2026-08-21-stack-environments-design.md), [HTTP collections](http-collections.md).
 
@@ -16,9 +16,9 @@ Related: [stack environments design](superpowers/specs/2026-08-21-stack-environm
 
 One workspace document (`GET`/`PUT /api/environments`, MCP `list_environments` / `update_environments`):
 
-- `names` — columns such as `local`, `prod`, `stage`, and `test`. `custom` is reserved.
+- `names` — profiles such as `local`, `prod`, `stage`, and `test`. `custom` is reserved.
 - `keys` — variable names defined once.
-- `values` — key → name → string. A missing cell does not set the key; `""` sets empty.
+- `values` — key → name → string. A missing value does not set the key; `""` sets empty.
 
 Secrets are not stored here. They remain start parameters on the launcher.
 
@@ -46,4 +46,4 @@ Solo `start_command` does not use the library. MCP `start_stack` / `restart_stac
 
 ## Dashboard
 
-Settings edits the library as one card per key: each profile (`local` / `prod` / `stage` / `test`, plus custom names) is a labeled field on that card, not a spreadsheet of always-on cells. Seeded profile names cannot be removed. Extra profiles such as `test2` have a trash control on the profile chip and on each key field; deleting a name remaps stacks that used it. Keys also have a trash control. Values save on blur. Stack cards show a badge. The stack drawer **header** selects the named environment; this is a variable profile injected at start, not a cloned stack. Running members restart after confirm. Overview extras override keys for that profile. Overview member rows start with logs closed. Click a row to open or close its live log tail; the Logs tab remains the full inspector. Orchestration edit can pin a member.
+Settings edits one named profile at a time. The profile dropdown sits on the right of the Environments header; selecting a name shows that profile’s values as a key list, not every profile on the same row. Seeded names (`local`, `prod`, `stage`, `test`) cannot be removed. Extra names have a trash control in the dropdown; deleting a name remaps stacks that used it. Keys also have a trash control. Values save on blur. Stack cards show a badge. The stack drawer **header** selects the named environment from the same dropdown; this is a variable profile injected at start, not a cloned stack. Running members restart after confirm. Overview extras override keys for that profile. Overview member rows start with logs closed. Click a row to open or close its live log tail; the Logs tab remains the full inspector. Orchestration edit can pin a member.

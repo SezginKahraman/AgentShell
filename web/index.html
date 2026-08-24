@@ -5,13 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f6f8fb" />
     <link rel="icon" type="image/svg+xml" href="/agent_shell_logo.svg" />
-    <link rel="icon" type="image/png" sizes="512x512" href="/agent_shell_logo.png" />
-    <link rel="apple-touch-icon" href="/agent_shell_logo.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/agent_shell_logo-32.png" />
+    <link rel="apple-touch-icon" href="/agent_shell_logo-180.png" />
     <title>AgentShell</title>
     <script>
       try {
         const savedTheme = localStorage.getItem('agentshell.theme')
-        document.documentElement.dataset.theme = savedTheme === 'dark' ? 'dark' : 'light'
+        const theme = savedTheme === 'dark' ? 'dark' : 'light'
+        document.documentElement.dataset.theme = theme
+        const color = document.querySelector('meta[name="theme-color"]')
+        if (color) color.setAttribute('content', theme === 'dark' ? '#090a09' : '#f6f8fb')
       } catch (_) {
         document.documentElement.dataset.theme = 'light'
       }

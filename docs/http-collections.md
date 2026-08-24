@@ -22,7 +22,7 @@ v1 does not dual-write requests and checks.
 
 ## Collection
 
-- Optional `stack_id` binds the collection to one stack. Send uses that stack’s `environment` plus stack extras. The HTTP page can open the stack. The stack drawer has an **HTTP** tab for bound requests: Send and last result. This is not Checks & Tests.
+- Optional `stack_id` binds the collection to one stack. Send uses that stack’s `environment` plus stack extras. The HTTP page can open the stack. The stack drawer has an **HTTP** tab for bound requests: Send, interpolated curl for the selected request, and last result. Copy actions cover that curl, the full last response, and the response body. This is not Checks & Tests.
 - Unbound collections use `environment` if set, otherwise `local` (or the first library name).
 - Deleting a stack clears the bind; the collection remains.
 
@@ -34,7 +34,7 @@ Method, URL, headers, body, timeout. One request can keep several named **body t
 
 The HTTP editor and the request’s curl stay in sync. Paste a different `curl` command to add a new request (`POST /api/http-collections/{id}/import`, MCP `import_http_request`). If the origin matches the bound environment’s `API_URL` (or another library/stack extra value), it is rewritten to `{{KEY}}`. `curl -u` is rejected; use a header placeholder instead.
 
-`POST /api/http-requests/{id}/send` interpolates, sends, and stores `last_result` on the request (status, headers, body). That is not a process Run. The dashboard shows that result in a compact Logs-style terminal (traffic lights, status chips, headers, JSON body). While a send is in flight the pane replaces the previous body with a waiting state. JSON bodies are pretty-printed when parseable.
+`POST /api/http-requests/{id}/send` interpolates, sends, and stores `last_result` on the request (status, headers, body). That is not a process Run. The dashboard shows that result in a compact Logs-style terminal (traffic lights, status chips, headers, JSON body). The pane also shows the interpolated request as curl; multiline curl starts collapsed and expands on click. Copy actions cover that curl, the full response, and the response body (a left-aligned Copy body control, so a wide payload does not hide it). While a send is in flight the pane replaces the previous body with a waiting state. JSON bodies are pretty-printed when parseable.
 
 ## MCP
 

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, Copy, Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
+import { curlCanCollapse, curlFromHTTPRequest, curlPreviewLine } from './httpCurl'
 import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
 import { httpCollectionVars, interpolateTemplate } from './httpInterpolate'
 import { TemplateField } from './httpTemplate'
@@ -45,7 +46,22 @@ function responseStatusTone(status?: number, error?: string) {
   return 'ok'
 }
 
-function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, headerTestId, actions }: {
+function CurlStrip({ curl, testId, copied, onCopy }: { curl: string; testId: string; copied: boolean; onCopy: () => void }) {
+  const collapsible = curlCanCollapse(curl)
+  const [open, setOpen] = useState(false)
+  useEffect(() => { setOpen(false) }, [curl])
+  const shown = collapsible && !open ? curlPreviewLine(curl) : curl
+  return <div className={`http-response-curl${collapsible && !open ? ' collapsed' : ''}`}>
+    <span className="http-response-curl-prompt" aria-hidden="true">$</span>
+    {collapsible ? <button type="button" className="http-response-curl-toggle" data-testid={`${testId}-curl`} aria-expanded={open} aria-label={open ? 'Collapse curl' : 'Expand curl'} onClick={() => setOpen(current => !current)}>
+      <pre>{shown}</pre>
+      <ChevronDown aria-hidden="true" />
+    </button> : <pre data-testid={`${testId}-curl`}>{curl}</pre>}
+    <button type="button" className="button small" data-testid={`${testId}-copy-request`} onClick={onCopy}>{copied ? 'Copied' : 'Copy request'}</button>
+  </div>
+}
+
+function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, headerTestId, actions, curl }: {
   result?: HTTPResult
   sending?: boolean
   pendingLabel?: string
@@ -53,16 +69,27 @@ function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, header
   empty: string
   headerTestId?: string
   actions?: ReactNode
+  curl?: string
 }) {
   const headers = Object.entries(result?.headers ?? {})
   const body = result?.body ? formatHTTPBody(result.body) : ''
   const tone = responseStatusTone(result?.status, result?.error)
-  const [copied, setCopied] = useState(false)
-  useEffect(() => { setCopied(false) }, [result])
-  const dump = result ? [result.error, ...headers.map(([key, value]) => `${key}: ${value}`), body].filter(Boolean).join('\n\n') : ''
+  const [copied, setCopied] = useState<'request' | 'response' | 'body' | ''>('')
+  useEffect(() => { setCopied('') }, [result, curl])
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(''), 1400)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+  const dump = result ? [result.error, result.status ? `HTTP ${result.status}` : '', ...headers.map(([key, value]) => `${key}: ${value}`), body].filter(Boolean).join('\n\n') : ''
   const summary = result ? `${result.method ?? ''} ${result.url ?? ''}`.trim() : ''
+  const copy = (kind: 'request' | 'response' | 'body', text: string) => {
+    if (!text) return
+    void navigator.clipboard?.writeText(text).then(() => setCopied(kind)).catch(() => undefined)
+  }
 
   return <section className={`http-response${sending ? ' sending' : ''}`} data-testid={testId} aria-busy={sending || undefined}>
+    {curl ? <CurlStrip curl={curl} testId={testId} copied={copied === 'request'} onCopy={() => copy('request', curl)} /> : null}
     <header className="http-response-chrome">
       <span className="terminal-lights" aria-hidden="true"><i /><i /><i /></span>
       <div className="http-response-title">
@@ -75,7 +102,7 @@ function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, header
         {result.duration_ms ? <span>{result.duration_ms}ms</span> : null}
       </div> : null}
       <div className="http-response-actions">
-        {dump && !sending ? <button type="button" className="button small" data-testid={`${testId}-copy`} onClick={() => { void navigator.clipboard?.writeText(dump).then(() => setCopied(true)) }}>{copied ? 'Copied' : 'Copy'}</button> : null}
+        {dump && !sending ? <button type="button" className="button small" data-testid={`${testId}-copy-response`} onClick={() => copy('response', dump)}>{copied === 'response' ? 'Copied' : 'Copy response'}</button> : null}
         {actions}
       </div>
     </header>
@@ -87,7 +114,12 @@ function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, header
       </div> : !result ? <p className="http-response-idle">{empty}</p> : <>
         {result.error && <pre className="http-response-error">{result.error}</pre>}
         {!!headers.length && <dl className="http-response-headers" data-testid={headerTestId}>{headers.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
-        {body && <pre className="http-response-body">{body}</pre>}
+        {body && <div className="http-response-payload">
+          <div className="http-response-payload-head">
+            <button type="button" className="http-response-copy-body" data-testid={`${testId}-copy-body`} aria-label={copied === 'body' ? 'Copied response body' : 'Copy response body'} onClick={() => copy('body', body)}><Copy />{copied === 'body' ? 'Copied' : 'Copy body'}</button>
+          </div>
+          <pre className="http-response-body">{body}</pre>
+        </div>}
         {result.truncated && <p className="http-response-idle">Body truncated</p>}
       </>}
     </div>
@@ -163,6 +195,19 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     }
     return { vars, preview }
   }, [collection, draft.url, httpEnv, library, stack])
+
+  const paneCurl = useMemo(() => {
+    let headers: Record<string, string> = {}
+    try { headers = JSON.parse(draft.headers || '{}') as Record<string, string> } catch { /* still show method and URL */ }
+    const timeout = Number(draft.timeout)
+    return curlFromHTTPRequest({
+      method: draft.method,
+      url: draft.url,
+      headers,
+      body: draft.body,
+      timeout_ms: Number.isFinite(timeout) ? timeout : undefined,
+    }, resolved.vars, request?.last_result)
+  }, [draft.body, draft.headers, draft.method, draft.timeout, draft.url, request?.last_result, resolved.vars])
 
   useEffect(() => {
     if (curlFocusedRef.current) return
@@ -486,25 +531,33 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
               bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, body } : item),
             }))} /></label>
           </div>
-          <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} sending={sending} pendingLabel={`${draft.method} ${resolved.preview || draft.url}`.trim()} empty="Send to capture the last result here. This is not a process Run." />
+          <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} sending={sending} pendingLabel={`${draft.method} ${resolved.preview || draft.url}`.trim()} empty="Send to capture the last result here. This is not a process Run." curl={paneCurl} />
         </div> : <div className="http-empty-main"><strong>No requests</strong><span>Add a request or import curl.</span></div>}
       </div>
     </div>}
   </section>
 }
 
-export function StackHTTPPanel({ collections, api, accepting, refresh, openHTTP }: {
+export function StackHTTPPanel({ collections, stack, library, environment, api, accepting, refresh, openHTTP }: {
   collections: HTTPCollection[]
+  stack: Stack
+  library: EnvironmentLibrary
+  environment: string
   api: AgentShellApi
   accepting: boolean
   refresh: () => Promise<void>
   openHTTP: () => void
 }) {
-  const requests = collections.flatMap(item => (item.requests ?? []).map(request => ({ ...request, collectionName: item.name })))
+  const requests = collections.flatMap(item => (item.requests ?? []).map(request => ({ ...request, collectionName: item.name, collection: item })))
   const [selectedID, setSelectedID] = useState(requests[0]?.id ?? '')
   const [sending, setSending] = useState('')
   const [error, setError] = useState('')
   const selected = requests.find(item => item.id === selectedID) ?? requests[0]
+  const selectedCurl = useMemo(() => {
+    if (!selected) return ''
+    const { vars } = httpCollectionVars(library, { ...selected.collection, environment }, { ...stack, environment })
+    return curlFromHTTPRequest(selected, vars, selected.last_result)
+  }, [environment, library, selected, stack])
 
   const send = async (id: string) => {
     if (!accepting) return
@@ -540,6 +593,7 @@ export function StackHTTPPanel({ collections, api, accepting, refresh, openHTTP 
         sending={sending === selected.id}
         pendingLabel={`${selected.method ?? 'GET'} ${selected.url}`}
         empty="Send to capture the last result here."
+        curl={selectedCurl}
         actions={<button type="button" className="button primary small" data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}>{sending === selected.id ? <Loader2 className="http-spin" /> : <Play />} {sending === selected.id ? 'Sending…' : 'Send'}</button>}
       />}
     </>}
