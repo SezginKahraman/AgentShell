@@ -561,6 +561,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .http-response-copy-body svg { height: 11px; width: 11px; }
 .http-response-copy-body:hover, .http-response-copy-body:focus-visible { border-color: var(--green-border); color: var(--terminal-text); }
 .http-response-copy-body:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.http-response-copy-body:disabled { cursor: default; opacity: .45; }
+.http-response-copy-body:disabled:hover { border-color: var(--terminal-line); color: var(--terminal-muted); }
 .http-response-idle { color: var(--terminal-muted); font: 11px/1.5 'DM Mono', monospace; margin: 0; }
 .http-response pre { font: 11px/1.55 'DM Mono', monospace; margin: 0; overflow: visible; overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-word; }
 .http-response-body { color: var(--terminal-text); text-shadow: 0 0 10px var(--green-glow); }

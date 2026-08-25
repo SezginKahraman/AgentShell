@@ -72,6 +72,12 @@ func TestMCPServerPublishesAllToolsAndForwardsRun(t *testing.T) {
 		if !strings.Contains(tool.Description, "instead of a native terminal or shell") {
 			t.Errorf("tool %s does not communicate AgentShell intent", tool.Name)
 		}
+		if tool.Name == "save_http_request" && (!strings.Contains(tool.Description, "body_templates") || !strings.Contains(tool.Description, "update_http_request")) {
+			t.Errorf("tool %s should tell agents to add a named body template with update_http_request instead of duplicating a request", tool.Name)
+		}
+		if tool.Name == "update_http_request" && (!strings.Contains(tool.Description, "body_templates") || !strings.Contains(tool.Description, "save_http_request")) {
+			t.Errorf("tool %s should tell agents to add a named body template instead of save_http_request a duplicate", tool.Name)
+		}
 	}
 	if len(names) != 52 {
 		t.Fatalf("published %d tools: %v", len(names), names)

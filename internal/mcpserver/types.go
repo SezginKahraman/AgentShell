@@ -1506,7 +1506,7 @@ type SaveHTTPRequestInput struct {
 	URL           string                    `json:"url" jsonschema:"URL template; may include {{KEY}} from the workspace environment library"`
 	Headers       map[string]string         `json:"headers,omitempty" jsonschema:"Non-sensitive headers; values may include {{KEY}}"`
 	Body          string                    `json:"body,omitempty" jsonschema:"Optional non-sensitive body; may include {{KEY}}. This is the active template text used by send and curl"`
-	BodyTemplates []domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Named saved bodies for this request; send uses the active one"`
+	BodyTemplates []domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Named saved bodies for this request. Prefer another template here instead of a second request when only the payload differs (same URL and method, different hotel id)"`
 	ActiveBodyID  string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active; Body is kept in sync with that template"`
 	TimeoutMS     int                       `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms; default 10000, max 120000"`
 	SortOrder     int                       `json:"sort_order,omitempty" jsonschema:"Display order inside the collection"`
@@ -1538,9 +1538,9 @@ type UpdateHTTPRequestInput struct {
 	Method        *string                    `json:"method,omitempty" jsonschema:"New HTTP method"`
 	URL           *string                    `json:"url,omitempty" jsonschema:"New URL template"`
 	Headers       *map[string]string         `json:"headers,omitempty" jsonschema:"Replacement header map"`
-	Body          *string                    `json:"body,omitempty" jsonschema:"New active body"`
-	BodyTemplates *[]domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Replacement named body templates"`
-	ActiveBodyID  *string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active"`
+	Body          *string                    `json:"body,omitempty" jsonschema:"New active body; keep in sync with the active template"`
+	BodyTemplates *[]domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Replacement named body templates. When adding a payload-only variant, include every existing template plus the new one"`
+	ActiveBodyID  *string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active; send and curl use this template"`
 	TimeoutMS     *int                       `json:"timeout_ms,omitempty" jsonschema:"New timeout in ms"`
 	SortOrder     *int                       `json:"sort_order,omitempty" jsonschema:"New display order"`
 }

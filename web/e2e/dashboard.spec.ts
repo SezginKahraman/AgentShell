@@ -571,7 +571,11 @@ test('main sidebar can collapse, expand on hover, and pin open', async ({ page }
 
 test('HTTP collections send interpolated requests', async ({ page }) => {
   await page.goto('/')
-  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'HTTP', exact: true }).click()
+  const nav = page.getByRole('navigation', { name: 'Main navigation' })
+  const overview = nav.locator('.nav-group').filter({ hasText: 'Overview' })
+  await expect(overview.locator('button span')).toHaveText(['Dashboard', 'HTTP', 'Active Runs', 'Ports', 'Logs', 'History'])
+  await expect(nav.locator('.nav-group').filter({ hasText: 'Library' }).getByRole('button', { name: 'HTTP', exact: true })).toHaveCount(0)
+  await nav.getByRole('button', { name: 'HTTP', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'HTTP collections' })).toBeVisible()
   await expect(page.getByTestId('http-page')).toBeVisible()
   await expect(page.getByTestId('http-collection-environment')).toHaveValue('local')
@@ -593,14 +597,20 @@ test('HTTP collections send interpolated requests', async ({ page }) => {
   await page.getByTestId('http-add-body-template').click()
   await page.getByLabel('Request body').fill('{"city":"IST"}')
   await expect(page.getByTestId('http-save-state')).toHaveText('Unsaved')
+  await page.getByTestId('http-beautify-body').click()
+  await expect(page.getByLabel('Request body')).toHaveValue('{\n  "city": "IST"\n}')
   await page.getByTestId('http-save-body').click()
   await expect(page.getByTestId('http-save-state')).toHaveText('Saved')
   await page.getByTestId('http-body-template').selectOption({ label: 'Default' })
+  await expect(page.getByTestId('http-save-state')).toHaveText('Saved')
   await expect(page.getByLabel('Request body')).toHaveValue('')
   await page.getByTestId('http-body-template').selectOption({ label: 'Template 2' })
-  await expect(page.getByLabel('Request body')).toHaveValue('{"city":"IST"}')
+  await expect(page.getByTestId('http-save-state')).toHaveText('Saved')
+  await expect(page.getByLabel('Request body')).toHaveValue('{\n  "city": "IST"\n}')
   await page.getByTestId('send-http-request').click()
   await expect(page.getByTestId('http-response')).toContainText('"status": "ok"')
+  await expect(page.getByTestId('http-response-beautify')).toBeVisible()
+  await expect(page.getByTestId('http-response-beautify')).toBeDisabled()
   await expect(page.getByTestId('http-response-headers')).toContainText('Content-Type')
   await expect(page.getByTestId('http-response-curl')).toHaveAttribute('aria-expanded', 'false')
   await expect(page.getByTestId('http-response-curl')).not.toContainText('--max-time')
@@ -634,6 +644,7 @@ test('HTTP collections send interpolated requests', async ({ page }) => {
   await expect(page.getByTestId('stack-http-response-curl')).toHaveAttribute('aria-expanded', 'false')
   await page.getByTestId('stack-send-http-http-health').click()
   await expect(page.getByTestId('stack-http-response')).toContainText('"status": "ok"')
+  await expect(page.getByTestId('stack-http-response-beautify')).toBeVisible()
   await page.getByTestId('stack-http-response-copy-request').click()
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(/^curl -X GET 'http:\/\/127\.0\.0\.1:8080\//)
   await page.getByTestId('stack-http-response-curl').click()
@@ -646,4 +657,56 @@ test('HTTP collections send interpolated requests', async ({ page }) => {
   const body = await page.evaluate(() => navigator.clipboard.readText())
   expect(body).toContain('"status": "ok"')
   expect(body).not.toContain('Content-Type')
+})
+
+test('HTTP request delete asks for confirmation', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'HTTP', exact: true }).click()
+  await expect(page.getByTestId('http-page')).toBeVisible()
+  await expect(page.getByTestId('http-request-name')).toHaveValue('Health')
+
+  page.once('dialog', async dialog => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toContain('Health')
+    await dialog.dismiss()
+  })
+  await page.getByTestId('delete-http-request').click()
+  await expect(page.getByTestId('http-request-name')).toHaveValue('Health')
+
+  page.once('dialog', async dialog => {
+    expect(dialog.type()).toBe('confirm')
+    await dialog.accept()
+  })
+  await page.getByTestId('delete-http-request').click()
+  await expect(page.getByTestId('http-request-http-health')).toHaveCount(0)
+  await expect(page.getByTestId('delete-http-request')).toHaveCount(0)
+})
+
+test('HTTP collection delete requires typing the collection name', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'HTTP', exact: true }).click()
+  await expect(page.getByTestId('http-page')).toBeVisible()
+  await expect(page.getByTestId('http-collection-http-hotel')).toBeVisible()
+
+  page.once('dialog', async dialog => {
+    expect(dialog.type()).toBe('prompt')
+    expect(dialog.message()).toContain('Hotel Meta API')
+    await dialog.accept('wrong name')
+  })
+  await page.getByTestId('delete-http-collection').click()
+  await expect(page.getByTestId('http-collection-http-hotel')).toBeVisible()
+
+  page.once('dialog', async dialog => {
+    expect(dialog.type()).toBe('prompt')
+    await dialog.dismiss()
+  })
+  await page.getByTestId('delete-http-collection').click()
+  await expect(page.getByTestId('http-collection-http-hotel')).toBeVisible()
+
+  page.once('dialog', async dialog => {
+    expect(dialog.type()).toBe('prompt')
+    await dialog.accept('Hotel Meta API')
+  })
+  await page.getByTestId('delete-http-collection').click()
+  await expect(page.getByTestId('http-collection-http-hotel')).toHaveCount(0)
 })

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, Copy, Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
+import { beautifyHTTPBody, formatHTTPBody } from './httpBeautify'
 import { curlCanCollapse, curlFromHTTPRequest, curlPreviewLine } from './httpCurl'
+import { collectionDeletePrompt, confirmedHTTPCollectionDelete, requestDeleteWarning } from './httpDeleteConfirm'
 import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
 import { httpCollectionVars, interpolateTemplate } from './httpInterpolate'
 import { TemplateField } from './httpTemplate'
@@ -29,15 +31,7 @@ function writeCollapsedPanels(next: { collections: boolean; requests: boolean })
   try { localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(next)) } catch { /* ignore quota / private mode */ }
 }
 
-export function formatHTTPBody(body: string) {
-  const trimmed = body.trim()
-  if (!trimmed) return body
-  try {
-    return JSON.stringify(JSON.parse(trimmed), null, 2)
-  } catch {
-    return body
-  }
-}
+export { formatHTTPBody }
 
 function responseStatusTone(status?: number, error?: string) {
   if (error || !status) return 'error'
@@ -72,10 +66,14 @@ function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, header
   curl?: string
 }) {
   const headers = Object.entries(result?.headers ?? {})
-  const body = result?.body ? formatHTTPBody(result.body) : ''
+  const rawBody = result?.body ?? ''
+  const [beautified, setBeautified] = useState(false)
+  const formatted = rawBody ? formatHTTPBody(rawBody) : ''
+  const body = rawBody ? (beautified ? beautifyHTTPBody(rawBody) : formatted) : ''
+  const canBeautify = !!rawBody && beautifyHTTPBody(rawBody) !== body
   const tone = responseStatusTone(result?.status, result?.error)
   const [copied, setCopied] = useState<'request' | 'response' | 'body' | ''>('')
-  useEffect(() => { setCopied('') }, [result, curl])
+  useEffect(() => { setCopied(''); setBeautified(false) }, [result, curl])
   useEffect(() => {
     if (!copied) return
     const timer = window.setTimeout(() => setCopied(''), 1400)
@@ -117,6 +115,7 @@ function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, header
         {body && <div className="http-response-payload">
           <div className="http-response-payload-head">
             <button type="button" className="http-response-copy-body" data-testid={`${testId}-copy-body`} aria-label={copied === 'body' ? 'Copied response body' : 'Copy response body'} onClick={() => copy('body', body)}><Copy />{copied === 'body' ? 'Copied' : 'Copy body'}</button>
+            <button type="button" className="http-response-copy-body" data-testid={`${testId}-beautify`} disabled={!canBeautify} onClick={() => setBeautified(true)}>Beautify</button>
           </div>
           <pre className="http-response-body">{body}</pre>
         </div>}
@@ -382,6 +381,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const removeCollection = async () => {
     if (!collection) return
+    const typed = window.prompt(collectionDeletePrompt(collection.name))
+    if (!confirmedHTTPCollectionDelete(collection.name, typed)) return
     try {
       await api.deleteHTTPCollection(collection.id)
       setSelectedCollectionID('')
@@ -394,6 +395,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const removeRequest = async () => {
     if (!request) return
+    if (!window.confirm(requestDeleteWarning(request.name))) return
     try {
       await api.deleteHTTPRequest(request.id)
       setSelectedRequestID('')
@@ -498,7 +500,9 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <div className="http-body-toolbar">
               <label>Saved body
                 <select aria-label="Saved body" data-testid="http-body-template" value={draft.activeBodyID} onChange={event => {
-                  setDraft(switchBodyTemplate(draft, event.target.value))
+                  const next = switchBodyTemplate(draft, event.target.value)
+                  setDraft(next)
+                  if (!dirty) void persistDraft(request, next)
                 }}>
                   {draft.bodyTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
@@ -513,6 +517,10 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
               </label>
               <div className="http-body-actions">
                 <button type="button" className="button small primary" data-testid="http-save-body" disabled={!dirty || saving} onClick={() => void persistDraft()}>Save</button>
+                <button type="button" className="button small" data-testid="http-beautify-body" disabled={beautifyHTTPBody(draft.body) === draft.body} onClick={() => setDraft(current => {
+                  const body = beautifyHTTPBody(current.body)
+                  return { ...current, body, bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, body } : item) }
+                })}>Beautify</button>
                 <button type="button" className="button small" data-testid="http-add-body-template" disabled={draft.bodyTemplates.length >= MAX_BODY_TEMPLATES} onClick={() => {
                   setDraft(addBodyTemplate(draft, newBodyTemplateID(), `Template ${draft.bodyTemplates.length + 1}`, draft.body))
                 }}>New</button>
@@ -580,7 +588,7 @@ export function StackHTTPPanel({ collections, stack, library, environment, api, 
       <button type="button" className="button small" data-testid="stack-open-http" onClick={openHTTP}>Open HTTP</button>
     </div>
     {error && <div className="http-error" role="alert">{error}</div>}
-    {!requests.length ? <p className="http-empty">No HTTP collections bound to this stack. Bind one from Library → HTTP.</p> : <>
+    {!requests.length ? <p className="http-empty">No HTTP collections bound to this stack. Bind one from HTTP.</p> : <>
       <div className="stack-http-list">
         {requests.map(item => <button key={item.id} type="button" className={item.id === selected?.id ? 'active' : ''} data-testid={`stack-http-request-${item.id}`} onClick={() => setSelectedID(item.id)}>
           <em>{item.method ?? 'GET'}</em>

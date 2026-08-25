@@ -197,8 +197,8 @@ function writeSidebarPinned(pinned: boolean) {
 
 function Sidebar({ page, setPage, open, close, runtime, mode, pinned, onTogglePin, data, workspaceID, onWorkspace, onNewWorkspace, onManageWorkspaces }: { page: Page; setPage: (p: Page) => void; open: boolean; close: () => void; runtime?: RuntimeInfo; mode: AgentShellApi['mode']; pinned: boolean; onTogglePin: () => void; data: Snapshot; workspaceID: string | null; onWorkspace: (id: string | null) => void; onNewWorkspace: () => void; onManageWorkspaces: () => void }) {
   const groups: { label: string; links: [Page, string, React.ReactNode][] }[] = [
-    { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['logs', 'Logs', <ScrollText />], ['history', 'History', <History />]] },
-    { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['tests', 'Tests', <TestTube2 />], ['http', 'HTTP', <Globe2 />], ['stacks', 'Stacks', <Boxes />]] },
+    { label: 'Overview', links: [['dashboard', 'Dashboard', <LayoutDashboard />], ['http', 'HTTP', <Globe2 />], ['runs', 'Active Runs', <Activity />], ['ports', 'Ports', <Network />], ['logs', 'Logs', <ScrollText />], ['history', 'History', <History />]] },
+    { label: 'Library', links: [['services', 'Services', <Server />], ['tasks', 'Tasks', <ListChecks />], ['tests', 'Tests', <TestTube2 />], ['stacks', 'Stacks', <Boxes />]] },
   ]
   const [hovered, setHovered] = useState(false)
   const [holdCollapsed, setHoldCollapsed] = useState(false)

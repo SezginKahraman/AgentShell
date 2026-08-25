@@ -50,7 +50,7 @@ Catalog **collection** (existing) = folder for commands and stacks.
 - `url` / headers / body may contain `{{KEY}}` (optional spaces). `KEY` must be a process env name.
 - `last_result` — last send only: resolved URL, status, duration, truncated body (256 KiB cap), error, environment name used. Not a Run.
 
-Deleting a collection deletes its requests.
+Deleting a collection deletes its requests. The dashboard requires typing the collection name before that call; deleting a request uses a confirm dialog. API and MCP skip those prompts.
 
 ## Interpolation and send
 
@@ -65,11 +65,11 @@ Send one request. Follow at most five redirects, each hop still `http`/`https` w
 
 ## Surfaces
 
-**Dashboard.** Library → HTTP. Left: collections. Bound collections show the stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send, interpolated curl, last result, and copy actions for request/response/body). Selecting a collection lists requests. The editor is method + URL + headers + named body templates + Send. The response pane shows the last result, with collapsed multiline curl and a left-aligned body copy control. Unbound collections still interpolate from the workspace library.
+**Dashboard.** Overview → HTTP. Left: collections. Bound collections show the stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send, interpolated curl, last result, and copy actions for request/response/body). Selecting a collection lists requests. The editor is method + URL + headers + named body templates + Send. The response pane shows the last result, with collapsed multiline curl, a left-aligned body copy control, and Beautify for JSON/XML bodies. The request editor has the same Beautify control next to Save. Unbound collections still interpolate from the workspace library.
 
 **HTTP.** `GET/POST /api/http-collections`, `GET/PUT/DELETE /api/http-collections/{id}` (GET includes nested requests), `POST /api/http-collections/{id}/import` (curl). `POST /api/http-requests`, `GET/PUT/DELETE /api/http-requests/{id}`, `POST /api/http-requests/{id}/send`. Snapshot includes `http_collections`.
 
-**MCP.** `list_http_collections`, `save_http_collection`, `update_http_collection`, `delete_http_collection`, `save_http_request`, `update_http_request`, `delete_http_request`, `import_http_request`, `run_http_request`. Tool text: do not confuse with catalog collections or checks; do not clone a stack per profile; interpolate from the library (and stack extras when bound); paste curl via `import_http_request`.
+**MCP.** `list_http_collections`, `save_http_collection`, `update_http_collection`, `delete_http_collection`, `save_http_request`, `update_http_request`, `delete_http_request`, `import_http_request`, `run_http_request`. Tool text: do not confuse with catalog collections or checks; do not clone a stack per profile; interpolate from the library (and stack extras when bound); paste curl via `import_http_request`; when only the body differs, add a named `body_templates` entry with `update_http_request` instead of a second request.
 
 ## Errors
 

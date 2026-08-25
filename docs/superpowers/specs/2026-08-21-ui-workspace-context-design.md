@@ -14,7 +14,7 @@ Related: [how to switch workspace](../../how-to/switch-workspace.md).
 
 ## Why not a Projects page
 
-The two-pane Projects catalog mixed three jobs: picking a root folder, browsing launchers, and filtering collections. Users lost track of which Project they were in, then wondered why another team’s services were missing. Making workspace a permanent header control keeps the filter visible. Catalog pages (Services, Tasks, Tests, Stacks, HTTP) stay in the sidebar; collections remain an in-page filter on those lists.
+The two-pane Projects catalog mixed three jobs: picking a root folder, browsing launchers, and filtering collections. Users lost track of which Project they were in, then wondered why another team’s services were missing. Making workspace a permanent header control keeps the filter visible. Catalog pages (Services, Tasks, Tests, Stacks) stay in the sidebar Library; HTTP sits in Overview under Dashboard. Collections remain an in-page filter on those lists.
 
 ## URL
 
