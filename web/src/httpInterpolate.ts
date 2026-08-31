@@ -21,6 +21,18 @@ export const splitTemplate = (text: string, vars: Record<string, string> = {}): 
   return parts
 }
 
+export const REDACTED_SECRET = '***'
+
+export const maskSecretVars = (vars: Record<string, string>, secretKeys?: string[]): Record<string, string> => {
+  if (!secretKeys?.length) return vars
+  const secrets = new Set(secretKeys)
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(vars)) {
+    out[key] = secrets.has(key) && value ? REDACTED_SECRET : value
+  }
+  return out
+}
+
 export const interpolateTemplate = (template: string, vars: Record<string, string>): string => {
   const missing: string[] = []
   const seen = new Set<string>()

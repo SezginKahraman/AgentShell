@@ -22,7 +22,7 @@ A first-class request catalog: named HTTP collections, each a flat list of indep
 - Per-request stack binding.
 - Creating a process `Run` for a send (history stays on the request’s last result).
 - Putting HTTP collections in `apply_catalog`.
-- Storing secrets in URLs, headers, bodies, or the environment library.
+- Storing raw secrets in URLs, headers, or bodies. Library keys may be marked secret; see [environment secret keys](2026-08-31-environment-secret-keys-design.md).
 
 ## Concepts
 

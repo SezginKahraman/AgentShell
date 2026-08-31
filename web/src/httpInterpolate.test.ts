@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { httpCollectionVars, interpolateTemplate, splitTemplate } from './httpInterpolate'
+import { httpCollectionVars, interpolateTemplate, maskSecretVars, splitTemplate } from './httpInterpolate'
 
 describe('httpInterpolate', () => {
   it('replaces placeholders and reports missing keys', () => {
@@ -15,6 +15,14 @@ describe('httpInterpolate', () => {
     )
     expect(name).toBe('prod')
     expect(vars.API_URL).toBe('https://stack')
+  })
+
+  it('masks secret vars for curl and preview', () => {
+    expect(maskSecretVars({ API_URL: 'http://127.0.0.1', GOOGLE_TOKEN: 'tok-live' }, ['GOOGLE_TOKEN'])).toEqual({
+      API_URL: 'http://127.0.0.1',
+      GOOGLE_TOKEN: '***',
+    })
+    expect(maskSecretVars({ API_URL: 'http://127.0.0.1' }, [])).toEqual({ API_URL: 'http://127.0.0.1' })
   })
 
   it('splits {{placeholders}} for highlighting', () => {

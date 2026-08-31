@@ -152,6 +152,70 @@ func TestNormalizeStackEnvironmentAndExtras(t *testing.T) {
 	}
 }
 
+func TestNormalizeEnvironmentLibraryKeepsSecretKeysThatExist(t *testing.T) {
+	got, err := NormalizeEnvironmentLibrary(EnvironmentLibrary{
+		Names:      []string{"local"},
+		Keys:       []string{"API_URL", "GOOGLE_TOKEN"},
+		SecretKeys: []string{"GOOGLE_TOKEN", "GONE", " GOOGLE_TOKEN "},
+		Values:     map[string]map[string]string{"GOOGLE_TOKEN": {"local": "tok-live"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SecretKeys) != 1 || got.SecretKeys[0] != "GOOGLE_TOKEN" {
+		t.Fatalf("secret_keys=%v", got.SecretKeys)
+	}
+}
+
+func TestRedactEnvironmentLibraryMasksSecretCells(t *testing.T) {
+	lib := EnvironmentLibrary{
+		Names:      []string{"local", "prod"},
+		Keys:       []string{"API_URL", "GOOGLE_TOKEN"},
+		SecretKeys: []string{"GOOGLE_TOKEN"},
+		Values: map[string]map[string]string{
+			"API_URL":      {"local": "http://127.0.0.1"},
+			"GOOGLE_TOKEN": {"local": "tok-live", "prod": "tok-prod"},
+		},
+	}
+	got := RedactEnvironmentLibrary(lib)
+	if got.Values["GOOGLE_TOKEN"]["local"] != RedactedSecret || got.Values["GOOGLE_TOKEN"]["prod"] != RedactedSecret {
+		t.Fatalf("secret cells=%v", got.Values["GOOGLE_TOKEN"])
+	}
+	if got.Values["API_URL"]["local"] != "http://127.0.0.1" {
+		t.Fatalf("public cell=%v", got.Values["API_URL"])
+	}
+	if lib.Values["GOOGLE_TOKEN"]["local"] != "tok-live" {
+		t.Fatal("redact must not mutate the stored library")
+	}
+}
+
+func TestRestoreRedactedSecretsKeepsStoredCells(t *testing.T) {
+	stored := EnvironmentLibrary{
+		Names:      []string{"local"},
+		Keys:       []string{"GOOGLE_TOKEN"},
+		SecretKeys: []string{"GOOGLE_TOKEN"},
+		Values:     map[string]map[string]string{"GOOGLE_TOKEN": {"local": "tok-live"}},
+	}
+	incoming := EnvironmentLibrary{
+		Names:      []string{"local"},
+		Keys:       []string{"GOOGLE_TOKEN"},
+		SecretKeys: []string{"GOOGLE_TOKEN"},
+		Values:     map[string]map[string]string{"GOOGLE_TOKEN": {"local": RedactedSecret}},
+	}
+	got := RestoreRedactedSecrets(stored, incoming)
+	if got.Values["GOOGLE_TOKEN"]["local"] != "tok-live" {
+		t.Fatalf("restored=%v", got.Values)
+	}
+}
+
+func TestRedactSecretValuesReplacesLongerSecretsFirst(t *testing.T) {
+	vars := map[string]string{"TOKEN": "abc", "LONG": "abc-extra"}
+	got := RedactSecretValues("abc-extra then abc", vars, []string{"TOKEN", "LONG"})
+	if got != "*** then ***" {
+		t.Fatalf("redacted=%q", got)
+	}
+}
+
 func TestEnsureSeededEnvironmentNamesAddsProdStageTest(t *testing.T) {
 	got := EnsureSeededEnvironmentNames([]string{"local"})
 	if strings.Join(got, ",") != "local,prod,stage,test" {

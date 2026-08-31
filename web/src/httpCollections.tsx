@@ -6,7 +6,7 @@ import { beautifyHTTPBody, formatHTTPBody } from './httpBeautify'
 import { curlCanCollapse, curlFromHTTPRequest, curlPreviewLine } from './httpCurl'
 import { collectionDeletePrompt, confirmedHTTPCollectionDelete, requestDeleteWarning } from './httpDeleteConfirm'
 import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
-import { httpCollectionVars, interpolateTemplate } from './httpInterpolate'
+import { httpCollectionVars, interpolateTemplate, maskSecretVars } from './httpInterpolate'
 import { TemplateField } from './httpTemplate'
 import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Snapshot, Stack } from './types'
 
@@ -186,14 +186,15 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   }, [request?.id])
 
   const resolved = useMemo(() => {
-    if (!collection) return { vars: {} as Record<string, string>, preview: '' }
+    if (!collection) return { vars: {} as Record<string, string>, preview: '', previewVars: {} as Record<string, string> }
     const { vars } = httpCollectionVars(library, { ...collection, environment: httpEnv }, stack ? { ...stack, environment: httpEnv } : undefined)
+    const previewVars = maskSecretVars(vars, library.secret_keys)
     let preview = ''
     if (draft.url) {
-      try { preview = interpolateTemplate(draft.url, vars) }
+      try { preview = interpolateTemplate(draft.url, previewVars) }
       catch (err) { preview = err instanceof Error ? err.message : 'Unable to interpolate' }
     }
-    return { vars, preview }
+    return { vars, preview, previewVars }
   }, [collection, draft.url, httpEnv, library, stack])
 
   const paneCurl = useMemo(() => {
@@ -206,8 +207,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
       headers,
       body: draft.body,
       timeout_ms: Number.isFinite(timeout) ? timeout : undefined,
-    }, resolved.vars, request?.last_result)
-  }, [draft.body, draft.headers, draft.method, draft.timeout, draft.url, request?.last_result, resolved.vars])
+    }, resolved.previewVars, request?.last_result)
+  }, [draft.body, draft.headers, draft.method, draft.timeout, draft.url, request?.last_result, resolved.previewVars])
 
   useEffect(() => {
     if (curlFocusedRef.current) return
@@ -565,7 +566,7 @@ export function StackHTTPPanel({ collections, stack, library, environment, api, 
   const selectedCurl = useMemo(() => {
     if (!selected) return ''
     const { vars } = httpCollectionVars(library, { ...selected.collection, environment }, { ...stack, environment })
-    return curlFromHTTPRequest(selected, vars, selected.last_result)
+    return curlFromHTTPRequest(selected, maskSecretVars(vars, library.secret_keys), selected.last_result)
   }, [environment, library, selected, stack])
 
   const send = async (id: string) => {

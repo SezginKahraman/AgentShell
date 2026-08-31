@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS http_requests (
 		"commands":      {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
 		"stacks":        {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'"},
 		"checks":        {"http_scope TEXT NOT NULL DEFAULT 'local'"},
-		"http_requests": {"body_templates TEXT NOT NULL DEFAULT '[]'", "active_body_id TEXT NOT NULL DEFAULT ''"},
+		"http_requests":         {"body_templates TEXT NOT NULL DEFAULT '[]'", "active_body_id TEXT NOT NULL DEFAULT ''"},
+		"environment_library": {"secret_keys TEXT NOT NULL DEFAULT '[]'"},
 	}
 	for table, defs := range columns {
 		for _, def := range defs {
@@ -656,8 +657,8 @@ func scanStack(row scanner) (domain.Stack, error) {
 const stackCols = `id,project_id,collection_id,stable_key,name,description,start_strategy,failure_policy,favorite,members,depends_on_stacks,environment,env,created_at,updated_at`
 
 func (s *Store) EnvironmentLibrary(ctx context.Context) (domain.EnvironmentLibrary, error) {
-	var names, keys, values string
-	err := s.db.QueryRowContext(ctx, `SELECT names,keys,value_json FROM environment_library WHERE id=?`, domain.WorkspaceLibraryID).Scan(&names, &keys, &values)
+	var names, keys, values, secretKeys string
+	err := s.db.QueryRowContext(ctx, `SELECT names,keys,value_json,secret_keys FROM environment_library WHERE id=?`, domain.WorkspaceLibraryID).Scan(&names, &keys, &values, &secretKeys)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.EnvironmentLibrary{Names: append([]string{}, domain.SeededEnvironmentNames...)}, nil
 	}
@@ -668,6 +669,7 @@ func (s *Store) EnvironmentLibrary(ctx context.Context) (domain.EnvironmentLibra
 	_ = json.Unmarshal([]byte(names), &lib.Names)
 	_ = json.Unmarshal([]byte(keys), &lib.Keys)
 	_ = json.Unmarshal([]byte(values), &lib.Values)
+	_ = json.Unmarshal([]byte(secretKeys), &lib.SecretKeys)
 	return lib, nil
 }
 
@@ -676,7 +678,7 @@ func (s *Store) SaveEnvironmentLibrary(ctx context.Context, lib domain.Environme
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO environment_library(id,names,keys,value_json) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET names=excluded.names,keys=excluded.keys,value_json=excluded.value_json`, domain.WorkspaceLibraryID, js(normalized.Names), js(normalized.Keys), js(normalized.Values))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO environment_library(id,names,keys,value_json,secret_keys) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET names=excluded.names,keys=excluded.keys,value_json=excluded.value_json,secret_keys=excluded.secret_keys`, domain.WorkspaceLibraryID, js(normalized.Names), js(normalized.Keys), js(normalized.Values), js(normalized.SecretKeys))
 	return err
 }
 

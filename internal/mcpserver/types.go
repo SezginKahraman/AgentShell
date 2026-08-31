@@ -1439,13 +1439,14 @@ func validateStrings(field string, values []string, maxItems, maxLength int) err
 }
 
 type UpdateEnvironmentsInput struct {
-	Names  []string                     `json:"names" jsonschema:"Named environment columns such as local and prod; custom is reserved"`
-	Keys   []string                     `json:"keys,omitempty" jsonschema:"Workspace-wide environment variable names defined once"`
-	Values map[string]map[string]string `json:"values,omitempty" jsonschema:"Values keyed by environment variable then environment name"`
+	Names      []string                     `json:"names" jsonschema:"Named environment columns such as local and prod; custom is reserved"`
+	Keys       []string                     `json:"keys,omitempty" jsonschema:"Workspace-wide environment variable names defined once"`
+	SecretKeys []string                     `json:"secret_keys,omitempty" jsonschema:"Subset of keys whose cells are secrets; list returns *** and update *** keeps the stored value"`
+	Values     map[string]map[string]string `json:"values,omitempty" jsonschema:"Values keyed by environment variable then environment name"`
 }
 
 func (in UpdateEnvironmentsInput) validate() error {
-	_, err := domain.NormalizeEnvironmentLibrary(domain.EnvironmentLibrary{Names: in.Names, Keys: in.Keys, Values: in.Values})
+	_, err := domain.NormalizeEnvironmentLibrary(domain.EnvironmentLibrary{Names: in.Names, Keys: in.Keys, SecretKeys: in.SecretKeys, Values: in.Values})
 	return err
 }
 

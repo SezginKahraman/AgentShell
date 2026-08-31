@@ -22,10 +22,13 @@ var (
 )
 
 type EnvironmentLibrary struct {
-	Names  []string                     `json:"names"`
-	Keys   []string                     `json:"keys"`
-	Values map[string]map[string]string `json:"values,omitempty"`
+	Names      []string                     `json:"names"`
+	Keys       []string                     `json:"keys"`
+	SecretKeys []string                     `json:"secret_keys,omitempty"`
+	Values     map[string]map[string]string `json:"values,omitempty"`
 }
+
+const RedactedSecret = "***"
 
 func ValidEnvironmentName(name string) bool {
 	return envNamePattern.MatchString(name) && name != ReservedEnvironmentName
@@ -128,7 +131,116 @@ func NormalizeEnvironmentLibrary(lib EnvironmentLibrary) (EnvironmentLibrary, er
 			values[key] = row
 		}
 	}
-	return EnvironmentLibrary{Names: names, Keys: keys, Values: values}, nil
+	secretKeys := make([]string, 0, len(lib.SecretKeys))
+	seenSecrets := map[string]bool{}
+	for _, raw := range lib.SecretKeys {
+		key := strings.TrimSpace(raw)
+		if !seenKeys[key] || seenSecrets[key] {
+			continue
+		}
+		seenSecrets[key] = true
+		secretKeys = append(secretKeys, key)
+	}
+	return EnvironmentLibrary{Names: names, Keys: keys, SecretKeys: secretKeys, Values: values}, nil
+}
+
+func SecretKeySet(keys []string) map[string]bool {
+	out := map[string]bool{}
+	for _, key := range keys {
+		out[key] = true
+	}
+	return out
+}
+
+func RedactEnvironmentLibrary(lib EnvironmentLibrary) EnvironmentLibrary {
+	secrets := SecretKeySet(lib.SecretKeys)
+	values := map[string]map[string]string{}
+	for key, byEnv := range lib.Values {
+		row := map[string]string{}
+		for env, value := range byEnv {
+			if secrets[key] && value != "" {
+				row[env] = RedactedSecret
+			} else {
+				row[env] = value
+			}
+		}
+		if len(row) > 0 {
+			values[key] = row
+		}
+	}
+	return EnvironmentLibrary{Names: append([]string{}, lib.Names...), Keys: append([]string{}, lib.Keys...), SecretKeys: append([]string{}, lib.SecretKeys...), Values: values}
+}
+
+func RestoreRedactedSecrets(stored, incoming EnvironmentLibrary) EnvironmentLibrary {
+	secrets := SecretKeySet(incoming.SecretKeys)
+	if len(secrets) == 0 {
+		return incoming
+	}
+	values := map[string]map[string]string{}
+	for key, byEnv := range incoming.Values {
+		row := map[string]string{}
+		for env, value := range byEnv {
+			if secrets[key] && value == RedactedSecret {
+				if storedRow := stored.Values[key]; storedRow != nil {
+					if kept, ok := storedRow[env]; ok {
+						row[env] = kept
+						continue
+					}
+				}
+			}
+			row[env] = value
+		}
+		if len(row) > 0 {
+			values[key] = row
+		}
+	}
+	incoming.Values = values
+	return incoming
+}
+
+func RedactSecretValues(text string, vars map[string]string, secretKeys []string) string {
+	if text == "" || len(secretKeys) == 0 {
+		return text
+	}
+	replacements := make([]string, 0, len(secretKeys))
+	seen := map[string]bool{}
+	for _, key := range secretKeys {
+		value := vars[key]
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		replacements = append(replacements, value)
+	}
+	for i := 0; i < len(replacements); i++ {
+		for j := i + 1; j < len(replacements); j++ {
+			if len(replacements[j]) > len(replacements[i]) {
+				replacements[i], replacements[j] = replacements[j], replacements[i]
+			}
+		}
+	}
+	out := text
+	for _, value := range replacements {
+		out = strings.ReplaceAll(out, value, RedactedSecret)
+	}
+	return out
+}
+
+func RedactHTTPResult(result *HTTPResult, vars map[string]string, secretKeys []string) {
+	if result == nil || len(secretKeys) == 0 {
+		return
+	}
+	result.URL = RedactSecretValues(result.URL, vars, secretKeys)
+	result.Body = RedactSecretValues(result.Body, vars, secretKeys)
+	result.Error = RedactSecretValues(result.Error, vars, secretKeys)
+	if result.Headers == nil {
+		return
+	}
+	headers := map[string]string{}
+	for key, value := range result.Headers {
+		headers[key] = RedactSecretValues(value, vars, secretKeys)
+	}
+	result.Headers = headers
 }
 
 func MemberEnvironmentName(stackEnv, pin string) string {

@@ -343,6 +343,15 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .env-key-row code { color: var(--text-strong); font: 11px/36px 'DM Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .env-key-row input { background: var(--surface-inset); border: 1px solid var(--line); border-radius: 7px; color: var(--text-strong); font: 11px/1.4 'DM Mono', monospace; height: 36px; min-height: 36px; outline: 0; padding: 0 10px; width: 100%; }
 .env-key-row input:focus { border-color: var(--blue); }
+.env-key-value { min-width: 0; position: relative; }
+.env-key-value input { padding-right: 36px; }
+.env-reveal { align-items: center; background: transparent; border: 0; color: var(--muted); cursor: pointer; display: inline-flex; height: 28px; justify-content: center; padding: 0; position: absolute; right: 4px; top: 4px; width: 28px; }
+.env-reveal:hover { color: var(--text-strong); }
+.env-reveal svg { height: 14px; width: 14px; }
+.env-key-actions { align-items: center; display: flex; gap: 4px; justify-self: end; }
+.env-secret-toggle { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; color: var(--muted); cursor: pointer; font-size: 9px; font-weight: 700; letter-spacing: .04em; line-height: 1; min-height: 28px; padding: 0 8px; text-transform: uppercase; }
+.env-secret-toggle.on { background: var(--amber-soft); border-color: var(--amber-border); color: var(--amber-text); }
+.env-secret-toggle:disabled { opacity: .5; }
 .env-key-row .icon-button { height: 36px; justify-self: end; min-height: 36px; width: 36px; }
 .env-key-row .icon-button svg { height: 14px; width: 14px; }
 .env-empty { color: var(--muted); font-size: 12px; grid-column: 1 / -1; margin: 0; padding: 18px 12px; }

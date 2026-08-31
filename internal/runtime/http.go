@@ -75,7 +75,7 @@ func (m *Manager) SendHTTPRequest(ctx context.Context, request domain.HTTPReques
 	httpRequest, err := http.NewRequestWithContext(sendCtx, method, target.String(), strings.NewReader(body))
 	if err != nil {
 		result.Error = err.Error()
-		return m.persistHTTPResult(ctx, request, result)
+		return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
 	}
 	for key, value := range headers {
 		httpRequest.Header.Set(key, value)
@@ -103,7 +103,7 @@ func (m *Manager) SendHTTPRequest(ctx context.Context, request domain.HTTPReques
 	}
 	if err != nil {
 		result.Error = err.Error()
-		return m.persistHTTPResult(ctx, request, result)
+		return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
 	}
 	defer response.Body.Close()
 	result.Status = response.StatusCode
@@ -116,17 +116,18 @@ func (m *Manager) SendHTTPRequest(ctx context.Context, request domain.HTTPReques
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, domain.MaxHTTPRequestBody+1))
 	if readErr != nil {
 		result.Error = readErr.Error()
-		return m.persistHTTPResult(ctx, request, result)
+		return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
 	}
 	if len(raw) > domain.MaxHTTPRequestBody {
 		raw = raw[:domain.MaxHTTPRequestBody]
 		result.Truncated = true
 	}
 	result.Body = string(raw)
-	return m.persistHTTPResult(ctx, request, result)
+	return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
 }
 
-func (m *Manager) persistHTTPResult(ctx context.Context, request domain.HTTPRequest, result domain.HTTPResult) (domain.HTTPRequest, error) {
+func (m *Manager) persistHTTPResult(ctx context.Context, request domain.HTTPRequest, result domain.HTTPResult, vars map[string]string, secretKeys []string) (domain.HTTPRequest, error) {
+	domain.RedactHTTPResult(&result, vars, secretKeys)
 	now := time.Now().UTC()
 	request.LastResult = &result
 	request.UpdatedAt = now

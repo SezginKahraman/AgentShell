@@ -173,7 +173,7 @@ export function TemplateField({
         <code>{editor.key}</code>
         <em className={`env-badge env-${envTone(envName)}`}>{envName}</em>
       </header>
-      <p>Update this profile in the workspace library. It is not stored as a secret.</p>
+      <p>Saves to this profile in the workspace library. Mark the key secret in Settings to keep it out of chat.</p>
       <input ref={editorInputRef} data-testid="http-var-editor-value" value={editor.value} placeholder="http://127.0.0.1:8091" onChange={event => setEditor(current => current ? { ...current, value: event.target.value } : null)} disabled={editor.busy} />
       {editor.error ? <span className="http-var-editor-error">{editor.error}</span> : null}
       <div className="http-var-editor-actions">

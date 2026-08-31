@@ -47,7 +47,7 @@ const stacks: Stack[] = [
 	{ id: 'stack-external', name: 'External infrastructure', description: 'Detached resources with port-based observed state.', status: 'running', start_strategy: 'parallel', failure_policy: 'stop', environment: 'local', resolved_environment: 'local', running_count: 1, total_count: 1, members: [{ command_id: 'cmd-external-infra', position: 0, wait_for: 'ready', wait_timeout_ms: 30000, name: 'Detached infrastructure', status: 'external', lifecycle_mode: 'external', observed_state: 'running', state_confidence: 'high', state_detail: 'Expected MySQL port is listening; process ownership remains external.', port_verifications: [{ port: 3306, name: 'MySQL', before: 'closed', after: 'listening', current: 'listening', status: 'verified', confidence: 'high', checked_at: iso(19.9) }], can_stop: true }] },
 ]
 
-let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod', 'stage', 'test'], keys: ['API_URL'], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com', stage: 'https://staging.example.com', test: 'http://127.0.0.1:8081' } } }
+let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod', 'stage', 'test'], keys: ['API_URL'], secret_keys: [], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com', stage: 'https://staging.example.com', test: 'http://127.0.0.1:8081' } } }
 
 const httpCollections: HTTPCollection[] = [
 	{ id: 'http-hotel', name: 'Hotel Meta API', stack_id: 'stack-internal', sort_order: 0, requests: [
@@ -232,7 +232,7 @@ export class DemoApi implements AgentShellApi {
   async getEnvironments() { return structuredClone(environmentLibrary) }
   async updateEnvironments(library: EnvironmentLibrary) {
 		if (!library.names?.length) throw new Error('at least one environment name is required')
-		environmentLibrary = structuredClone({ names: library.names, keys: library.keys ?? [], values: library.values ?? {} })
+		environmentLibrary = structuredClone({ names: library.names, keys: library.keys ?? [], secret_keys: library.secret_keys ?? [], values: library.values ?? {} })
 		this.emit()
 		return structuredClone(environmentLibrary)
 	}

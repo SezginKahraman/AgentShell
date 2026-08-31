@@ -13,3 +13,4 @@ timestamp: 2026-08-17T14:15:00Z
 - [Stack environments](2026-08-21-stack-environments-design.md) — workspace named environments for stacks.
 - [HTTP collections](2026-08-21-http-collections-design.md) — Postman-like request catalog bound to a stack.
 - [UI workspace context](2026-08-21-ui-workspace-context-design.md) — Project as Slack-style dashboard context, independent of MCP root.
+- [Environment secret keys](2026-08-31-environment-secret-keys-design.md) — Mark library keys secret so MCP and last_result show `***`.

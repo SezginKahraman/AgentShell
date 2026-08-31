@@ -35,6 +35,52 @@ func TestEnvironmentLibraryHTTP(t *testing.T) {
 	}
 }
 
+func TestEnvironmentLibraryHTTPRedactsAndRestoresSecrets(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	var lib map[string]any
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/environments", map[string]any{
+		"names":       []string{"local", "prod"},
+		"keys":        []string{"API_URL", "GOOGLE_TOKEN"},
+		"secret_keys": []string{"GOOGLE_TOKEN"},
+		"values":      map[string]map[string]string{"API_URL": {"local": "http://127.0.0.1"}, "GOOGLE_TOKEN": {"local": "tok-live"}},
+	}, &lib); status != http.StatusOK {
+		t.Fatalf("put status=%d body=%v", status, lib)
+	}
+	if lib["values"].(map[string]any)["GOOGLE_TOKEN"].(map[string]any)["local"] != "tok-live" {
+		t.Fatalf("dashboard put must return the stored secret: %v", lib)
+	}
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/environments", nil, &lib); status != http.StatusOK {
+		t.Fatalf("get status=%d body=%v", status, lib)
+	}
+	if lib["values"].(map[string]any)["GOOGLE_TOKEN"].(map[string]any)["local"] != "tok-live" {
+		t.Fatalf("dashboard get must return the stored secret: %v", lib)
+	}
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/environments?redact_secrets=1", nil, &lib); status != http.StatusOK {
+		t.Fatalf("redacted get status=%d body=%v", status, lib)
+	}
+	if lib["values"].(map[string]any)["GOOGLE_TOKEN"].(map[string]any)["local"] != "***" {
+		t.Fatalf("mcp get must redact: %v", lib)
+	}
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/environments?redact_secrets=1", map[string]any{
+		"names":       []string{"local", "prod"},
+		"keys":        []string{"API_URL", "GOOGLE_TOKEN"},
+		"secret_keys": []string{"GOOGLE_TOKEN"},
+		"values":      map[string]map[string]string{"API_URL": {"local": "http://127.0.0.1"}, "GOOGLE_TOKEN": {"local": "***"}},
+	}, &lib); status != http.StatusOK {
+		t.Fatalf("redacted put status=%d body=%v", status, lib)
+	}
+	if lib["values"].(map[string]any)["GOOGLE_TOKEN"].(map[string]any)["local"] != "***" {
+		t.Fatalf("mcp put response must stay redacted: %v", lib)
+	}
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/environments", nil, &lib); status != http.StatusOK {
+		t.Fatalf("reload status=%d body=%v", status, lib)
+	}
+	if lib["values"].(map[string]any)["GOOGLE_TOKEN"].(map[string]any)["local"] != "tok-live" {
+		t.Fatalf("*** must keep the stored secret: %v", lib)
+	}
+}
+
 func TestStackEnvironmentValidationAndResolvedName(t *testing.T) {
 	srv, _ := testServer(t)
 	client := srv.Client()

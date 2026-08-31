@@ -58,14 +58,15 @@ func TestEnvironmentLibraryAndStackEnvRoundTrip(t *testing.T) {
 	defer s.Close()
 	ctx := context.Background()
 	if err = s.SaveEnvironmentLibrary(ctx, domain.EnvironmentLibrary{
-		Names:  []string{"local", "prod"},
-		Keys:   []string{"API_URL"},
-		Values: map[string]map[string]string{"API_URL": {"local": "http://127.0.0.1", "prod": "https://api"}},
+		Names:      []string{"local", "prod"},
+		Keys:       []string{"API_URL", "GOOGLE_TOKEN"},
+		SecretKeys: []string{"GOOGLE_TOKEN"},
+		Values:     map[string]map[string]string{"API_URL": {"local": "http://127.0.0.1", "prod": "https://api"}, "GOOGLE_TOKEN": {"local": "tok-live"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	lib, err := s.EnvironmentLibrary(ctx)
-	if err != nil || lib.Values["API_URL"]["prod"] != "https://api" {
+	if err != nil || lib.Values["API_URL"]["prod"] != "https://api" || len(lib.SecretKeys) != 1 || lib.SecretKeys[0] != "GOOGLE_TOKEN" || lib.Values["GOOGLE_TOKEN"]["local"] != "tok-live" {
 		t.Fatalf("lib=%+v err=%v", lib, err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)

@@ -76,7 +76,7 @@ export interface SavedCommand {
 
 export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
-export interface EnvironmentLibrary { names: string[]; keys: string[]; values?: Record<string, Record<string, string>> }
+export interface EnvironmentLibrary { names: string[]; keys: string[]; secret_keys?: string[]; values?: Record<string, Record<string, string>> }
 export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; status?: RunStatus; lifecycle_mode?: 'managed' | 'external'; observed_state?: 'running' | 'stopped' | 'checking' | 'unknown'; state_confidence?: 'high' | 'observed' | 'action' | 'unknown'; state_detail?: string; port_verifications?: PortVerification[]; active_run_id?: string; can_stop?: boolean; environment?: string; env?: Record<string, string> }
 export interface StackPrerequisite { stack_id: string; wait_timeout_ms?: number }
 export interface NeededStack { id: string; name: string; up_count: number; total_count: number; wait_timeout_ms: number }

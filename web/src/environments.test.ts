@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { emptyEnvironmentLibrary, envTone, setLibraryValue, stackEnvironmentLabel } from './environments'
+import { dropLibraryKey, emptyEnvironmentLibrary, envTone, setLibraryValue, stackEnvironmentLabel, toggleSecretKey } from './environments'
 import type { Stack } from './types'
 
 describe('envTone', () => {
@@ -22,7 +22,7 @@ describe('stackEnvironmentLabel', () => {
   })
 
   it('seeds an empty library with local', () => {
-    expect(emptyEnvironmentLibrary()).toEqual({ names: ['local', 'prod', 'stage', 'test'], keys: [], values: {} })
+    expect(emptyEnvironmentLibrary()).toEqual({ names: ['local', 'prod', 'stage', 'test'], keys: [], secret_keys: [], values: {} })
   })
 })
 
@@ -38,5 +38,15 @@ describe('setLibraryValue', () => {
     const next = setLibraryValue(start, 'META_URL', 'local', 'http://127.0.0.1:8091')
     expect(next.keys).toEqual(['META_URL'])
     expect(next.values?.META_URL).toEqual({ prod: 'https://www.enuygun.com', local: 'http://127.0.0.1:8091' })
+  })
+})
+
+describe('secret keys', () => {
+  it('toggles a key and drops it with the row', () => {
+    const start = setLibraryValue(emptyEnvironmentLibrary(), 'GOOGLE_TOKEN', 'local', 'tok-live')
+    const marked = toggleSecretKey(start, 'GOOGLE_TOKEN')
+    expect(marked.secret_keys).toEqual(['GOOGLE_TOKEN'])
+    expect(toggleSecretKey(marked, 'GOOGLE_TOKEN').secret_keys).toEqual([])
+    expect(dropLibraryKey(marked, 'GOOGLE_TOKEN')).toEqual({ names: ['local', 'prod', 'stage', 'test'], keys: [], secret_keys: [], values: {} })
   })
 })

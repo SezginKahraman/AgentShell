@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import type { EnvironmentLibrary, Stack } from './types'
 
@@ -8,7 +8,18 @@ export type EnvTone = 'local' | 'prod' | 'stage' | 'test' | 'custom'
 
 const seededNames = new Set(['local', 'prod', 'stage', 'test'])
 
-export const emptyEnvironmentLibrary = (): EnvironmentLibrary => ({ names: ['local', 'prod', 'stage', 'test'], keys: [], values: {} })
+export const emptyEnvironmentLibrary = (): EnvironmentLibrary => ({ names: ['local', 'prod', 'stage', 'test'], keys: [], secret_keys: [], values: {} })
+
+export function toggleSecretKey(library: EnvironmentLibrary, key: string): EnvironmentLibrary {
+  const secret_keys = library.secret_keys ?? []
+  return { ...library, secret_keys: secret_keys.includes(key) ? secret_keys.filter(item => item !== key) : [...secret_keys, key] }
+}
+
+export function dropLibraryKey(library: EnvironmentLibrary, key: string): EnvironmentLibrary {
+  const values = { ...(library.values ?? {}) }
+  delete values[key]
+  return { ...library, keys: library.keys.filter(item => item !== key), secret_keys: (library.secret_keys ?? []).filter(item => item !== key), values }
+}
 
 export function setLibraryValue(library: EnvironmentLibrary, key: string, envName: string, value: string): EnvironmentLibrary {
   const trimmedKey = key.trim()
@@ -138,6 +149,7 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
   const [keyDraft, setKeyDraft] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({})
 
   const load = () => api.getEnvironments().then(next => {
     setLibrary(next)
@@ -173,10 +185,12 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
     persist({ ...library, keys: [...library.keys, key] })
   }
 
-  const removeKey = (key: string) => {
-    const values = { ...(library.values ?? {}) }
-    delete values[key]
-    persist({ ...library, keys: library.keys.filter(item => item !== key), values })
+  const removeKey = (key: string) => persist(dropLibraryKey(library, key))
+
+  const setSecret = (key: string, next: boolean) => {
+    const marked = (library.secret_keys ?? []).includes(key)
+    if (marked === next) return
+    persist(toggleSecretKey(library, key))
   }
 
   const removeName = (name: string) => {
@@ -209,7 +223,7 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
     <header className="env-panel-head">
       <div>
         <h2>Environments</h2>
-        <p className="env-lead">Workspace keys for the selected profile. Stacks pick a profile at start; secrets stay on start.</p>
+        <p className="env-lead">Workspace keys for the selected profile. Mark a key secret to keep its value out of chat and MCP; Send still interpolates it locally.</p>
       </div>
       <div className="env-panel-tools">
         <EnvPicker label="Profile" names={library.names} value={selectedName} testId="environments-profile" ariaLabel="Environment profile" onChange={setSelectedName} removable={name => !seededNames.has(name)} onRemove={removeName} />
@@ -231,14 +245,22 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
         </div>
         {library.keys.length ? library.keys.map(key => {
           const value = library.values?.[key]?.[selectedName] ?? ''
+          const isSecret = (library.secret_keys ?? []).includes(key)
+          const isRevealed = !!revealed[key]
           return <article className={`env-key-row env-${envTone(selectedName)}`} key={key}>
             <code>{key}</code>
-            <input aria-label={`${key} ${selectedName}`} title={value || `${selectedName} not set`} placeholder="not set" value={value} onBlur={event => setCell(key, selectedName, event.target.value)} onChange={event => {
-              const values = { ...(library.values ?? {}) }
-              values[key] = { ...(values[key] ?? {}), [selectedName]: event.target.value }
-              setLibrary({ ...library, values })
-            }} />
-            <button type="button" className="icon-button danger subtle" aria-label={`Remove ${key}`} disabled={busy} onClick={() => removeKey(key)}><Trash2 /></button>
+            <div className="env-key-value">
+              <input type={isSecret && !isRevealed ? 'password' : 'text'} aria-label={`${key} ${selectedName}`} title={isSecret && !isRevealed ? `${selectedName} hidden` : (value || `${selectedName} not set`)} placeholder="not set" value={value} autoComplete="off" spellCheck={false} onBlur={event => setCell(key, selectedName, event.target.value)} onChange={event => {
+                const values = { ...(library.values ?? {}) }
+                values[key] = { ...(values[key] ?? {}), [selectedName]: event.target.value }
+                setLibrary({ ...library, values })
+              }} />
+              {isSecret ? <button type="button" className="env-reveal" data-testid={`env-reveal-${key}`} aria-label={isRevealed ? `Hide ${key}` : `Reveal ${key}`} onClick={() => setRevealed(current => ({ ...current, [key]: !current[key] }))}>{isRevealed ? <EyeOff /> : <Eye />}</button> : null}
+            </div>
+            <div className="env-key-actions">
+              <button type="button" className={`env-secret-toggle${isSecret ? ' on' : ''}`} data-testid={`env-secret-${key}`} aria-pressed={isSecret} disabled={busy} onClick={() => setSecret(key, !isSecret)}>{isSecret ? 'Secret' : 'Mark secret'}</button>
+              <button type="button" className="icon-button danger subtle" aria-label={`Remove ${key}`} disabled={busy} onClick={() => removeKey(key)}><Trash2 /></button>
+            </div>
           </article>
         }) : <p className="env-empty">No keys yet. Add <code>API_URL</code> or similar — each profile gets its own value.</p>}
         <div className="env-key-row env-add-key">

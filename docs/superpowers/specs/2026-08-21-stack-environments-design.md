@@ -21,7 +21,7 @@ One stack identity, many named environments. A workspace-wide key×environment t
 - Per-project environment libraries.
 - Putting the workspace library inside `apply_catalog`.
 - Workspace-wide active environment for solo `start_command`. Named env applies only on stack start/restart.
-- Storing secrets in the library. Vault-style values stay as existing start parameters (`type=secret`).
+- Encrypting the library or adding a vault. Keys may be marked secret; see [environment secret keys](2026-08-31-environment-secret-keys-design.md). One-shot launcher start parameters (`type=secret`) remain for values that must not persist.
 - Renaming keys or environment names in place (delete + add).
 - Changing `CommandDefinition.Env` for non-stack starts.
 
@@ -108,7 +108,7 @@ The process still inherits the OS environment underneath, as today.
 
 **HTTP.** `GET`/`PUT /api/environments` replaces the library. Stack create/update accept `environment`, `env`, and member `environment`/`env`. Stack GET includes `resolved_environment`. `POST /api/stacks/{id}/start` and restart accept optional `environment`.
 
-**MCP.** `list_environments` and `update_environments` for the library (not in `apply_catalog`). `save_stack` / `update_stack` / `apply_catalog` carry stack extras and member pin/overlay. `start_stack` / `restart_stack` gain `environment`. Tool text: do not clone a stack per profile; do not put varying URLs in launcher `env` or secrets in this table. `get_workspace_context` lists environment names.
+**MCP.** `list_environments` and `update_environments` for the library (not in `apply_catalog`). `list_environments` redacts `secret_keys` cells to `***`. `save_stack` / `update_stack` / `apply_catalog` carry stack extras and member pin/overlay. `start_stack` / `restart_stack` gain `environment`. Tool text: do not clone a stack per profile; do not put varying URLs in launcher `env`. `get_workspace_context` lists environment names with secret cells redacted.
 
 ## Errors
 

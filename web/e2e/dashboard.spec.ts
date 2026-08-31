@@ -532,6 +532,17 @@ test('settings exposes the workspace environment table', async ({ page }) => {
   await expect(page.getByTestId('environments-profile')).toHaveValue('prod')
   await expect(page.getByLabel('API_URL prod')).toHaveValue('https://api.example.com')
   await expect(page.getByLabel('API_URL local')).toHaveCount(0)
+  await page.getByTestId('environments-profile-toggle').click()
+  await page.getByTestId('environments-profile-option-local').click()
+  await page.getByTestId('env-add-key').fill('GOOGLE_TOKEN')
+  await page.getByTestId('env-add-key-save').click()
+  await page.getByTestId('env-secret-GOOGLE_TOKEN').click()
+  await expect(page.getByLabel('GOOGLE_TOKEN local')).toHaveAttribute('type', 'password')
+  await page.getByLabel('GOOGLE_TOKEN local').fill('tok-e2e')
+  await page.getByLabel('GOOGLE_TOKEN local').blur()
+  await page.getByTestId('env-reveal-GOOGLE_TOKEN').click()
+  await expect(page.getByLabel('GOOGLE_TOKEN local')).toHaveAttribute('type', 'text')
+  await expect(page.getByLabel('GOOGLE_TOKEN local')).toHaveValue('tok-e2e')
 })
 
 test('HTTP collection sidebars can collapse for editor focus', async ({ page }) => {

@@ -17,6 +17,9 @@ func (s *Server) environmentsAPI(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		lib, err := s.store.EnvironmentLibrary(ctx)
+		if err == nil {
+			lib = maybeRedactEnvironmentLibrary(r, lib)
+		}
 		respond(w, lib, err)
 	case http.MethodPut:
 		var lib domain.EnvironmentLibrary
@@ -33,6 +36,7 @@ func (s *Server) environmentsAPI(w http.ResponseWriter, r *http.Request) {
 			respond(w, nil, err)
 			return
 		}
+		normalized = domain.RestoreRedactedSecrets(old, normalized)
 		if err = s.store.SaveEnvironmentLibrary(ctx, normalized); err != nil {
 			respond(w, nil, err)
 			return
@@ -45,10 +49,17 @@ func (s *Server) environmentsAPI(w http.ResponseWriter, r *http.Request) {
 			respond(w, nil, err)
 			return
 		}
-		respond(w, normalized, nil)
+		respond(w, maybeRedactEnvironmentLibrary(r, normalized), nil)
 	default:
 		method(w)
 	}
+}
+
+func maybeRedactEnvironmentLibrary(r *http.Request, lib domain.EnvironmentLibrary) domain.EnvironmentLibrary {
+	if r.URL.Query().Get("redact_secrets") == "1" {
+		return domain.RedactEnvironmentLibrary(lib)
+	}
+	return lib
 }
 
 func remapStacksAfterLibraryChange(ctx context.Context, s *store.Store, oldNames, newNames []string) error {
