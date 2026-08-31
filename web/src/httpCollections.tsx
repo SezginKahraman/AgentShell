@@ -258,15 +258,57 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     return () => window.removeEventListener('beforeunload', onLeave)
   }, [dirty])
 
-  const confirmDiscard = () => !dirty || window.confirm('You have unsaved changes. Leave anyway? They will be gone.')
+  const confirmDiscard = () => {
+    const baseline = baselineRef.current
+    if (!baseline || !isDraftDirty(baseline, draftRef.current)) return true
+    return window.confirm('You have unsaved changes. Leave anyway? They will be gone.')
+  }
+
+  const saveRequestName = async () => {
+    if (!request?.id) return true
+    const name = draftRef.current.name.trim()
+    if (!name) {
+      setDraft(current => ({ ...current, name: request.name }))
+      return true
+    }
+    if (name === request.name) {
+      if (draftRef.current.name !== name) setDraft(current => ({ ...current, name }))
+      return true
+    }
+    setError('')
+    try {
+      await api.updateHTTPRequest(request.id, { name })
+      setDraft(current => ({ ...current, name }))
+      if (baselineRef.current) baselineRef.current = { ...baselineRef.current, name }
+      await refresh()
+      return true
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to rename request')
+      return false
+    }
+  }
 
   const selectRequest = (id: string) => {
-    if (request && id !== request.id && !confirmDiscard()) return
+    if (request && id !== request.id) {
+      void (async () => {
+        if (!await saveRequestName() || !confirmDiscard()) return
+        setSelectedRequestID(id)
+      })()
+      return
+    }
     setSelectedRequestID(id)
   }
 
   const selectCollection = (id: string) => {
-    if (request && !confirmDiscard()) return
+    if (request) {
+      void (async () => {
+        if (!await saveRequestName() || !confirmDiscard()) return
+        const next = collections.find(item => item.id === id)
+        setSelectedCollectionID(id)
+        setSelectedRequestID(next?.requests?.[0]?.id ?? '')
+      })()
+      return
+    }
     const next = collections.find(item => item.id === id)
     setSelectedCollectionID(id)
     setSelectedRequestID(next?.requests?.[0]?.id ?? '')
@@ -463,11 +505,12 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <strong>Requests</strong>
             <button type="button" className="button small http-request-actions" data-testid="new-http-request" onClick={addRequest} disabled={!collection}><Plus /></button>
           </div>
-          {!collapsed.requests && (collection.requests ?? []).map(item => <button key={item.id} type="button" className={item.id === request?.id ? 'active' : ''} title={item.name} data-testid={`http-request-${item.id}`} onClick={() => selectRequest(item.id)}>
-            <em>{item.method ?? 'GET'}</em><span>{item.name}</span>
+          {!collapsed.requests && (collection.requests ?? []).map(item => <button key={item.id} type="button" className={item.id === request?.id ? 'active' : ''} title={item.id === request?.id ? draft.name : item.name} data-testid={`http-request-${item.id}`} onClick={() => selectRequest(item.id)}>
+            <em>{item.method ?? 'GET'}</em><span>{item.id === request?.id ? draft.name : item.name}</span>
           </button>)}
         </div>
         {request ? <div className="http-editor">
+          <input className="http-request-name" aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} onBlur={() => { void saveRequestName() }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }} />
           <div className="http-url-row">
             <select aria-label="HTTP method" value={draft.method} onChange={event => setDraft(current => ({ ...current, method: event.target.value as HTTPRequestDraft['method'] }))}>{methods.map(method => <option key={method}>{method}</option>)}</select>
             <TemplateField ariaLabel="Request URL" testId="http-request-url" value={draft.url} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={url => setDraft(current => ({ ...current, url }))} />
@@ -493,7 +536,6 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <button type="button" className="button primary small" data-testid="import-curl-submit" onClick={importCurl} disabled={!curl.trim()}>Import</button>
           </div>}
           <div className="http-meta-row">
-            <label>Request name<input aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} /></label>
             <label>Timeout ms<input aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} /></label>
           </div>
           <p className="http-preview" data-testid="http-url-preview">{resolved.preview}</p>

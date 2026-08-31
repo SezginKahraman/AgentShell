@@ -397,11 +397,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .http-collection-head h2 { font-size: 16px; margin: 0 0 8px; }
 .http-collection-name { background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text-strong); font: 16px/1.3 inherit; margin: 0 0 8px; padding: 4px 6px; width: min(420px, 100%); }
 .http-collection-name:hover, .http-collection-name:focus { border-color: var(--line-strong); }
+.http-editor input.http-request-name { background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text-strong); font: 16px/1.3 inherit; margin: 0; padding: 4px 6px; width: min(420px, 100%); }
+.http-editor input.http-request-name:hover, .http-editor input.http-request-name:focus { border-color: var(--line-strong); }
 .http-request-actions { flex: 0 0 auto; width: 36px; padding: 0; }
 .http-curl { background: var(--surface-inset); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 8px; padding: 10px; }
 .http-curl textarea { min-height: 90px; }
 .http-curl textarea[readonly] { color: var(--text-strong); min-height: 72px; }
-.http-meta-row { align-items: end; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) 140px; }
+.http-meta-row { align-items: end; display: grid; gap: 8px; grid-template-columns: 140px; }
 .http-meta-row label, .http-body-toolbar label { color: var(--muted); display: grid; font-size: 10px; gap: 4px; }
 .http-meta-row input, .http-body-toolbar input, .http-body-toolbar select { box-sizing: border-box; height: 34px; min-height: 34px; padding: 0 9px; }
 .http-body-block { background: var(--surface-subtle); border: 1px solid var(--line); border-radius: 8px; display: grid; gap: 8px; padding: 10px; }
