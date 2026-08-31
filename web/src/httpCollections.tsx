@@ -55,7 +55,7 @@ function CurlStrip({ curl, testId, copied, onCopy }: { curl: string; testId: str
   </div>
 }
 
-function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, headerTestId, actions, curl }: {
+export function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, headerTestId, actions, curl }: {
   result?: HTTPResult
   sending?: boolean
   pendingLabel?: string
@@ -73,7 +73,8 @@ function HTTPResponsePane({ result, sending, pendingLabel, testId, empty, header
   const canBeautify = !!rawBody && beautifyHTTPBody(rawBody) !== body
   const tone = responseStatusTone(result?.status, result?.error)
   const [copied, setCopied] = useState<'request' | 'response' | 'body' | ''>('')
-  useEffect(() => { setCopied(''); setBeautified(false) }, [result, curl])
+  const resultKey = `${result?.sent_at ?? ''}\n${result?.status ?? ''}\n${result?.error ?? ''}\n${rawBody}`
+  useEffect(() => { setCopied(''); setBeautified(false) }, [resultKey])
   useEffect(() => {
     if (!copied) return
     const timer = window.setTimeout(() => setCopied(''), 1400)
