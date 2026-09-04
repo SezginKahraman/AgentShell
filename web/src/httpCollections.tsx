@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, Copy, Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, Copy, Download, Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2, Upload } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
 import { beautifyHTTPBody, formatHTTPBody } from './httpBeautify'
@@ -7,6 +7,7 @@ import { curlCanCollapse, curlFromHTTPRequest, curlPreviewLine } from './httpCur
 import { collectionDeletePrompt, confirmedHTTPCollectionDelete, requestDeleteWarning } from './httpDeleteConfirm'
 import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
 import { httpCollectionVars, interpolateTemplate, maskSecretVars } from './httpInterpolate'
+import { downloadHTTPCollection, parseHTTPCollectionDocument } from './httpCollectionTransfer'
 import { TemplateField } from './httpTemplate'
 import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Snapshot, Stack } from './types'
 
@@ -155,6 +156,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const draftRef = useRef(draft)
   const baselineRef = useRef<HTTPRequestDraft | null>(null)
   const curlFocusedRef = useRef(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   draftRef.current = draft
 
   const collection = collections.find(item => item.id === selectedCollectionID) ?? collections[0]
@@ -167,11 +169,18 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     setHttpEnv(next)
   }, [stack?.environment, collection?.id, collection?.environment])
   useEffect(() => {
-    if (!collection) return
-    if (!collections.some(item => item.id === selectedCollectionID)) setSelectedCollectionID(collection.id)
-    const next = collection.requests?.find(item => item.id === selectedRequestID) ?? collection.requests?.[0]
+    if (!collections.length) return
+    const selected = collections.find(item => item.id === selectedCollectionID)
+    if (!selected) {
+      if (!selectedCollectionID) {
+        setSelectedCollectionID(collections[0].id)
+        setSelectedRequestID(collections[0].requests?.[0]?.id ?? '')
+      }
+      return
+    }
+    const next = selected.requests?.find(item => item.id === selectedRequestID) ?? selected.requests?.[0]
     if (next && next.id !== selectedRequestID) setSelectedRequestID(next.id)
-  }, [collections, collection, selectedCollectionID, selectedRequestID])
+  }, [collections, selectedCollectionID, selectedRequestID])
   useEffect(() => { if (collection) setCollectionName(collection.name) }, [collection?.id])
   useEffect(() => {
     if (!request) return
@@ -392,6 +401,34 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     }
   }
 
+  const exportCollection = async () => {
+    if (!collection) return
+    setError('')
+    try {
+      downloadHTTPCollection(await api.exportHTTPCollection(collection.id))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to export collection')
+    }
+  }
+
+  const importCollectionFile = async (file: File | undefined) => {
+    if (!file) return
+    if (!confirmDiscard()) return
+    setError('')
+    setNotice('')
+    try {
+      const created = await api.importHTTPCollection(parseHTTPCollectionDocument(JSON.parse(await file.text())))
+      await refresh()
+      setSelectedCollectionID(created.id)
+      setSelectedRequestID(created.requests?.[0]?.id ?? '')
+      if (workspaceName) setNotice(`Imported collections start unbound, so this one is listed under All Workspaces. Bind a stack to keep it in ${workspaceName}.`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to import collection')
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   const importCurl = async () => {
     if (!collection) return
     if (!confirmDiscard()) return
@@ -468,6 +505,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
           {collapsed.collections ? <PanelLeftOpen /> : <PanelLeftClose />}
         </button>
         <strong>Collections</strong>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" hidden data-testid="import-http-collection" onChange={event => { void importCollectionFile(event.target.files?.[0]) }} />
+        <button type="button" className="button small" data-testid="import-http-collection-button" onClick={() => fileInputRef.current?.click()}><Upload /> Import</button>
         <button type="button" className="button small" data-testid="new-http-collection" onClick={createCollection} disabled={creating}><Plus /> New</button>
       </div>
       {!collapsed.collections && !!notice && <p className="http-empty" data-testid="http-workspace-notice">{notice}</p>}
@@ -493,7 +532,10 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             </> : null}
           </div>
         </div>
-        <button type="button" className="button small" data-testid="delete-http-collection" onClick={removeCollection}><Trash2 /> Delete</button>
+        <div className="http-collection-actions">
+          <button type="button" className="button small" data-testid="export-http-collection" onClick={() => { void exportCollection() }}><Download /> Export</button>
+          <button type="button" className="button small" data-testid="delete-http-collection" onClick={removeCollection}><Trash2 /> Delete</button>
+        </div>
       </header>
       {error && <div className="http-error" role="alert">{error}</div>}
       <div className={`http-work${collapsed.requests ? ' http-requests-collapsed' : ''}`}>

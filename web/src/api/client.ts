@@ -1,4 +1,5 @@
 import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPRequest, HTTPRequestInput, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
+import type { HTTPCollectionDocument } from '../httpCollectionTransfer'
 
 export interface AgentShellApi {
   mode: 'live' | 'demo'
@@ -38,6 +39,8 @@ export interface AgentShellApi {
   deleteHTTPRequest(id: string): Promise<void>
   sendHTTPRequest(id: string): Promise<HTTPRequest>
   importHTTPRequest(collectionID: string, curl: string): Promise<HTTPRequest>
+  exportHTTPCollection(id: string): Promise<HTTPCollectionDocument>
+  importHTTPCollection(document: unknown): Promise<HTTPCollection>
   subscribe(onChange: (event?: string) => void): () => void
 }
 
@@ -121,6 +124,8 @@ export class HttpApi implements AgentShellApi {
   async deleteHTTPRequest(id: string) { await request(`/api/http-requests/${id}`, { method: 'DELETE' }) }
   sendHTTPRequest(id: string) { return request<HTTPRequest>(`/api/http-requests/${id}/send`, { method: 'POST' }) }
   importHTTPRequest(collectionID: string, curl: string) { return request<HTTPRequest>(`/api/http-collections/${collectionID}/import`, { method: 'POST', body: JSON.stringify({ curl }) }) }
+  exportHTTPCollection(id: string) { return request<HTTPCollectionDocument>(`/api/http-collections/${id}/export`) }
+  importHTTPCollection(document: unknown) { return request<HTTPCollection>('/api/http-collections/import', { method: 'POST', body: JSON.stringify(document) }) }
   subscribe(onChange: (event?: string) => void) {
     const source = new EventSource('/api/events')
     const handler = (event: Event) => onChange(event.type)

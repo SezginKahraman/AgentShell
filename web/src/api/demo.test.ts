@@ -92,6 +92,32 @@ describe('DemoApi', () => {
     expect(imported.url).toBe('{{API_URL}}/v1/hotels')
     expect(imported.body).toBe('{"city":"IST"}')
   })
+
+  it('exports an HTTP collection and imports a Postman collection', async () => {
+    const api = new DemoApi()
+    const exported = await api.exportHTTPCollection('http-hotel')
+    expect(exported.kind).toBe('agentshell.http_collection')
+    expect(exported.requests.some(item => item.name === 'Health')).toBe(true)
+    expect(JSON.stringify(exported)).not.toContain('http-hotel')
+
+    const imported = await api.importHTTPCollection({
+      info: {
+        name: 'Hotel Ads',
+        schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
+      },
+      item: [{
+        name: 'Auth',
+        item: [{
+          name: 'Login',
+          request: { method: 'POST', url: { raw: '{{API_URL}}/login' } },
+        }],
+      }],
+    })
+    expect(imported.id).not.toBe('http-hotel')
+    expect(imported.name).toBe('Hotel Ads')
+    expect(imported.requests?.[0]?.name).toBe('Auth / Login')
+    expect(imported.requests?.[0]?.url).toBe('{{API_URL}}/login')
+  })
 })
 
 async function apiSnapshot() { return new DemoApi().getSnapshot() }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -43,8 +44,16 @@ func (s *Server) httpCollectionsAPI(w http.ResponseWriter, r *http.Request, part
 		return
 	}
 	id := parts[0]
+	if len(parts) == 1 && id == "import" {
+		s.importHTTPCollection(w, r)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "import" {
 		s.importHTTPRequest(w, r, id)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "export" {
+		s.exportHTTPCollection(w, r, id)
 		return
 	}
 	if len(parts) > 1 {
@@ -171,6 +180,103 @@ func (s *Server) httpRequestsAPI(w http.ResponseWriter, r *http.Request, parts [
 	default:
 		method(w)
 	}
+}
+
+func (s *Server) exportHTTPCollection(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		method(w)
+		return
+	}
+	collection, err := s.store.HTTPCollection(r.Context(), id)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	doc := domain.ExportHTTPCollection(collection)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+domain.ExportHTTPCollectionFileName(doc.Name)+`"`)
+	respond(w, doc, nil)
+}
+
+func (s *Server) importHTTPCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		method(w)
+		return
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	doc, err := domain.ParseHTTPCollectionDocument(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ctx := r.Context()
+	lib, err := s.store.EnvironmentLibrary(ctx)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	listed, err := s.store.HTTPCollections(ctx)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	now := time.Now().UTC()
+	collection := domain.HTTPCollection{
+		ID:          runtimepkg.NewID("httpcol"),
+		Name:        doc.Name,
+		Description: doc.Description,
+		SortOrder:   len(listed),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if env := strings.TrimSpace(doc.Environment); env != "" {
+		if name, envErr := domain.NormalizeStackEnvironment(env, lib.Names); envErr == nil {
+			collection.Environment = name
+		}
+	}
+	if err = s.validateHTTPCollection(ctx, &collection); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err = s.store.SaveHTTPCollection(ctx, &collection); err != nil {
+		respond(w, nil, err)
+		return
+	}
+	for i, item := range doc.Requests {
+		request := domain.HTTPRequest{
+			ID:            runtimepkg.NewID("httpreq"),
+			CollectionID:  collection.ID,
+			Name:          item.Name,
+			Method:        item.Method,
+			URL:           item.URL,
+			Headers:       item.Headers,
+			Body:          item.Body,
+			BodyTemplates: item.BodyTemplates,
+			ActiveBodyID:  item.ActiveBodyID,
+			TimeoutMS:     item.TimeoutMS,
+			SortOrder:     i,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		if err = s.validateHTTPRequest(ctx, &request); err != nil {
+			_ = s.store.DeleteHTTPCollection(ctx, collection.ID)
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err = s.store.SaveHTTPRequest(ctx, &request); err != nil {
+			_ = s.store.DeleteHTTPCollection(ctx, collection.ID)
+			respond(w, nil, err)
+			return
+		}
+	}
+	saved, err := s.store.HTTPCollection(ctx, collection.ID)
+	if err == nil {
+		s.catalog("http_collection.imported", saved)
+	}
+	respondAction(w, saved, err)
 }
 
 func (s *Server) importHTTPRequest(w http.ResponseWriter, r *http.Request, collectionID string) {

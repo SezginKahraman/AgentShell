@@ -728,3 +728,24 @@ test('HTTP collection delete requires typing the collection name', async ({ page
   await page.getByTestId('delete-http-collection').click()
   await expect(page.getByTestId('http-collection-http-hotel')).toHaveCount(0)
 })
+
+test('HTTP collection export and Postman import', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'HTTP', exact: true }).click()
+  await expect(page.getByTestId('http-page')).toBeVisible()
+  await expect(page.getByTestId('http-collection-http-hotel')).toBeVisible()
+
+  const fileChooserPromise = page.waitForEvent('filechooser')
+  await page.getByTestId('import-http-collection-button').click()
+  const fileChooser = await fileChooserPromise
+  await fileChooser.setFiles('/Users/sezgin.kahraman/AgentShell/web/e2e/fixtures/hotel-ads.postman.json')
+  await expect(page.getByRole('button', { name: /Hotel Ads/ })).toBeVisible()
+  await expect(page.getByTestId('http-collection-name')).toHaveValue('Hotel Ads')
+  await expect(page.getByTestId('http-request-name')).toHaveValue('Auth / Login')
+  await expect(page.getByTestId('http-request-url')).toHaveValue('{{API_URL}}/login')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('export-http-collection').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('Hotel Ads.json')
+})

@@ -100,3 +100,97 @@ func TestHTTPCollectionCRUDAndSend(t *testing.T) {
 		t.Fatalf("delete status=%d", status)
 	}
 }
+
+func TestHTTPCollectionExportAndImport(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	var collection map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections", map[string]any{"name": "Hotel Meta API", "description": "Rates", "environment": "local"}, &collection); status != http.StatusCreated {
+		t.Fatalf("create status=%d body=%v", status, collection)
+	}
+	var created map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-requests", map[string]any{
+		"collection_id": collection["id"],
+		"name":          "List hotels",
+		"method":        "POST",
+		"url":           "{{API_URL}}/v1/hotels",
+		"headers":       map[string]string{"Accept": "application/json"},
+		"body":          `{"city":"IST"}`,
+		"timeout_ms":    5000,
+	}, &created); status != http.StatusCreated {
+		t.Fatalf("request status=%d body=%v", status, created)
+	}
+	var exported map[string]any
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/http-collections/"+collection["id"].(string)+"/export", nil, &exported); status != http.StatusOK {
+		t.Fatalf("export status=%d body=%v", status, exported)
+	}
+	if exported["kind"] != "agentshell.http_collection" || exported["name"] != "Hotel Meta API" || exported["stack_id"] != nil || exported["id"] != nil {
+		t.Fatalf("export=%v", exported)
+	}
+	reqs, _ := exported["requests"].([]any)
+	if len(reqs) != 1 {
+		t.Fatalf("export requests=%v", exported["requests"])
+	}
+	first, _ := reqs[0].(map[string]any)
+	if first["name"] != "List hotels" || first["id"] != nil || first["last_result"] != nil {
+		t.Fatalf("export request=%v", first)
+	}
+
+	var restored map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections/import", exported, &restored); status != http.StatusCreated {
+		t.Fatalf("reimport status=%d body=%v", status, restored)
+	}
+	if restored["id"] == collection["id"] || restored["name"] != "Hotel Meta API" || restored["stack_id"] != nil {
+		t.Fatalf("restored=%v", restored)
+	}
+	restoredReqs, _ := restored["requests"].([]any)
+	if len(restoredReqs) != 1 {
+		t.Fatalf("restored requests=%v", restored)
+	}
+	restoredReq, _ := restoredReqs[0].(map[string]any)
+	if restoredReq["id"] == created["id"] || restoredReq["url"] != "{{API_URL}}/v1/hotels" || restoredReq["body"] != `{"city":"IST"}` {
+		t.Fatalf("restored request=%v", restoredReq)
+	}
+
+	var postman map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections/import", map[string]any{
+		"info": map[string]any{
+			"name":   "Hotel Ads",
+			"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		},
+		"item": []map[string]any{{
+			"name": "Auth",
+			"item": []map[string]any{{
+				"name": "Login",
+				"request": map[string]any{
+					"method": "POST",
+					"header": []map[string]any{{"key": "Content-Type", "value": "application/json"}},
+					"auth":   map[string]any{"type": "bearer", "bearer": []map[string]string{{"key": "token", "value": "{{TOKEN}}"}}},
+					"url":    map[string]any{"raw": "{{API_URL}}/login"},
+				},
+			}},
+		}},
+	}, &postman); status != http.StatusCreated {
+		t.Fatalf("postman status=%d body=%v", status, postman)
+	}
+	if postman["name"] != "Hotel Ads" {
+		t.Fatalf("postman=%v", postman)
+	}
+	postmanReqs, _ := postman["requests"].([]any)
+	if len(postmanReqs) != 1 {
+		t.Fatalf("postman requests=%v", postman)
+	}
+	login, _ := postmanReqs[0].(map[string]any)
+	if login["name"] != "Auth / Login" || login["url"] != "{{API_URL}}/login" {
+		t.Fatalf("login=%v", login)
+	}
+	headers, _ := login["headers"].(map[string]any)
+	if headers["Authorization"] != "Bearer {{TOKEN}}" {
+		t.Fatalf("headers=%v", headers)
+	}
+
+	var failure map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections/import", map[string]any{"foo": 1}, &failure); status != http.StatusBadRequest {
+		t.Fatalf("unknown import status=%d body=%v", status, failure)
+	}
+}

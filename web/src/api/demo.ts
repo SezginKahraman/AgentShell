@@ -1,6 +1,7 @@
 import type { AgentShellApi } from './client'
 import type { CheckDefinition, CheckInput, Collection, CollectionInput, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPRequest, HTTPRequestInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
 import { httpCollectionVars, interpolateTemplate } from '../httpInterpolate'
+import { exportHTTPCollectionDocument, parseHTTPCollectionDocument } from '../httpCollectionTransfer'
 import { parseCurl, rewriteURLWithVars } from '../parseCurl'
 
 const now = Date.now()
@@ -312,6 +313,35 @@ export class DemoApi implements AgentShellApi {
 			timeout_ms: parsed.timeout_ms || 10000,
 			sort_order: collection.requests?.length ?? 0,
 		})
+	}
+  async exportHTTPCollection(id: string) {
+		const collection = httpCollections.find(value => value.id === id)
+		if (!collection) throw new Error('HTTP collection not found')
+		return exportHTTPCollectionDocument(collection)
+	}
+  async importHTTPCollection(document: unknown) {
+		const parsed = parseHTTPCollectionDocument(document)
+		const created = await this.createHTTPCollection({
+			name: parsed.name,
+			description: parsed.description,
+			environment: parsed.environment,
+			sort_order: httpCollections.length,
+		})
+		for (const [index, item] of parsed.requests.entries()) {
+			await this.createHTTPRequest({
+				collection_id: created.id,
+				name: item.name,
+				method: (item.method ?? 'GET') as HTTPRequest['method'],
+				url: item.url,
+				headers: item.headers,
+				body: item.body,
+				body_templates: item.body_templates,
+				active_body_id: item.active_body_id,
+				timeout_ms: item.timeout_ms,
+				sort_order: index,
+			})
+		}
+		return structuredClone(httpCollections.find(value => value.id === created.id)!)
 	}
   subscribe(onChange: () => void) { this.listeners.add(onChange); return () => this.listeners.delete(onChange) }
 }

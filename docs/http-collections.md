@@ -27,6 +27,8 @@ v1 does not dual-write requests and checks.
 - Deleting a stack clears the bind; the collection remains.
 - Dashboard **Delete** on a collection is hard delete of that collection and every request in it. The UI asks the operator to type the collection name before calling `DELETE /api/http-collections/{id}`. API and MCP delete immediately.
 - Dashboard **Delete request** asks for confirmation naming that request, then calls `DELETE /api/http-requests/{id}`. API and MCP delete immediately.
+- **Export** downloads the selected collection as portable JSON (`GET /api/http-collections/{id}/export`). The file has `kind: agentshell.http_collection`, name, description, environment, and requests (method, URL, headers, body, body templates, timeout). It omits ids, `stack_id`, `last_result`, and timestamps.
+- **Import** creates a new unbound collection from a file (`POST /api/http-collections/import`). It accepts that portable JSON or a Postman Collection v2.0/v2.1 export. Folders become `Folder / Request` names. Bearer and API-key auth become headers. `{{var}}` stays as written. Postman environments, scripts, GraphQL, file uploads, and OAuth are not imported. Secret values stay in Settings.
 
 ## Request
 

@@ -4,6 +4,7 @@ bin/
 
 web/node_modules/
 web/test-results/
+.playwright-github/
 web/playwright-report/
 web/*.tsbuildinfo
 web/vite.config.js
