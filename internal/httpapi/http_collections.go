@@ -345,6 +345,7 @@ func (s *Server) importHTTPRequest(w http.ResponseWriter, r *http.Request, colle
 func (s *Server) validateHTTPCollection(ctx context.Context, collection *domain.HTTPCollection) error {
 	collection.Name = strings.TrimSpace(collection.Name)
 	collection.Description = strings.TrimSpace(collection.Description)
+	collection.ProjectID = strings.TrimSpace(collection.ProjectID)
 	collection.StackID = strings.TrimSpace(collection.StackID)
 	collection.Environment = strings.ToLower(strings.TrimSpace(collection.Environment))
 	if collection.Name == "" {
@@ -364,12 +365,20 @@ func (s *Server) validateHTTPCollection(ctx context.Context, collection *domain.
 		}
 		collection.Environment = name
 	}
-	if collection.StackID != "" {
-		if _, err = s.store.Stack(ctx, collection.StackID); err != nil {
+	if collection.ProjectID != "" {
+		if _, err = s.store.Project(ctx, collection.ProjectID); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
-				return errors.New("unknown stack_id")
+				return errors.New("unknown project_id")
 			}
 			return err
+		}
+	}
+	if collection.StackID != "" {
+		if _, stackErr := s.store.Stack(ctx, collection.StackID); stackErr != nil {
+			if errors.Is(stackErr, store.ErrNotFound) {
+				return errors.New("unknown stack_id")
+			}
+			return stackErr
 		}
 	}
 	return nil
@@ -415,6 +424,7 @@ func (s *Server) validateHTTPRequest(ctx context.Context, request *domain.HTTPRe
 type httpCollectionPatch struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
+	ProjectID   *string `json:"project_id"`
 	StackID     *string `json:"stack_id"`
 	Environment *string `json:"environment"`
 	SortOrder   *int    `json:"sort_order"`
@@ -426,6 +436,9 @@ func (p httpCollectionPatch) apply(collection *domain.HTTPCollection) {
 	}
 	if p.Description != nil {
 		collection.Description = *p.Description
+	}
+	if p.ProjectID != nil {
+		collection.ProjectID = *p.ProjectID
 	}
 	if p.StackID != nil {
 		collection.StackID = *p.StackID

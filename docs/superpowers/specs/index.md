@@ -13,4 +13,5 @@ timestamp: 2026-08-17T14:15:00Z
 - [Stack environments](2026-08-21-stack-environments-design.md) — workspace named environments for stacks.
 - [HTTP collections](2026-08-21-http-collections-design.md) — Postman-like request catalog bound to a stack.
 - [UI workspace context](2026-08-21-ui-workspace-context-design.md) — Project as Slack-style dashboard context, independent of MCP root.
+- [Ownership versus visibility](2026-09-16-workspace-visibility-design.md) — `project_id` owner vs `visible_in` shortcuts; focus workspaces cannot own launchers.
 - [Environment secret keys](2026-08-31-environment-secret-keys-design.md) — Mark library keys secret so MCP and last_result show `***`.

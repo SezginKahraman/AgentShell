@@ -6,6 +6,7 @@ const sample: HTTPCollection = {
   id: 'httpcol_1',
   name: 'Hotel Meta API',
   description: 'Rates',
+  project_id: 'project_1',
   stack_id: 'stack_1',
   environment: 'local',
   requests: [{
@@ -33,6 +34,7 @@ describe('exportHTTPCollectionDocument', () => {
     expect(got.name).toBe('Hotel Meta API')
     expect(JSON.stringify(got)).not.toContain('httpcol_1')
     expect(JSON.stringify(got)).not.toContain('stack_1')
+    expect(JSON.stringify(got)).not.toContain('project_1')
     expect(JSON.stringify(got)).not.toContain('tok-live')
     expect(got.requests[0]).toMatchObject({
       name: 'List hotels',

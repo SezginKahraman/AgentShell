@@ -13,6 +13,7 @@ func sampleCollection() HTTPCollection {
 		ID:          "httpcol_1",
 		Name:        "Hotel Meta API",
 		Description: "Rates",
+		ProjectID:   "project_1",
 		StackID:     "stack_1",
 		Environment: "local",
 		SortOrder:   3,
@@ -49,7 +50,7 @@ func TestExportHTTPCollectionOmitsLocalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "httpcol_1") || strings.Contains(string(raw), "stack_1") || strings.Contains(string(raw), "tok-live") || strings.Contains(string(raw), "created_at") {
+	if strings.Contains(string(raw), "httpcol_1") || strings.Contains(string(raw), "stack_1") || strings.Contains(string(raw), "project_1") || strings.Contains(string(raw), "tok-live") || strings.Contains(string(raw), "created_at") {
 		t.Fatalf("export leaked local state: %s", raw)
 	}
 	if len(got.Requests) != 1 {

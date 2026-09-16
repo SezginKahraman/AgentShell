@@ -38,7 +38,8 @@ Catalog **collection** (existing) = folder for commands and stacks.
 
 - `name` — required.
 - `description` — optional.
-- `stack_id` — optional bind to one stack. Unknown id is 400. Deleting the stack clears the bind; the collection remains.
+- `project_id` — optional dashboard workspace (Project). Scoped lists use this field. Empty means All Workspaces only. A stack bind is not required. Unknown id is 400. Deleting the Project clears it. Bound collections without `project_id` inherit the stack’s Project on migrate.
+- `stack_id` — optional bind to one stack for interpolation. Unknown id is 400. Deleting the stack clears the bind; the collection remains. `project_id` (where the collection is listed) is independent of `stack_id` (what it interpolates from).
 - `environment` — optional library column used **only when unbound**. When bound, send uses the stack’s `environment` (not member pins). Empty unbound send uses `local` if that name exists, otherwise the first library name. `custom` is rejected.
 - `sort_order` — display order.
 
@@ -65,20 +66,21 @@ Send one request. Follow at most five redirects, each hop still `http`/`https` w
 
 ## Surfaces
 
-**Dashboard.** Overview → HTTP. Left: collections. Bound collections show the stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send, interpolated curl, last result, and copy actions for request/response/body). Selecting a collection lists requests. The editor is method + URL + headers + named body templates + Send. The response pane shows the last result, with collapsed multiline curl, a left-aligned body copy control, and Beautify for JSON/XML bodies. The request editor has the same Beautify control next to Save. Unbound collections still interpolate from the workspace library.
+**Dashboard.** Overview → HTTP. Left: collections. Each collection has a workspace picker and an optional stack bind, environment picker, Open stack, and curl. The stack drawer has an HTTP tab for bound requests (Send, interpolated curl, last result, and copy actions for request/response/body). Selecting a collection lists requests. Drag the grip on a collection or request row to persist `sort_order`. The editor is method + URL + headers + named body templates + Send. The response pane shows the last result, with collapsed multiline curl, a left-aligned body copy control, and Beautify for JSON/XML bodies. The request editor has the same Beautify control next to Save. Unbound collections still interpolate from the workspace library. The HTTP workspace stacks its rails when the content column is narrow so labels and actions do not overlap.
 
 **HTTP.** `GET/POST /api/http-collections`, `GET/PUT/DELETE /api/http-collections/{id}` (GET includes nested requests), `GET /api/http-collections/{id}/export` (portable JSON), `POST /api/http-collections/import` (portable JSON or Postman v2.0/v2.1), `POST /api/http-collections/{id}/import` (curl). `POST /api/http-requests`, `GET/PUT/DELETE /api/http-requests/{id}`, `POST /api/http-requests/{id}/send`. Snapshot includes `http_collections`.
 
-**MCP.** `list_http_collections`, `save_http_collection`, `update_http_collection`, `delete_http_collection`, `save_http_request`, `update_http_request`, `delete_http_request`, `import_http_request`, `run_http_request`. Tool text: do not confuse with catalog collections or checks; do not clone a stack per profile; interpolate from the library (and stack extras when bound); paste curl via `import_http_request`; when only the body differs, add a named `body_templates` entry with `update_http_request` instead of a second request.
+**MCP.** `list_http_collections`, `save_http_collection`, `update_http_collection`, `delete_http_collection`, `save_http_request`, `update_http_request`, `delete_http_request`, `import_http_request`, `run_http_request`. Tool text: do not confuse with catalog collections or checks; set `project_id` to place a collection in a dashboard workspace without binding a stack; do not clone a stack per profile; interpolate from the library (and stack extras when bound); paste curl via `import_http_request`; when only the body differs, add a named `body_templates` entry with `update_http_request` instead of a second request.
 
 ## Errors
 
 | Case | Behavior |
 | --- | --- |
-| Unknown `stack_id` or environment name | 400 |
+| Unknown `stack_id`, `project_id`, or environment name | 400 |
 | Invalid method, URL template, or placeholder | 400 |
 | Unresolved `{{KEY}}` | 400 |
 | Delete stack | Clear `stack_id` on bound collections |
+| Delete project | Clear `project_id` on collections |
 | Library PUT removes a name | Remap unbound collection `environment` like stacks |
 | Send network / non-success HTTP | Persist `last_result`; HTTP status of the AgentShell call is still 200 |
 

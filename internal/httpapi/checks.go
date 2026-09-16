@@ -270,6 +270,11 @@ func defaultCheck(check *domain.CheckDefinition) {
 }
 
 func (s *Server) validateCheck(ctx context.Context, check *domain.CheckDefinition) error {
+	ids, err := s.normalizeVisibleIn(ctx, "", check.VisibleIn)
+	if err != nil {
+		return err
+	}
+	check.VisibleIn = ids
 	if check.Name == "" || len(check.Name) > 200 {
 		return errors.New("check name is required and must be at most 200 characters")
 	}
@@ -402,6 +407,7 @@ type checkPatch struct {
 	TimeoutMS      *int               `json:"timeout_ms"`
 	Trigger        *string            `json:"trigger"`
 	Tags           *[]string          `json:"tags"`
+	VisibleIn      *[]string          `json:"visible_in,omitempty"`
 }
 
 func (patch checkPatch) apply(check *domain.CheckDefinition) {
@@ -452,5 +458,8 @@ func (patch checkPatch) apply(check *domain.CheckDefinition) {
 	}
 	if patch.Tags != nil {
 		check.Tags = *patch.Tags
+	}
+	if patch.VisibleIn != nil {
+		check.VisibleIn = *patch.VisibleIn
 	}
 }

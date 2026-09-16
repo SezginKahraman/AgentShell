@@ -132,6 +132,7 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		if e == nil {
 			c.ID = existing.ID
 			c.CreatedAt = existing.CreatedAt
+			c.VisibleIn = existing.VisibleIn
 			if commandComparable(existing, c) {
 				action = "reused"
 			} else {
@@ -143,7 +144,8 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		} else {
 			c.ID = catalogID("command", project.ID, firstNonEmpty(item.Key, c.Fingerprint))
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,parameters=excluded.parameters,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, js(c.Parameters), ts(c.CreatedAt), ts(c.UpdatedAt)); e != nil {
+		c.VisibleIn = domain.NormalizeVisibleIn(c.ProjectID, c.VisibleIn)
+		if _, e = tx.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,parameters=excluded.parameters,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, js(c.Parameters), js(c.VisibleIn), ts(c.CreatedAt), ts(c.UpdatedAt)); e != nil {
 			return result, e
 		}
 		if item.Key != "" {
@@ -224,6 +226,7 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		if e == nil {
 			v.ID = existing.ID
 			v.CreatedAt = existing.CreatedAt
+			v.VisibleIn = existing.VisibleIn
 			if reflect.DeepEqual(stackComparable(existing), stackComparable(v)) {
 				action = "reused"
 			} else {
@@ -234,7 +237,8 @@ func (s *Store) ApplyCatalog(ctx context.Context, b CatalogBundle, dryRun bool) 
 		} else {
 			v.ID = catalogID("stack", project.ID, v.StableKey)
 		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,environment=excluded.environment,env=excluded.env,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), v.Environment, js(v.Env), ts(v.CreatedAt), ts(v.UpdatedAt)); e != nil {
+		v.VisibleIn = domain.NormalizeVisibleIn(v.ProjectID, v.VisibleIn)
+		if _, e = tx.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,environment=excluded.environment,env=excluded.env,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), v.Environment, js(v.Env), js(v.VisibleIn), ts(v.CreatedAt), ts(v.UpdatedAt)); e != nil {
 			return result, e
 		}
 		appendResult(&result, action, CatalogResultItem{Type: "stack", Key: item.Key, ID: v.ID})
@@ -396,6 +400,8 @@ func commandComparable(a, b domain.CommandDefinition) bool {
 	b.CreatedAt = time.Time{}
 	a.UpdatedAt = time.Time{}
 	b.UpdatedAt = time.Time{}
+	a.VisibleIn = nil
+	b.VisibleIn = nil
 	return reflect.DeepEqual(a, b)
 }
 func stackComparable(v domain.Stack) any {

@@ -30,6 +30,7 @@ func TestStackStartInjectsNamedEnvironment(t *testing.T) {
 		FailurePolicy: "continue",
 		Environment:   "local",
 		Env:           map[string]map[string]string{"API_URL": {"prod": "http://stack-prod"}, "FEATURE": {"prod": "1"}},
+		VisibleIn:     []string{"focus-workspace"},
 		Members:       []domain.StackMember{{CommandID: command.ID, Env: map[string]string{"DEBUG": "1"}}},
 		CreatedAt:     now,
 		UpdatedAt:     now,

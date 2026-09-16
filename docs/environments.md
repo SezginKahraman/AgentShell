@@ -35,10 +35,10 @@ Setting the stack to a named environment clears pins and keeps overlays.
 
 ## Merge at stack start
 
-Later layers win:
+Later layers win. **References never participate.** Env always comes from the stack owner: the viewing workspace and `visible_in` shortcuts do not supply columns, values, or merge order.
 
 1. Launcher `CommandDefinition.Env`
-2. Library values for the member’s effective name
+2. Library values for the member’s effective name (the owner’s library; today one instance-wide document)
 3. Stack extras for that name
 4. Member overlay
 5. One-shot start parameters

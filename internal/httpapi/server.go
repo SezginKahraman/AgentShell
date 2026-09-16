@@ -527,8 +527,13 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request, parts []string
 		v.UpdatedAt = time.Now().UTC()
 		e = validateProject(&v)
 		if e == nil {
-			e = s.store.SaveProject(ctx, &v)
+			e = s.guardProjectKindChange(ctx, old, v)
 		}
+		if e != nil {
+			writeError(w, http.StatusBadRequest, e.Error())
+			return
+		}
+		e = s.store.SaveProject(ctx, &v)
 		if e == nil {
 			s.catalog("project.saved", v)
 		}
@@ -643,8 +648,8 @@ func (s *Server) validateCollection(ctx context.Context, v *domain.Collection) e
 		return errors.New("collection cannot be its own parent")
 	}
 	if v.ProjectID != "" {
-		if _, e := s.store.Project(ctx, v.ProjectID); e != nil {
-			return fmt.Errorf("project_id: %w", e)
+		if e := s.requireProductOwner(ctx, v.ProjectID, "catalog collections"); e != nil {
+			return e
 		}
 	}
 	if v.ParentID != "" {
@@ -778,7 +783,7 @@ func (s *Server) commands(w http.ResponseWriter, r *http.Request, parts []string
 	if len(parts) == 0 {
 		switch r.Method {
 		case http.MethodGet:
-			v, e := s.commandViewsFiltered(ctx, queryFilter(r, "project_id"), queryFilter(r, "collection_id"))
+			v, e := s.commandViewsFiltered(ctx, queryFilter(r, "project_id"), queryFilter(r, "collection_id"), queryFilter(r, "workspace_id"))
 			if e == nil {
 				v = filterCommandViews(v, r.URL.Query().Get("kind"), r.URL.Query()["tag"])
 			}
@@ -978,7 +983,7 @@ func (s *Server) stacks(w http.ResponseWriter, r *http.Request, parts []string) 
 	if len(parts) == 0 {
 		switch r.Method {
 		case http.MethodGet:
-			v, e := s.stackViewsFiltered(ctx, queryFilter(r, "project_id"), queryFilter(r, "collection_id"))
+			v, e := s.stackViewsFiltered(ctx, queryFilter(r, "project_id"), queryFilter(r, "collection_id"), queryFilter(r, "workspace_id"))
 			respond(w, v, e)
 		case http.MethodPost:
 			var input stackInput
@@ -1154,15 +1159,29 @@ type commandView struct {
 	StateConfidence   string                    `json:"state_confidence,omitempty"`
 	RunCount          int                       `json:"run_count"`
 	PortVerifications []domain.PortVerification `json:"port_verifications,omitempty"`
+	Origin            string                    `json:"origin,omitempty"`
 }
 
 func (s *Server) commandViews(ctx context.Context) ([]commandView, error) {
-	return s.commandViewsFiltered(ctx, nil, nil)
+	return s.commandViewsFiltered(ctx, nil, nil, nil)
 }
-func (s *Server) commandViewsFiltered(ctx context.Context, projectID, collectionID *string) ([]commandView, error) {
-	commands, err := s.store.CommandsFiltered(ctx, projectID, collectionID)
+func (s *Server) commandViewsFiltered(ctx context.Context, projectID, collectionID, workspaceID *string) ([]commandView, error) {
+	ownerFilter := projectID
+	if workspaceID != nil {
+		ownerFilter = nil
+	}
+	commands, err := s.store.CommandsFiltered(ctx, ownerFilter, collectionID)
 	if err != nil {
 		return nil, err
+	}
+	if workspaceID != nil {
+		filtered := commands[:0]
+		for _, c := range commands {
+			if domain.VisibleInWorkspace(c.ProjectID, c.VisibleIn, *workspaceID) {
+				filtered = append(filtered, c)
+			}
+		}
+		commands = filtered
 	}
 	runs, err := s.store.Runs(ctx, 1000)
 	if err != nil {
@@ -1176,7 +1195,11 @@ func (s *Server) commandViewsFiltered(ctx context.Context, projectID, collection
 	}
 	out := make([]commandView, 0, len(commands))
 	for _, c := range commands {
-		out = append(out, makeCommandView(c, byCommand[c.ID]))
+		v := makeCommandView(c, byCommand[c.ID])
+		if workspaceID != nil {
+			v.Origin = domain.VisibilityOrigin(c.ProjectID, *workspaceID)
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -1337,6 +1360,7 @@ type stackMemberView struct {
 	WaitFor           string                    `json:"wait_for"`
 	WaitTimeoutMS     int                       `json:"wait_timeout_ms"`
 	Name              string                    `json:"name"`
+	ProjectID         string                    `json:"project_id,omitempty"`
 	Status            string                    `json:"status"`
 	LifecycleMode     string                    `json:"lifecycle_mode,omitempty"`
 	ObservedState     string                    `json:"observed_state,omitempty"`
@@ -1351,6 +1375,8 @@ type stackMemberView struct {
 type stackView struct {
 	ID                  string                       `json:"id"`
 	ProjectID           string                       `json:"project_id,omitempty"`
+	VisibleIn           []string                     `json:"visible_in,omitempty"`
+	Origin              string                       `json:"origin,omitempty"`
 	CollectionID        string                       `json:"collection_id,omitempty"`
 	StableKey           string                       `json:"stable_key,omitempty"`
 	Name                string                       `json:"name"`
@@ -1366,18 +1392,32 @@ type stackView struct {
 	RunningCount        int                          `json:"running_count"`
 	TotalCount          int                          `json:"total_count"`
 	UnknownCount        int                          `json:"unknown_count,omitempty"`
+	ForeignMemberCount  int                          `json:"foreign_member_count,omitempty"`
 	Status              string                       `json:"status"`
 	CreatedAt           time.Time                    `json:"created_at"`
 	UpdatedAt           time.Time                    `json:"updated_at"`
 }
 
 func (s *Server) stackViews(ctx context.Context) ([]stackView, error) {
-	return s.stackViewsFiltered(ctx, nil, nil)
+	return s.stackViewsFiltered(ctx, nil, nil, nil)
 }
-func (s *Server) stackViewsFiltered(ctx context.Context, projectID, collectionID *string) ([]stackView, error) {
-	stacks, err := s.store.StacksFiltered(ctx, projectID, collectionID)
+func (s *Server) stackViewsFiltered(ctx context.Context, projectID, collectionID, workspaceID *string) ([]stackView, error) {
+	ownerFilter := projectID
+	if workspaceID != nil {
+		ownerFilter = nil
+	}
+	stacks, err := s.store.StacksFiltered(ctx, ownerFilter, collectionID)
 	if err != nil {
 		return nil, err
+	}
+	if workspaceID != nil {
+		filtered := stacks[:0]
+		for _, st := range stacks {
+			if domain.VisibleInWorkspace(st.ProjectID, st.VisibleIn, *workspaceID) {
+				filtered = append(filtered, st)
+			}
+		}
+		stacks = filtered
 	}
 	commands, err := s.commandViews(ctx)
 	if err != nil {
@@ -1389,7 +1429,11 @@ func (s *Server) stackViewsFiltered(ctx context.Context, projectID, collectionID
 	}
 	out := make([]stackView, 0, len(stacks))
 	for _, st := range stacks {
-		out = append(out, makeStackView(st, byID))
+		v := makeStackView(st, byID)
+		if workspaceID != nil {
+			v.Origin = domain.VisibilityOrigin(st.ProjectID, *workspaceID)
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -1409,10 +1453,13 @@ func (s *Server) stackView(ctx context.Context, id string) (stackView, error) {
 	return makeStackView(st, byID), nil
 }
 func makeStackView(st domain.Stack, commands map[string]commandView) stackView {
-	v := stackView{ID: st.ID, ProjectID: st.ProjectID, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, DependsOnStacks: append([]domain.StackPrerequisite(nil), st.DependsOnStacks...), Environment: st.Environment, Env: st.Env, ResolvedEnvironment: domain.StackResolvedEnvironment(st.Environment, st.Members), TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
+	v := stackView{ID: st.ID, ProjectID: st.ProjectID, VisibleIn: st.VisibleIn, CollectionID: st.CollectionID, StableKey: st.StableKey, Name: st.Name, Description: st.Description, StartStrategy: st.StartStrategy, FailurePolicy: st.FailurePolicy, Favorite: st.Favorite, Members: []stackMemberView{}, DependsOnStacks: append([]domain.StackPrerequisite(nil), st.DependsOnStacks...), Environment: st.Environment, Env: st.Env, ResolvedEnvironment: domain.StackResolvedEnvironment(st.Environment, st.Members), TotalCount: len(st.Members), Status: "stopped", CreatedAt: st.CreatedAt, UpdatedAt: st.UpdatedAt}
 	for _, m := range st.Members {
 		c := commands[m.CommandID]
-		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, DependsOn: m.DependsOn, WaitFor: m.WaitFor, WaitTimeoutMS: m.WaitTimeoutMS, Name: c.Name, Status: c.Status, LifecycleMode: c.LifecycleMode, ObservedState: c.ObservedState, StateConfidence: c.StateConfidence, StateDetail: c.StateDetail, PortVerifications: append([]domain.PortVerification(nil), c.PortVerifications...), ActiveRunID: c.ActiveRunID, CanStop: c.CanStop, Environment: m.Environment, Env: m.Env}
+		mv := stackMemberView{CommandID: m.CommandID, Position: m.Position, DependsOn: m.DependsOn, WaitFor: m.WaitFor, WaitTimeoutMS: m.WaitTimeoutMS, Name: c.Name, ProjectID: c.ProjectID, Status: c.Status, LifecycleMode: c.LifecycleMode, ObservedState: c.ObservedState, StateConfidence: c.StateConfidence, StateDetail: c.StateDetail, PortVerifications: append([]domain.PortVerification(nil), c.PortVerifications...), ActiveRunID: c.ActiveRunID, CanStop: c.CanStop, Environment: m.Environment, Env: m.Env}
+		if st.ProjectID != "" && c.ProjectID != "" && c.ProjectID != st.ProjectID {
+			v.ForeignMemberCount++
+		}
 		if c.LifecycleMode == "external" && c.ObservedState == "unknown" {
 			v.UnknownCount++
 		}
@@ -1522,6 +1569,7 @@ type commandPatch struct {
 	Shell             *string                    `json:"shell,omitempty"`
 	Kind              *string                    `json:"kind,omitempty"`
 	ProjectID         *string                    `json:"project_id,omitempty"`
+	VisibleIn         *[]string                  `json:"visible_in,omitempty"`
 	CollectionID      *string                    `json:"collection_id,omitempty"`
 	Description       *string                    `json:"description,omitempty"`
 	CreatedBy         *string                    `json:"created_by,omitempty"`
@@ -1557,6 +1605,9 @@ func (p commandPatch) apply(v *domain.CommandDefinition) {
 	}
 	if p.ProjectID != nil {
 		v.ProjectID = *p.ProjectID
+	}
+	if p.VisibleIn != nil {
+		v.VisibleIn = *p.VisibleIn
 	}
 	if p.CollectionID != nil {
 		v.CollectionID = *p.CollectionID
@@ -1607,6 +1658,7 @@ func (p commandPatch) apply(v *domain.CommandDefinition) {
 
 type stackInput struct {
 	ProjectID       string                       `json:"project_id,omitempty"`
+	VisibleIn       []string                     `json:"visible_in,omitempty"`
 	CollectionID    string                       `json:"collection_id,omitempty"`
 	StableKey       string                       `json:"stable_key,omitempty"`
 	Name            string                       `json:"name"`
@@ -1629,11 +1681,12 @@ func (v stackInput) stack() domain.Stack {
 			members[i] = domain.StackMember{CommandID: id, Position: i}
 		}
 	}
-	return domain.Stack{ProjectID: v.ProjectID, CollectionID: v.CollectionID, StableKey: v.StableKey, Name: v.Name, Description: v.Description, Members: members, StartStrategy: v.StartStrategy, FailurePolicy: v.FailurePolicy, Favorite: v.Favorite, DependsOnStacks: v.DependsOnStacks, Environment: v.Environment, Env: v.Env}
+	return domain.Stack{ProjectID: v.ProjectID, VisibleIn: v.VisibleIn, CollectionID: v.CollectionID, StableKey: v.StableKey, Name: v.Name, Description: v.Description, Members: members, StartStrategy: v.StartStrategy, FailurePolicy: v.FailurePolicy, Favorite: v.Favorite, DependsOnStacks: v.DependsOnStacks, Environment: v.Environment, Env: v.Env}
 }
 
 type stackPatch struct {
 	ProjectID       *string                       `json:"project_id,omitempty"`
+	VisibleIn       *[]string                     `json:"visible_in,omitempty"`
 	CollectionID    *string                       `json:"collection_id,omitempty"`
 	StableKey       *string                       `json:"stable_key,omitempty"`
 	Name            *string                       `json:"name,omitempty"`
@@ -1651,6 +1704,9 @@ type stackPatch struct {
 func (p stackPatch) apply(v *domain.Stack) {
 	if p.ProjectID != nil {
 		v.ProjectID = *p.ProjectID
+	}
+	if p.VisibleIn != nil {
+		v.VisibleIn = *p.VisibleIn
 	}
 	if p.CollectionID != nil {
 		v.CollectionID = *p.CollectionID
@@ -1743,7 +1799,11 @@ func validateProject(v *domain.Project) error {
 	if strings.TrimSpace(v.Name) == "" {
 		return errors.New("name is required")
 	}
-	if strings.TrimSpace(v.RootPath) == "" {
+	v.Kind = domain.NormalizeProjectKind(v.Kind)
+	if v.Kind != domain.ProjectKindProduct && v.Kind != domain.ProjectKindFocus {
+		return errors.New("kind must be product or focus")
+	}
+	if v.Kind == domain.ProjectKindProduct && strings.TrimSpace(v.RootPath) == "" {
 		return errors.New("root_path is required")
 	}
 	return nil
@@ -1826,11 +1886,14 @@ func validateCommand(v *domain.CommandDefinition) error {
 	return nil
 }
 func (s *Server) validateCommandRelations(ctx context.Context, v *domain.CommandDefinition) error {
-	if v.ProjectID != "" {
-		if _, e := s.store.Project(ctx, v.ProjectID); e != nil {
-			return fmt.Errorf("project_id: %w", e)
-		}
+	if e := s.requireProductOwner(ctx, v.ProjectID, "launchers"); e != nil {
+		return e
 	}
+	ids, e := s.normalizeVisibleIn(ctx, v.ProjectID, v.VisibleIn)
+	if e != nil {
+		return e
+	}
+	v.VisibleIn = ids
 	if v.CollectionID != "" {
 		c, e := s.store.Collection(ctx, v.CollectionID)
 		if e != nil {
@@ -2001,11 +2064,14 @@ func validateStackPrerequisites(ctx context.Context, s *store.Store, v *domain.S
 	return nil
 }
 func (s *Server) validateStackRelations(ctx context.Context, v *domain.Stack) error {
-	if v.ProjectID != "" {
-		if _, e := s.store.Project(ctx, v.ProjectID); e != nil {
-			return fmt.Errorf("project_id: %w", e)
-		}
+	if e := s.requireProductOwner(ctx, v.ProjectID, "stacks"); e != nil {
+		return e
 	}
+	ids, e := s.normalizeVisibleIn(ctx, v.ProjectID, v.VisibleIn)
+	if e != nil {
+		return e
+	}
+	v.VisibleIn = ids
 	if v.CollectionID != "" {
 		c, e := s.store.Collection(ctx, v.CollectionID)
 		if e != nil {
@@ -2016,13 +2082,56 @@ func (s *Server) validateStackRelations(ctx context.Context, v *domain.Stack) er
 		}
 	}
 	for _, m := range v.Members {
-		c, e := s.store.Command(ctx, m.CommandID)
-		if e != nil {
+		if _, e := s.store.Command(ctx, m.CommandID); e != nil {
 			return e
-		}
-		if v.ProjectID != "" && c.ProjectID != v.ProjectID {
-			return fmt.Errorf("command %s belongs to a different project", m.CommandID)
 		}
 	}
 	return nil
+}
+
+func (s *Server) normalizeVisibleIn(ctx context.Context, ownerID string, ids []string) ([]string, error) {
+	normalized := domain.NormalizeVisibleIn(ownerID, ids)
+	for _, id := range normalized {
+		if _, e := s.store.Project(ctx, id); e != nil {
+			return nil, fmt.Errorf("add a reference to see this item in that workspace: unknown workspace %s", id)
+		}
+	}
+	return normalized, nil
+}
+
+func (s *Server) requireProductOwner(ctx context.Context, projectID, resource string) error {
+	if projectID == "" {
+		return nil
+	}
+	p, e := s.store.Project(ctx, projectID)
+	if e != nil {
+		return fmt.Errorf("project_id: %w", e)
+	}
+	if !domain.ProjectCanOwnCatalog(p.Kind) {
+		return errors.New(domain.FocusCannotOwnMessage(p.Name, resource))
+	}
+	return nil
+}
+
+func (s *Server) guardProjectKindChange(ctx context.Context, old, next domain.Project) error {
+	if domain.ProjectCanOwnCatalog(next.Kind) || !domain.ProjectCanOwnCatalog(old.Kind) {
+		return nil
+	}
+	id := old.ID
+	commands, err := s.store.CommandsFiltered(ctx, &id, nil)
+	if err != nil {
+		return err
+	}
+	stacks, err := s.store.StacksFiltered(ctx, &id, nil)
+	if err != nil {
+		return err
+	}
+	collections, err := s.store.Collections(ctx, &id)
+	if err != nil {
+		return err
+	}
+	if len(commands)+len(stacks)+len(collections) == 0 {
+		return nil
+	}
+	return fmt.Errorf("focus workspace cannot own catalog items; keep %s as a product workspace or move ownership first", old.Name)
 }

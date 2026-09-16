@@ -317,7 +317,15 @@ func TestHTTPCollectionsCRUDAndStackUnbind(t *testing.T) {
 	if err = s.SaveStack(ctx, &stack); err != nil {
 		t.Fatal(err)
 	}
-	collection := domain.HTTPCollection{ID: "http-col", Name: "Hotel Meta API", StackID: stack.ID, SortOrder: 0, CreatedAt: now, UpdatedAt: now}
+	project := domain.Project{ID: "project-http", Name: "Hotel", RootPath: t.TempDir(), CreatedAt: now, UpdatedAt: now}
+	if err = s.SaveProject(ctx, &project); err != nil {
+		t.Fatal(err)
+	}
+	stack.ProjectID = project.ID
+	if err = s.SaveStack(ctx, &stack); err != nil {
+		t.Fatal(err)
+	}
+	collection := domain.HTTPCollection{ID: "http-col", Name: "Hotel Meta API", ProjectID: project.ID, StackID: stack.ID, SortOrder: 0, CreatedAt: now, UpdatedAt: now}
 	if err = s.SaveHTTPCollection(ctx, &collection); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +355,7 @@ func TestHTTPCollectionsCRUDAndStackUnbind(t *testing.T) {
 		t.Fatalf("legacy body hydrates default template: %+v err=%v", stored, err)
 	}
 	got, err := s.HTTPCollection(ctx, collection.ID)
-	if err != nil || got.StackID != stack.ID || len(got.Requests) != 2 {
+	if err != nil || got.StackID != stack.ID || got.ProjectID != project.ID || len(got.Requests) != 2 {
 		t.Fatalf("collection=%+v err=%v", got, err)
 	}
 	if got.Requests[0].URL != request.URL && got.Requests[1].URL != request.URL {

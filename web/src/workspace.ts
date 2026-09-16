@@ -1,4 +1,5 @@
-import type { CheckDefinition, HTTPCollection, Listener, Project, Run, SavedCommand, Snapshot, Stack } from './types'
+import type { Listener, Project, Snapshot } from './types'
+import { isVisibleIn } from './visibility'
 
 export type AppPage = 'dashboard' | 'runs' | 'ports' | 'logs' | 'history' | 'services' | 'tasks' | 'tests' | 'http' | 'stacks' | 'settings'
 
@@ -114,25 +115,27 @@ export function workspaceStatusLabel(stats: WorkspaceStats): string {
 
 export function scopeSnapshot(data: Snapshot, projectID: string | null): Snapshot {
   if (!projectID) return data
-  const commands = inProject(data.commands, projectID)
-  const stacks = inProject(data.stacks, projectID)
-  const collections = inProject(data.collections, projectID)
-  const runs = inProject(data.runs, projectID)
-  const history = inProject(data.history, projectID)
-  const commandIDs = new Set(commands.map(item => item.id))
+  const stacks = (data.stacks ?? []).filter(item => isVisibleIn(item, projectID))
   const stackIDs = new Set(stacks.map(item => item.id))
-  const runIDs = projectRunIDs(data, projectID)
+  const memberCommandIDs = new Set(stacks.flatMap(stack => (stack.members ?? stack.commands ?? []).map(member => member.command_id)))
+  const commands = (data.commands ?? []).filter(item => isVisibleIn(item, projectID) || memberCommandIDs.has(item.id))
+  const commandIDs = new Set(commands.map(item => item.id))
+  const collections = inProject(data.collections, projectID)
+  const runs = [...data.runs].filter(item => item.project_id === projectID || (item.command_definition_id ? commandIDs.has(item.command_definition_id) : false))
+  const history = [...data.history].filter(item => item.project_id === projectID || (item.command_definition_id ? commandIDs.has(item.command_definition_id) : false))
+  const runIDs = new Set([...runs, ...history].map(item => item.id))
   const ports = portsForRuns(data.ports, runIDs)
   const checks = data.checks.filter(check => {
+    if ((check.visible_in ?? []).includes(projectID)) return true
     if (check.owner_type === 'command') return commandIDs.has(check.owner_id)
     if (check.owner_type === 'stack') return stackIDs.has(check.owner_id)
     if (check.owner_type === 'run') return runIDs.has(check.owner_id)
     return false
   })
   const http_collections = (data.http_collections ?? []).filter(collection => {
+    if (collection.project_id) return collection.project_id === projectID
     if (!collection.stack_id) return false
-    const stack = data.stacks.find(item => item.id === collection.stack_id)
-    return stack?.project_id === projectID
+    return stackIDs.has(collection.stack_id)
   })
   return {
     ...data,

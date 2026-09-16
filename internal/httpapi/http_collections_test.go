@@ -194,3 +194,31 @@ func TestHTTPCollectionExportAndImport(t *testing.T) {
 		t.Fatalf("unknown import status=%d body=%v", status, failure)
 	}
 }
+
+func TestHTTPCollectionProjectIDWithoutStack(t *testing.T) {
+	srv, _ := testServer(t)
+	client := srv.Client()
+	var project map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/projects", map[string]any{"name": "Hotel Meta", "root_path": t.TempDir()}, &project); status != http.StatusCreated {
+		t.Fatalf("project status=%d body=%v", status, project)
+	}
+	var failure map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections", map[string]any{"name": "Bad", "project_id": "missing"}, &failure); status != http.StatusBadRequest {
+		t.Fatalf("unknown project status=%d body=%v", status, failure)
+	}
+	var collection map[string]any
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections", map[string]any{"name": "Rates", "project_id": project["id"]}, &collection); status != http.StatusCreated {
+		t.Fatalf("create status=%d body=%v", status, collection)
+	}
+	if collection["project_id"] != project["id"] || collection["stack_id"] != nil && collection["stack_id"] != "" {
+		t.Fatalf("created=%v", collection)
+	}
+	empty := ""
+	var updated map[string]any
+	if status := request(t, client, http.MethodPut, srv.URL+"/api/http-collections/"+collection["id"].(string), map[string]any{"project_id": empty}, &updated); status != http.StatusOK {
+		t.Fatalf("clear status=%d body=%v", status, updated)
+	}
+	if updated["project_id"] != nil && updated["project_id"] != "" {
+		t.Fatalf("cleared=%v", updated)
+	}
+}

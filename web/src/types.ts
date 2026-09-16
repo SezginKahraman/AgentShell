@@ -62,7 +62,7 @@ export interface SavedCommand {
   created_from_run_id?: string
   discovery_source?: string
 	fingerprint?: string
-	lifecycle_mode?: 'managed' | 'external'
+  lifecycle_mode?: 'managed' | 'external'
 	stop_command?: string
 	restart_command?: string
 	parameters?: CommandParameter[]
@@ -72,16 +72,18 @@ export interface SavedCommand {
 	state_confidence?: 'high' | 'observed' | 'action' | 'unknown'
 	port_verifications?: PortVerification[]
 	run_count?: number
+	visible_in?: string[]
+	origin?: 'owned' | 'referenced'
 }
 
 export interface CommandSource { available: boolean; path?: string; content?: string; truncated?: boolean; reason?: string }
 
 export interface EnvironmentLibrary { names: string[]; keys: string[]; secret_keys?: string[]; values?: Record<string, Record<string, string>> }
-export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; status?: RunStatus; lifecycle_mode?: 'managed' | 'external'; observed_state?: 'running' | 'stopped' | 'checking' | 'unknown'; state_confidence?: 'high' | 'observed' | 'action' | 'unknown'; state_detail?: string; port_verifications?: PortVerification[]; active_run_id?: string; can_stop?: boolean; environment?: string; env?: Record<string, string> }
+export interface StackMember { command_id: string; position?: number; depends_on?: string[]; wait_for?: 'spawn' | 'ready' | 'exit'; wait_timeout_ms?: number; name?: string; command?: SavedCommand; project_id?: string; status?: RunStatus; lifecycle_mode?: 'managed' | 'external'; observed_state?: 'running' | 'stopped' | 'checking' | 'unknown'; state_confidence?: 'high' | 'observed' | 'action' | 'unknown'; state_detail?: string; port_verifications?: PortVerification[]; active_run_id?: string; can_stop?: boolean; environment?: string; env?: Record<string, string> }
 export interface StackPrerequisite { stack_id: string; wait_timeout_ms?: number }
 export interface NeededStack { id: string; name: string; up_count: number; total_count: number; wait_timeout_ms: number }
-export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; depends_on_stacks?: StackPrerequisite[]; status?: RunStatus | 'partial'; running_count?: number; unknown_count?: number; total_count?: number; favorite?: boolean; project_id?: string; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop'; environment?: string; env?: Record<string, Record<string, string>>; resolved_environment?: string }
-export interface StackInput { name: string; description?: string; project_id?: string; collection_id?: string; members: StackMember[]; depends_on_stacks?: StackPrerequisite[]; favorite?: boolean; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop'; environment?: string; env?: Record<string, Record<string, string>> }
+export interface Stack { id: string; name: string; description?: string; members?: StackMember[]; commands?: StackMember[]; depends_on_stacks?: StackPrerequisite[]; status?: RunStatus | 'partial'; running_count?: number; unknown_count?: number; total_count?: number; favorite?: boolean; project_id?: string; visible_in?: string[]; origin?: 'owned' | 'referenced'; foreign_member_count?: number; collection_id?: string; created_by?: string; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop'; environment?: string; env?: Record<string, Record<string, string>>; resolved_environment?: string }
+export interface StackInput { name: string; description?: string; project_id?: string; visible_in?: string[]; collection_id?: string; members: StackMember[]; depends_on_stacks?: StackPrerequisite[]; favorite?: boolean; start_strategy?: 'parallel' | 'sequential'; failure_policy?: 'continue' | 'stop'; environment?: string; env?: Record<string, Record<string, string>> }
 export interface LogResponse { run_id: string; stream: string; content: string }
 
 export interface CheckDefinition {
@@ -105,11 +107,12 @@ export interface CheckDefinition {
 	created_by?: string
 	last_run?: Run
 	run_count?: number
+	visible_in?: string[]
 }
 export type CheckInput = Omit<CheckDefinition, 'id' | 'last_run' | 'run_count'>
 
-export interface Project { id: string; name: string; root_path: string; description?: string; created_at?: string; updated_at?: string }
-export interface ProjectInput { name: string; root_path: string }
+export interface Project { id: string; name: string; root_path: string; description?: string; kind?: 'product' | 'focus'; archive_at?: string; created_at?: string; updated_at?: string }
+export interface ProjectInput { name: string; root_path: string; kind?: 'product' | 'focus'; archive_at?: string }
 export interface Collection { id: string; name: string; project_id?: string; parent_id?: string; sort_order?: number; created_at?: string; updated_at?: string }
 export interface CollectionInput { name: string; project_id?: string; parent_id?: string; sort_order?: number }
 export interface PromoteRunInput { name: string; project_id?: string; collection_id?: string; kind?: 'service' | 'task'; tags?: string[]; favorite?: boolean; expected_ports?: ExpectedPort[] }
@@ -174,6 +177,7 @@ export interface HTTPCollection {
 	id: string
 	name: string
 	description?: string
+	project_id?: string
 	stack_id?: string
 	environment?: string
 	sort_order?: number

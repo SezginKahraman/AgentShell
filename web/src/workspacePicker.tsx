@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { ChevronDown, FolderOpen, Plus, Settings } from 'lucide-react'
 import type { Snapshot } from './types'
 import { workspaceStats, workspaceStatusLabel } from './workspace'
+import { focusWorkspaces, productWorkspaces, workspaceKind } from './visibility'
 
 export function WorkspacePicker({
   data,
@@ -76,17 +77,22 @@ export function WorkspacePicker({
       </span>
       <ChevronDown />
     </button>
-    {open && createPortal(<div ref={menu} className="workspace-picker-menu" role="listbox" aria-label="Switch workspace" style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}>
+      {open && createPortal(<div ref={menu} className="workspace-picker-menu" role="listbox" aria-label="Switch workspace" style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}>
       <div className="workspace-picker-heading">Switch workspace</div>
       <button type="button" role="option" aria-selected={!selectedID} className={!selectedID ? 'active' : ''} data-testid="workspace-option-all" onClick={() => choose(null)}>
         <span><strong>All Workspaces</strong><small>Unfiltered view across every project</small></span>
       </button>
-      {data.projects.map(project => {
-        const stats = workspaceStats(data, project.id)
-        return <button type="button" role="option" aria-selected={selectedID === project.id} className={selectedID === project.id ? 'active' : ''} data-testid={`workspace-option-${project.id}`} key={project.id} onClick={() => choose(project.id)}>
-          <span><strong>{project.name}</strong><small>{workspaceStatusLabel(stats)}</small></span>
-        </button>
-      })}
+      {(focusWorkspaces(data.projects).length ? [{ label: 'Product', items: productWorkspaces(data.projects) }, { label: 'Focus', items: focusWorkspaces(data.projects) }] : [{ label: '', items: data.projects }]).map(group => (
+        <div key={group.label || 'all'}>
+          {group.label ? <div className="workspace-picker-heading">{group.label}</div> : null}
+          {group.items.map(project => {
+            const stats = workspaceStats(data, project.id)
+            return <button type="button" role="option" aria-selected={selectedID === project.id} className={selectedID === project.id ? 'active' : ''} data-testid={`workspace-option-${project.id}`} key={project.id} onClick={() => choose(project.id)}>
+              <span><strong>{project.name}</strong><small>{workspaceKind(project) === 'focus' ? 'Focus · ' : ''}{workspaceStatusLabel(stats)}</small></span>
+            </button>
+          })}
+        </div>
+      ))}
       <div className="workspace-picker-footer">
         <button type="button" data-testid="workspace-new" onClick={() => { setOpen(false); onNew() }}><Plus /> New workspace</button>
         <button type="button" data-testid="workspace-manage" onClick={() => { setOpen(false); onManage() }}><Settings /> Manage workspaces</button>
@@ -95,19 +101,25 @@ export function WorkspacePicker({
   </div>
 }
 
-export function WorkspaceCreateDialog({ close, submit, busy }: { close: () => void; submit: (input: { name: string; root_path: string }) => void; busy: boolean }) {
+export function WorkspaceCreateDialog({ close, submit, busy }: { close: () => void; submit: (input: { name: string; root_path: string; kind?: 'product' | 'focus' }) => void; busy: boolean }) {
   const [name, setName] = useState('')
   const [root, setRoot] = useState('')
+  const [kind, setKind] = useState<'product' | 'focus'>('product')
+  const canSubmit = !!name.trim() && (kind === 'focus' || !!root.trim())
   return <>
     <button className="modal-scrim" aria-label="Cancel workspace" onClick={close} />
-    <form className="modal collection-modal" role="dialog" aria-modal="true" aria-labelledby="workspace-create-title" data-testid="workspace-create-dialog" onSubmit={event => { event.preventDefault(); submit({ name: name.trim(), root_path: root.trim() }) }}>
+    <form className="modal collection-modal" role="dialog" aria-modal="true" aria-labelledby="workspace-create-title" data-testid="workspace-create-dialog" onSubmit={event => { event.preventDefault(); submit({ name: name.trim(), root_path: kind === 'focus' ? '' : root.trim(), kind }) }}>
       <h2 id="workspace-create-title">New workspace</h2>
-      <p>A workspace is an AgentShell project: one named root folder. MCP still uses its own configured root.</p>
+      <p>A product workspace owns launchers and stacks. A focus workspace is temporary: it can only reference them and keep its own HTTP collections.</p>
       <label>Name<input autoFocus value={name} onChange={event => setName(event.target.value)} required /></label>
-      <label>Root directory<input value={root} onChange={event => setRoot(event.target.value)} placeholder="/Users/me/projects/hotel" required /></label>
+      <fieldset className="workspace-kind-picker"><legend>Kind</legend>
+        <label><input type="radio" name="workspace-kind" checked={kind === 'product'} onChange={() => setKind('product')} /> Product</label>
+        <label><input type="radio" name="workspace-kind" checked={kind === 'focus'} onChange={() => setKind('focus')} /> Focus</label>
+      </fieldset>
+      {kind === 'product' && <label>Root directory<input value={root} onChange={event => setRoot(event.target.value)} placeholder="/Users/me/projects/hotel" required /></label>}
       <footer>
         <button type="button" className="button" onClick={close}>Cancel</button>
-        <button className="button primary" data-testid="confirm-workspace" disabled={busy || !name.trim() || !root.trim()}><Plus /> Create</button>
+        <button className="button primary" data-testid="confirm-workspace" disabled={busy || !canSubmit}><Plus /> Create</button>
       </footer>
     </form>
   </>
@@ -136,7 +148,7 @@ export function WorkspaceManageDialog({
           const stats = workspaceStats(data, project.id)
           return <button type="button" key={project.id} className={selectedID === project.id ? 'active' : ''} data-testid={`manage-workspace-${project.id}`} onClick={() => { onSelect(project.id); close() }}>
             <FolderOpen />
-            <span><strong>{project.name}</strong><small>{project.root_path} · {workspaceStatusLabel(stats)}</small></span>
+            <span><strong>{project.name}</strong><small>{workspaceKind(project) === 'focus' ? 'Focus' : 'Product'}{project.root_path ? ` · ${project.root_path}` : ''} · {workspaceStatusLabel(stats)}</small></span>
           </button>
         })}
         {!data.projects.length && <p>No workspaces yet. Create one from a root folder.</p>}

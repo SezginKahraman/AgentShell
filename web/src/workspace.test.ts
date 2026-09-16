@@ -21,7 +21,12 @@ const snapshot = (patch: Partial<Snapshot> = {}): Snapshot => ({
     { id: 'check-stack', owner_type: 'stack', owner_id: 'stack-internal', name: 'health', kind: 'http' },
     { id: 'check-other', owner_type: 'command', owner_id: 'cmd-web', name: 'web', kind: 'command' },
   ],
-  http_collections: [{ id: 'http-hotel', name: 'Hotel', stack_id: 'stack-internal' }, { id: 'http-loose', name: 'Loose' }],
+  http_collections: [
+    { id: 'http-hotel', name: 'Hotel', stack_id: 'stack-internal' },
+    { id: 'http-owned', name: 'Owned', project_id: 'project-api' },
+    { id: 'http-other', name: 'Other', project_id: 'project-web' },
+    { id: 'http-loose', name: 'Loose' },
+  ],
   ...patch,
 })
 
@@ -80,8 +85,20 @@ describe('workspace scope', () => {
     expect(scoped.history).toEqual([])
     expect(scoped.ports.map(item => item.port)).toEqual([8080])
     expect(scoped.checks.map(item => item.id)).toEqual(['check-stack'])
-    expect(scoped.http_collections?.map(item => item.id)).toEqual(['http-hotel'])
+    expect(scoped.http_collections?.map(item => item.id)).toEqual(['http-hotel', 'http-owned'])
     expect(scoped.summary).toEqual({ running: 1, ports: 1, failed: 0, commands: 0 })
+  })
+
+  it('includes referenced stacks and their members without moving ownership', () => {
+    const data = snapshot({
+      stacks: [
+        { id: 'stack-internal', name: 'Internal', project_id: 'project-api' },
+        { id: 'stack-debug', name: 'HOT-39435 debug', project_id: 'project-api', visible_in: ['project-web'], members: [{ command_id: 'cmd-api' }] },
+      ],
+    })
+    const scoped = scopeSnapshot(data, 'project-web')
+    expect(scoped.stacks.map(item => item.id)).toEqual(['stack-debug'])
+    expect(scoped.commands.map(item => item.id)).toEqual(['cmd-api'])
   })
 
   it('counts ports identically in the picker badge and the scoped snapshot', () => {

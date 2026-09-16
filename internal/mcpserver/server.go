@@ -59,7 +59,7 @@ func newServer(normalized normalizedConfig, client *daemonClient, initialized fu
 		Title:   "AgentShell local runtime manager",
 		Version: normalized.version,
 	}, &mcp.ServerOptions{
-		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When a launcher needs runtime input, define parameters on the saved command. Use type=secret with binding=stdin for credentials; never place real secrets in command, env, defaults, catalog metadata, descriptions, logs, or chat. Prefer asking the user to enter secrets in the AgentShell dashboard; only pass parameters to a start tool when the user explicitly supplied the values, and never repeat them. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. Attach reusable verifications with save_check: native HTTP checks default to http_scope=local; set http_scope=remote explicitly for a remote test environment and describe the target clearly. For bash or .sh verification, first save a managed task and reference it with kind=command. A check owner may be a stack, command, or Run. after_ready is stack-only and must not require interactive parameters. Never store credentials in HTTP check URLs, headers, or bodies, and do not aim remote checks at infrastructure metadata or control-plane endpoints. Every check execution is a normal Run with inspectable logs. For an API client, use HTTP collections (list_http_collections / save_http_request / import_http_request / run_http_request), not catalog collections and not checks; bind stack_id and write {{API_URL}} instead of cloning a stack per profile. Mark reusable HTTP tokens as secret_keys in the workspace library; list_environments and get_workspace_context show *** for those cells, humans set the real values in Settings, and agents must send with run_http_request instead of curling the secret from bash. If two HTTP cases share method, URL, and headers and differ only in body (for example another hotel id), add a named body_templates entry on the existing request with update_http_request; do not save_http_request a duplicate. When the user pasted curl, import_http_request. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime.",
+		Instructions:       "Route shell commands through AgentShell tools instead of native terminal tools. This keeps every AI invocation observable and controllable. Use run for one-off commands, start_command for saved launchers, and start_stack for saved groups. Foreground services use lifecycle_mode=managed and must not get a separate stop launcher. Detached resources such as docker compose up -d use lifecycle_mode=external with stop_command on the same launcher. When a launcher needs runtime input, define parameters on the saved command. Use type=secret with binding=stdin for credentials; never place real secrets in command, env, defaults, catalog metadata, descriptions, logs, or chat. Prefer asking the user to enter secrets in the AgentShell dashboard; only pass parameters to a start tool when the user explicitly supplied the values, and never repeat them. When expected_ports are configured for an external launcher, AgentShell records closed-to-listening transitions as verified health without claiming process ownership; pre-existing ports are never attributed. For DB -> API -> UI ordering, define stack members with depends_on plus wait_for=ready/exit and a wait_timeout_ms; selected members automatically include dependencies. Attach reusable verifications with save_check: native HTTP checks default to http_scope=local; set http_scope=remote explicitly for a remote test environment and describe the target clearly. For bash or .sh verification, first save a managed task and reference it with kind=command. A check owner may be a stack, command, or Run. after_ready is stack-only and must not require interactive parameters. Never store credentials in HTTP check URLs, headers, or bodies, and do not aim remote checks at infrastructure metadata or control-plane endpoints. Every check execution is a normal Run with inspectable logs. For an API client, use HTTP collections (list_http_collections / save_http_request / import_http_request / run_http_request), not catalog collections and not checks; bind stack_id and write {{API_URL}} instead of cloning a stack per profile. Mark reusable HTTP tokens as secret_keys in the workspace library; list_environments and get_workspace_context show *** for those cells, humans set the real values in Settings, and agents must send with run_http_request instead of curling the secret from bash. If two HTTP cases share method, URL, and headers and differ only in body (for example another hotel id), add a named body_templates entry on the existing request with update_http_request; do not save_http_request a duplicate. When the user pasted curl, import_http_request. When the user requests a project with collections and several launchers, prefer apply_catalog with dry_run first so project_id and collection_id relationships are applied atomically. With individual save/update tools, always pass the returned collection_id to every requested command and stack, then verify with list_commands/list_stacks. Before starting a service, prefer list_commands/list_runs so already_running responses can be handled without duplicate processes. A direct Run wait_timeout_ms limits the MCP response wait; a stack member wait_timeout_ms is its real orchestration timeout. run_timeout_ms limits command lifetime. project_id is the single owner; visible_in lists extra workspaces that can see a stack, launcher, or check. Removing a reference does not delete the item. Env merge never uses the viewing workspace: stack environment, the owner's library, stack extras, then member overlay. Focus workspaces cannot own launchers or stacks; add a reference instead of copying.",
 		InitializedHandler: initialized,
 	})
 	registerRuntimeTools(server, client)
@@ -360,10 +360,11 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, "/api/catalog/apply", nil, payload)
 		})
 
-	addTool(server, "list_commands", "List saved commands", toolIntent+"List reusable AgentShell service and task launchers, including whether each is already running.", readOnly("List saved commands"), ListCommandsInput.validate,
+	addTool(server, "list_commands", "List saved commands", toolIntent+"List reusable AgentShell service and task launchers, including whether each is already running. Pass workspace_id to list owned or referenced launchers; each row then includes origin owned or referenced.", readOnly("List saved commands"), ListCommandsInput.validate,
 		func(ctx context.Context, input ListCommandsInput) (map[string]any, error) {
 			query := make(url.Values)
 			setQuery(query, "project_id", input.ProjectID)
+			setQuery(query, "workspace_id", input.WorkspaceID)
 			setQuery(query, "kind", input.Kind)
 			for _, tag := range input.Tags {
 				query.Add("tag", tag)
@@ -426,9 +427,11 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.waitForRun(ctx, result, input.WaitFor, input.WaitTimeoutMS)
 		})
 
-	addTool(server, "list_stacks", "List stacks", toolIntent+"List reusable groups of saved commands and their aggregate/member runtime states, including resolved_environment (a named profile or custom when member pins differ).", readOnly("List stacks"), nil,
-		func(ctx context.Context, _ EmptyInput) (map[string]any, error) {
-			return client.do(ctx, http.MethodGet, "/api/stacks", nil, nil)
+	addTool(server, "list_stacks", "List stacks", toolIntent+"List reusable groups of saved commands and their aggregate/member runtime states, including resolved_environment (a named profile or custom when member pins differ). Pass workspace_id to list stacks owned by or referenced into that workspace; each row includes origin owned or referenced. project_id remains the single owner; add visible_in to see a stack in another workspace instead of copying it.", readOnly("List stacks"), ListStacksInput.validate,
+		func(ctx context.Context, input ListStacksInput) (map[string]any, error) {
+			query := make(url.Values)
+			setQuery(query, "workspace_id", input.WorkspaceID)
+			return client.do(ctx, http.MethodGet, "/api/stacks", query, nil)
 		})
 
 	addTool(server, "list_environments", "List environments", toolIntent+"Read the workspace environment library: named columns such as local and prod, keys defined once, and their values. Keys in secret_keys appear as *** so tokens stay out of chat; the key names remain for {{KEY}} interpolation.", readOnly("List environments"), nil,
@@ -441,7 +444,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPut, "/api/environments?redact_secrets=1", nil, input)
 		})
 
-	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Use depends_on_stacks with persisted stack_id values when another stack, including shared infrastructure in another project, must be up first. Set environment and optional env extras instead of cloning the stack per profile. Preserve project_id and collection_id. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
+	addTool(server, "save_stack", "Save stack", toolIntent+"Create a reusable named group of saved commands. Use members with depends_on, wait_for, and wait_timeout_ms for DB -> API -> UI style orchestration; command_ids remains a simple ordered shorthand. Use depends_on_stacks with persisted stack_id values when another stack, including shared infrastructure in another project, must be up first. Set environment and optional env extras instead of cloning the stack per profile. Preserve project_id as the owner. Use visible_in to list extra workspaces that should see this stack; do not copy the stack. Saving never starts members.", mutating("Save stack", false, false), SaveStackInput.validate,
 		func(ctx context.Context, input SaveStackInput) (map[string]any, error) {
 			payload, err := stackPayload(input)
 			if err != nil {
@@ -450,7 +453,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, "/api/stacks", nil, payload)
 		})
 
-	addTool(server, "update_stack", "Update stack", toolIntent+"Update metadata or replace members and their dependency/readiness configuration without starting the stack. Dependency graphs must be acyclic.", mutating("Update stack", false, false), UpdateStackInput.validate,
+	addTool(server, "update_stack", "Update stack", toolIntent+"Update metadata or replace members and their dependency/readiness configuration without starting the stack. Dependency graphs must be acyclic. Members may belong to another project. Set visible_in to add or remove workspace shortcuts; removing a reference does not delete the stack. project_id stays the owner.", mutating("Update stack", false, false), UpdateStackInput.validate,
 		func(ctx context.Context, input UpdateStackInput) (map[string]any, error) {
 			patch, err := stackPayload(input)
 			if err != nil {
@@ -546,7 +549,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodGet, "/api/http-collections", nil, nil)
 		})
 
-	addTool(server, "save_http_collection", "Save HTTP collection", toolIntent+"Create an HTTP request collection. Optionally bind stack_id so Send interpolates {{KEY}} from that stack's environment and extras. This executes nothing and is not a catalog collection folder.", mutating("Save HTTP collection", false, false), SaveHTTPCollectionInput.validate,
+	addTool(server, "save_http_collection", "Save HTTP collection", toolIntent+"Create an HTTP request collection. Set project_id to list it in that dashboard workspace; a stack bind is not required. Optionally bind stack_id so Send interpolates {{KEY}} from that stack's environment and extras. This executes nothing and is not a catalog collection folder.", mutating("Save HTTP collection", false, false), SaveHTTPCollectionInput.validate,
 		func(ctx context.Context, input SaveHTTPCollectionInput) (map[string]any, error) {
 			payload, err := objectPayload(input)
 			if err != nil {
@@ -555,7 +558,7 @@ func registerCatalogTools(server *mcp.Server, client *daemonClient) {
 			return client.do(ctx, http.MethodPost, "/api/http-collections", nil, payload)
 		})
 
-	addTool(server, "update_http_collection", "Update HTTP collection", toolIntent+"Update an HTTP collection's name, stack bind, or unbound environment without sending requests.", mutating("Update HTTP collection", false, false), UpdateHTTPCollectionInput.validate,
+	addTool(server, "update_http_collection", "Update HTTP collection", toolIntent+"Update an HTTP collection's name, workspace project_id, stack bind, or unbound environment without sending requests. project_id scopes the dashboard list; stack_id is only for interpolation.", mutating("Update HTTP collection", false, false), UpdateHTTPCollectionInput.validate,
 		func(ctx context.Context, input UpdateHTTPCollectionInput) (map[string]any, error) {
 			payload, err := objectPayload(input, "id")
 			if err != nil {
@@ -647,15 +650,15 @@ var commandFields = []string{
 	"project_id", "collection_id", "name", "command", "cwd", "shell", "kind",
 	"concurrency_policy", "env", "expected_ports", "tags", "favorite",
 	"lifecycle_mode", "stop_command", "restart_command",
-	"parameters",
+	"parameters", "visible_in",
 }
 
-var projectFields = []string{"name", "root_path"}
+var projectFields = []string{"name", "root_path", "kind", "archive_at"}
 
 var collectionFields = []string{"project_id", "name", "parent_id", "sort_order"}
 
 var stackFields = []string{
-	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members", "depends_on_stacks", "environment", "env",
+	"project_id", "collection_id", "name", "description", "start_strategy", "failure_policy", "favorite", "members", "depends_on_stacks", "environment", "env", "visible_in",
 }
 
 func runtimePayload(input RunInput) (map[string]any, error) {

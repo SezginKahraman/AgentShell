@@ -10,8 +10,8 @@ tags: [workspace, sidebar, ui]
 
 The logo row is followed by a permanent workspace picker. This is not a sidebar page.
 
-1. Click the picker under **AgentShell**. The menu lists **All Workspaces** and every Project.
-2. Choose a Project. The URL becomes `/w/{slug}` (or `/w/{slug}/logs` if you were on Logs). Every list filters to that Project.
+1. Click the picker under **AgentShell**. The menu lists **All Workspaces**, then product workspaces, then focus workspaces when any exist.
+2. Choose a Project. The URL becomes `/w/{slug}` (or `/w/{slug}/logs` if you were on Logs). Every list filters to items owned by that Project or referenced into it.
 3. Choose **All Workspaces** to restore the unfiltered snapshot. The URL drops the `/w/...` prefix.
 4. Use **New workspace** to create a Project from a name and root folder. **Manage workspaces** lists roots without leaving the current page.
 
@@ -19,4 +19,4 @@ Refresh and back/forward keep the same workspace because it lives in the URL. Th
 
 This picker does not change MCP `get_workspace_context`. Cursor still sends the `-workspace-root` it was started with.
 
-Related: [UI workspace as application context](../superpowers/specs/2026-08-21-ui-workspace-context-design.md), [collapse the sidebar](collapse-sidebar.md).
+Related: [UI workspace as application context](../superpowers/specs/2026-08-21-ui-workspace-context-design.md), [share a stack across workspaces](share-across-workspaces.md), [collapse the sidebar](collapse-sidebar.md).

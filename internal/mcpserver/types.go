@@ -602,13 +602,24 @@ func validateCollectionCycles(collections []ApplyCatalogCollection) error {
 }
 
 type SaveProjectInput struct {
-	Name     string `json:"name" jsonschema:"Human-readable local project name"`
-	RootPath string `json:"root_path" jsonschema:"Absolute local project root used by saved commands"`
+	Name      string `json:"name" jsonschema:"Human-readable local project name"`
+	RootPath  string `json:"root_path,omitempty" jsonschema:"Absolute local project root used by saved commands; required for product workspaces, omitted for focus workspaces"`
+	Kind      string `json:"kind,omitempty" jsonschema:"product for a long-lived owning workspace or focus for a temporary workspace that can only reference catalog items"`
+	ArchiveAt string `json:"archive_at,omitempty" jsonschema:"Optional RFC3339 archive date for a focus workspace"`
 }
 
 func (in SaveProjectInput) validate() error {
 	if err := required("name", in.Name); err != nil {
 		return err
+	}
+	if err := oneOf("kind", in.Kind, "", "product", "focus"); err != nil {
+		return err
+	}
+	if in.Kind == "focus" {
+		if in.RootPath != "" && !strings.HasPrefix(in.RootPath, "/") {
+			return fmt.Errorf("root_path must be an absolute path")
+		}
+		return nil
 	}
 	if err := required("root_path", in.RootPath); err != nil {
 		return err
@@ -620,9 +631,11 @@ func (in SaveProjectInput) validate() error {
 }
 
 type UpdateProjectInput struct {
-	ID       string  `json:"id" jsonschema:"Saved project identifier"`
-	Name     *string `json:"name,omitempty" jsonschema:"New human-readable project name"`
-	RootPath *string `json:"root_path,omitempty" jsonschema:"New absolute local project root"`
+	ID        string  `json:"id" jsonschema:"Saved project identifier"`
+	Name      *string `json:"name,omitempty" jsonschema:"New human-readable project name"`
+	RootPath  *string `json:"root_path,omitempty" jsonschema:"New absolute local project root"`
+	Kind      *string `json:"kind,omitempty" jsonschema:"product or focus"`
+	ArchiveAt *string `json:"archive_at,omitempty" jsonschema:"Optional RFC3339 archive date; empty clears it"`
 }
 
 func (in UpdateProjectInput) validate() error {
@@ -634,20 +647,43 @@ func (in UpdateProjectInput) validate() error {
 			return err
 		}
 	}
-	if in.RootPath != nil && !strings.HasPrefix(*in.RootPath, "/") {
+	if in.RootPath != nil && *in.RootPath != "" && !strings.HasPrefix(*in.RootPath, "/") {
 		return fmt.Errorf("root_path must be an absolute path")
+	}
+	if in.Kind != nil {
+		if err := oneOf("kind", *in.Kind, "product", "focus"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
+type ListStacksInput struct {
+	WorkspaceID string `json:"workspace_id,omitempty" jsonschema:"Optional workspace visibility filter: owned or referenced. Each row includes origin owned or referenced"`
+}
+
+func (in ListStacksInput) validate() error {
+	if in.WorkspaceID == "" {
+		return nil
+	}
+	return identifier("workspace_id", in.WorkspaceID)
+}
+
 type ListCommandsInput struct {
-	ProjectID string   `json:"project_id,omitempty" jsonschema:"Optional project identifier filter"`
-	Kind      string   `json:"kind,omitempty" jsonschema:"Optional command kind: service or task"`
-	Tags      []string `json:"tags,omitempty" jsonschema:"Optional tags that returned commands must match"`
+	ProjectID   string   `json:"project_id,omitempty" jsonschema:"Optional owning project identifier filter"`
+	WorkspaceID string   `json:"workspace_id,omitempty" jsonschema:"Optional workspace visibility filter: owned or referenced. Each row includes origin owned or referenced"`
+	Kind        string   `json:"kind,omitempty" jsonschema:"Optional command kind: service or task"`
+	Tags        []string `json:"tags,omitempty" jsonschema:"Optional tags that returned commands must match"`
 }
 
 func (in ListCommandsInput) validate() error {
-	return oneOf("kind", in.Kind, "", "service", "task")
+	if err := oneOf("kind", in.Kind, "", "service", "task"); err != nil {
+		return err
+	}
+	if in.WorkspaceID != "" {
+		return identifier("workspace_id", in.WorkspaceID)
+	}
+	return nil
 }
 
 type SaveCommandInput struct {
@@ -667,6 +703,7 @@ type SaveCommandInput struct {
 	StopCommand       string             `json:"stop_command,omitempty" jsonschema:"Required stop action for external lifecycle; do not create a separate stop launcher"`
 	RestartCommand    string             `json:"restart_command,omitempty" jsonschema:"Optional restart action for external lifecycle; omitted means stop then start"`
 	Parameters        []CommandParameter `json:"parameters,omitempty" jsonschema:"Runtime input definitions. For secrets use type=secret and binding=stdin; never include a secret value or default"`
+	VisibleIn         []string           `json:"visible_in,omitempty" jsonschema:"Extra workspace identifiers that can list this launcher; does not change ownership"`
 }
 
 func (in SaveCommandInput) validate() error {
@@ -701,6 +738,9 @@ func (in SaveCommandInput) validate() error {
 	if err := validatePorts(in.ExpectedPorts); err != nil {
 		return err
 	}
+	if err := validateVisibleIn(in.VisibleIn); err != nil {
+		return err
+	}
 	return validateParameters(in.Parameters)
 }
 
@@ -722,6 +762,7 @@ type UpdateCommandInput struct {
 	StopCommand       *string             `json:"stop_command,omitempty" jsonschema:"New external stop action"`
 	RestartCommand    *string             `json:"restart_command,omitempty" jsonschema:"New external restart action"`
 	Parameters        *[]CommandParameter `json:"parameters,omitempty" jsonschema:"Replacement runtime input definitions; an empty array removes prompts"`
+	VisibleIn         *[]string           `json:"visible_in,omitempty" jsonschema:"Replacement extra workspace identifiers that can list this launcher; empty clears shortcuts"`
 }
 
 func (in UpdateCommandInput) validate() error {
@@ -769,7 +810,12 @@ func (in UpdateCommandInput) validate() error {
 		}
 	}
 	if in.Parameters != nil {
-		return validateParameters(*in.Parameters)
+		if err := validateParameters(*in.Parameters); err != nil {
+			return err
+		}
+	}
+	if in.VisibleIn != nil {
+		return validateVisibleIn(*in.VisibleIn)
 	}
 	return nil
 }
@@ -880,6 +926,7 @@ type SaveStackInput struct {
 	DependsOnStacks []StackPrerequisiteInput     `json:"depends_on_stacks,omitempty" jsonschema:"Other stacks that must be up enough before this stack starts; use persisted stack_id values, including cross-project shared infrastructure"`
 	Environment     string                       `json:"environment,omitempty" jsonschema:"Active workspace environment name such as local or prod; do not clone the stack per environment"`
 	Env             map[string]map[string]string `json:"env,omitempty" jsonschema:"Optional stack extras: key to environment name to value; overrides the workspace library for this stack"`
+	VisibleIn       []string                     `json:"visible_in,omitempty" jsonschema:"Extra workspace identifiers that can list this stack; does not change ownership or env resolution"`
 }
 
 func (in SaveStackInput) validate() error {
@@ -912,6 +959,9 @@ func (in SaveStackInput) validate() error {
 	if err := oneOf("failure_policy", in.FailurePolicy, "", "continue", "stop"); err != nil {
 		return err
 	}
+	if err := validateVisibleIn(in.VisibleIn); err != nil {
+		return err
+	}
 	return validateStackPrerequisiteInputs("depends_on_stacks", in.DependsOnStacks)
 }
 
@@ -929,6 +979,7 @@ type UpdateStackInput struct {
 	DependsOnStacks *[]StackPrerequisiteInput     `json:"depends_on_stacks,omitempty" jsonschema:"Replacement prerequisite stacks; empty clears them"`
 	Environment     *string                       `json:"environment,omitempty" jsonschema:"Replacement active environment name; clears member pins when members are omitted"`
 	Env             *map[string]map[string]string `json:"env,omitempty" jsonschema:"Replacement stack extras"`
+	VisibleIn       *[]string                     `json:"visible_in,omitempty" jsonschema:"Replacement extra workspace identifiers that can list this stack; empty clears shortcuts without changing owner"`
 }
 
 func (in UpdateStackInput) validate() error {
@@ -984,6 +1035,9 @@ func (in UpdateStackInput) validate() error {
 				return fmt.Errorf("depends_on_stacks cannot reference this stack")
 			}
 		}
+	}
+	if in.VisibleIn != nil {
+		return validateVisibleIn(*in.VisibleIn)
 	}
 	return nil
 }
@@ -1147,6 +1201,7 @@ type SaveCheckInput struct {
 	Trigger        string            `json:"trigger,omitempty" jsonschema:"manual or stack-only after_ready; defaults to manual"`
 	Tags           []string          `json:"tags,omitempty" jsonschema:"Searchable check labels"`
 	CreatedBy      string            `json:"created_by,omitempty" jsonschema:"Source label such as ai"`
+	VisibleIn      []string          `json:"visible_in,omitempty" jsonschema:"Extra workspace identifiers that can list this check; does not change owner"`
 }
 
 func (in SaveCheckInput) validate() error {
@@ -1206,7 +1261,7 @@ func (in SaveCheckInput) validate() error {
 			}
 		}
 	}
-	return nil
+	return validateVisibleIn(in.VisibleIn)
 }
 
 type UpdateCheckInput struct {
@@ -1227,6 +1282,7 @@ type UpdateCheckInput struct {
 	TimeoutMS      *int               `json:"timeout_ms,omitempty" jsonschema:"Timeout from 100 through 1800000 milliseconds; HTTP is limited to 120000"`
 	Trigger        *string            `json:"trigger,omitempty" jsonschema:"manual or stack-only after_ready"`
 	Tags           *[]string          `json:"tags,omitempty" jsonschema:"Replacement tags"`
+	VisibleIn      *[]string          `json:"visible_in,omitempty" jsonschema:"Replacement extra workspace identifiers that can list this check; empty clears shortcuts"`
 }
 
 func (in UpdateCheckInput) validate() error {
@@ -1270,6 +1326,9 @@ func (in UpdateCheckInput) validate() error {
 		if err := validateStrings("tags", *in.Tags, 50, 100); err != nil {
 			return err
 		}
+	}
+	if in.VisibleIn != nil {
+		return validateVisibleIn(*in.VisibleIn)
 	}
 	return nil
 }
@@ -1407,6 +1466,18 @@ func uniqueNonEmpty(field string, values []string) error {
 	return nil
 }
 
+func validateVisibleIn(ids []string) error {
+	if err := uniqueNonEmpty("visible_in", ids); err != nil {
+		return err
+	}
+	for i, id := range ids {
+		if err := identifier(fmt.Sprintf("visible_in[%d]", i), id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func requestKey(field, value string) error {
 	if err := identifier(field, value); err != nil {
 		return err
@@ -1453,6 +1524,7 @@ func (in UpdateEnvironmentsInput) validate() error {
 type SaveHTTPCollectionInput struct {
 	Name        string `json:"name" jsonschema:"Collection name shown in the HTTP page"`
 	Description string `json:"description,omitempty" jsonschema:"Optional purpose without credentials"`
+	ProjectID   string `json:"project_id,omitempty" jsonschema:"Optional dashboard workspace (Project) that lists this collection; a stack bind is not required"`
 	StackID     string `json:"stack_id,omitempty" jsonschema:"Optional stack to bind for environment interpolation and dashboard details"`
 	Environment string `json:"environment,omitempty" jsonschema:"Library column used only when the collection is unbound"`
 	SortOrder   int    `json:"sort_order,omitempty" jsonschema:"Display order"`
@@ -1461,6 +1533,11 @@ type SaveHTTPCollectionInput struct {
 func (in SaveHTTPCollectionInput) validate() error {
 	if strings.TrimSpace(in.Name) == "" {
 		return fmt.Errorf("name is required")
+	}
+	if in.ProjectID != "" {
+		if err := identifier("project_id", in.ProjectID); err != nil {
+			return err
+		}
 	}
 	if in.StackID != "" {
 		if err := identifier("stack_id", in.StackID); err != nil {
@@ -1477,6 +1554,7 @@ type UpdateHTTPCollectionInput struct {
 	ID          string  `json:"id" jsonschema:"HTTP collection identifier"`
 	Name        *string `json:"name,omitempty" jsonschema:"New collection name"`
 	Description *string `json:"description,omitempty" jsonschema:"New description"`
+	ProjectID   *string `json:"project_id,omitempty" jsonschema:"New workspace (Project); empty string lists it only under All Workspaces"`
 	StackID     *string `json:"stack_id,omitempty" jsonschema:"New stack bind; empty string unbinds"`
 	Environment *string `json:"environment,omitempty" jsonschema:"New unbound environment name; empty follows the default library name"`
 	SortOrder   *int    `json:"sort_order,omitempty" jsonschema:"New display order"`
@@ -1488,6 +1566,11 @@ func (in UpdateHTTPCollectionInput) validate() error {
 	}
 	if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
 		return fmt.Errorf("name is required")
+	}
+	if in.ProjectID != nil && strings.TrimSpace(*in.ProjectID) != "" {
+		if err := identifier("project_id", *in.ProjectID); err != nil {
+			return err
+		}
 	}
 	if in.StackID != nil && strings.TrimSpace(*in.StackID) != "" {
 		if err := identifier("stack_id", *in.StackID); err != nil {

@@ -195,11 +195,13 @@ func ObserveExternalRun(run Run) ExternalObservation {
 }
 
 type Project struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	RootPath  string    `json:"root_path"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	RootPath  string     `json:"root_path"`
+	Kind      string     `json:"kind,omitempty"`
+	ArchiveAt *time.Time `json:"archive_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type Collection struct {
@@ -232,6 +234,7 @@ type CommandParameter struct {
 type CommandDefinition struct {
 	ID                string             `json:"id"`
 	ProjectID         string             `json:"project_id,omitempty"`
+	VisibleIn         []string           `json:"visible_in,omitempty"`
 	CollectionID      string             `json:"collection_id,omitempty"`
 	Name              string             `json:"name"`
 	Description       string             `json:"description,omitempty"`
@@ -279,6 +282,7 @@ const DefaultStackPrerequisiteTimeoutMS = 90000
 type Stack struct {
 	ID                  string                       `json:"id"`
 	ProjectID           string                       `json:"project_id,omitempty"`
+	VisibleIn           []string                     `json:"visible_in,omitempty"`
 	CollectionID        string                       `json:"collection_id,omitempty"`
 	StableKey           string                       `json:"stable_key,omitempty"`
 	Name                string                       `json:"name"`
@@ -364,6 +368,7 @@ type HTTPCollection struct {
 	ID          string        `json:"id"`
 	Name        string        `json:"name"`
 	Description string        `json:"description,omitempty"`
+	ProjectID   string        `json:"project_id,omitempty"`
 	StackID     string        `json:"stack_id,omitempty"`
 	Environment string        `json:"environment,omitempty"`
 	SortOrder   int           `json:"sort_order"`
@@ -419,6 +424,7 @@ type CheckDefinition struct {
 	ID             string            `json:"id"`
 	OwnerType      string            `json:"owner_type"`
 	OwnerID        string            `json:"owner_id"`
+	VisibleIn      []string          `json:"visible_in,omitempty"`
 	Name           string            `json:"name"`
 	Description    string            `json:"description,omitempty"`
 	Kind           string            `json:"kind"`

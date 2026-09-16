@@ -51,7 +51,7 @@ const stacks: Stack[] = [
 let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod', 'stage', 'test'], keys: ['API_URL'], secret_keys: [], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com', stage: 'https://staging.example.com', test: 'http://127.0.0.1:8081' } } }
 
 const httpCollections: HTTPCollection[] = [
-	{ id: 'http-hotel', name: 'Hotel Meta API', stack_id: 'stack-internal', sort_order: 0, requests: [
+	{ id: 'http-hotel', name: 'Hotel Meta API', project_id: 'project-api', stack_id: 'stack-internal', sort_order: 0, requests: [
 		{ id: 'http-health', collection_id: 'http-hotel', name: 'Health', method: 'GET', url: '{{API_URL}}/health', timeout_ms: 5000, sort_order: 0 },
 	] },
 ]
@@ -70,7 +70,10 @@ export class DemoApi implements AgentShellApi {
   private emit() { this.listeners.forEach(fn => fn()) }
   async getSnapshot(): Promise<Snapshot> {
     const ports = runs.flatMap(run => (run.listeners ?? []).map(port => ({ ...port, run_id: run.id, run_label: run.label })))
-    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks), http_collections: structuredClone(httpCollections) }
+    const listedHTTP = structuredClone(httpCollections)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+      .map(item => ({ ...item, requests: [...(item.requests ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)) }))
+    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks), http_collections: listedHTTP }
   }
   async getRuntime(): Promise<RuntimeInfo> {
     return { status: this.runtimeStatus, instance_id: 'demo-browser-runtime', pid: 0, api_url: 'browser demo adapter', started_at: new Date(now).toISOString(), uptime_seconds: Math.max(0, Math.round((Date.now() - now) / 1000)), managed_runs: runs.filter(run => runningStatus(run.status)).length, database: { path: 'No database (browser demo)' }, mcp: { count: 0, clients: [] } }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, Copy, Download, Globe2, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2, Upload } from 'lucide-react'
+import { ChevronDown, Copy, Download, Globe2, GripVertical, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2, Upload } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
 import { beautifyHTTPBody, formatHTTPBody } from './httpBeautify'
@@ -8,8 +8,9 @@ import { collectionDeletePrompt, confirmedHTTPCollectionDelete, requestDeleteWar
 import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
 import { httpCollectionVars, interpolateTemplate, maskSecretVars } from './httpInterpolate'
 import { downloadHTTPCollection, parseHTTPCollectionDocument } from './httpCollectionTransfer'
+import { bySortOrder, reorderByID, sortOrderPatches } from './httpSortOrder'
 import { TemplateField } from './httpTemplate'
-import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Snapshot, Stack } from './types'
+import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Project, Snapshot, Stack } from './types'
 
 const methods: NonNullable<HTTPRequest['method']>[] = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 const emptyRequest = (collectionID: string): HTTPRequest => ({
@@ -33,6 +34,53 @@ function writeCollapsedPanels(next: { collections: boolean; requests: boolean })
 }
 
 export { formatHTTPBody }
+
+function SortableRow({
+  id,
+  testId,
+  dragTestId,
+  active,
+  title,
+  draggingID,
+  onDragStart,
+  onMove,
+  onSelect,
+  children,
+}: {
+  id: string
+  testId: string
+  dragTestId: string
+  active: boolean
+  title: string
+  draggingID: string
+  onDragStart: (id: string) => void
+  onMove: (fromID: string, toID: string) => void
+  onSelect: () => void
+  children: ReactNode
+}) {
+  return <div
+    className={`http-rail-row${active ? ' active' : ''}${draggingID === id ? ' dragging' : ''}${draggingID && draggingID !== id ? ' drop-target' : ''}`}
+    onPointerUp={() => { if (draggingID && draggingID !== id) onMove(draggingID, id) }}
+  >
+    <button
+      type="button"
+      className="http-drag-handle"
+      data-testid={dragTestId}
+      aria-label={`Reorder ${title}`}
+      title={`Reorder ${title}`}
+      onPointerDown={event => {
+        event.preventDefault()
+        event.stopPropagation()
+        onDragStart(id)
+      }}
+    >
+      <GripVertical />
+    </button>
+    <button type="button" className="http-rail-pick" title={title} data-testid={testId} onClick={onSelect}>
+      {children}
+    </button>
+  </div>
+}
 
 function responseStatusTone(status?: number, error?: string) {
   if (error || !status) return 'error'
@@ -127,18 +175,20 @@ export function HTTPResponsePane({ result, sending, pendingLabel, testId, empty,
   </section>
 }
 
-export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openStack, workspaceName }: {
+export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openStack, projects, workspaceID }: {
   data: Snapshot
   api: AgentShellApi
   busy: string
   accepting: boolean
   refresh: () => Promise<void>
   openStack: (stack: Stack) => void
-  workspaceName?: string
+  projects?: Project[]
+  workspaceID?: string
 }) {
-  const collections = data.http_collections ?? []
+  const collections = useMemo(() => [...(data.http_collections ?? [])].sort(bySortOrder), [data.http_collections])
   const [selectedCollectionID, setSelectedCollectionID] = useState(collections[0]?.id ?? '')
   const [selectedRequestID, setSelectedRequestID] = useState(collections[0]?.requests?.[0]?.id ?? '')
+  const [draggingID, setDraggingID] = useState('')
   const [library, setLibrary] = useState<EnvironmentLibrary>({ names: ['local', 'prod', 'stage', 'test'], keys: [], values: {} })
   const [draft, setDraft] = useState<HTTPRequestDraft>(() => draftFromRequest(emptyRequest('')))
   const [collectionName, setCollectionName] = useState('')
@@ -160,7 +210,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   draftRef.current = draft
 
   const collection = collections.find(item => item.id === selectedCollectionID) ?? collections[0]
-  const request = collection?.requests?.find(item => item.id === selectedRequestID) ?? collection?.requests?.[0]
+  const listedRequests = useMemo(() => [...(collection?.requests ?? [])].sort(bySortOrder), [collection])
+  const request = listedRequests.find(item => item.id === selectedRequestID) ?? listedRequests[0]
   const stack = data.stacks.find(item => item.id === collection?.stack_id)
 
   useEffect(() => { api.getEnvironments().then(setLibrary).catch(() => undefined) }, [api])
@@ -182,6 +233,12 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     if (next && next.id !== selectedRequestID) setSelectedRequestID(next.id)
   }, [collections, selectedCollectionID, selectedRequestID])
   useEffect(() => { if (collection) setCollectionName(collection.name) }, [collection?.id])
+  useEffect(() => {
+    if (!draggingID) return
+    const stop = () => setDraggingID('')
+    window.addEventListener('pointerup', stop)
+    return () => window.removeEventListener('pointerup', stop)
+  }, [draggingID])
   useEffect(() => {
     if (!request) return
     const next = draftFromRequest(request)
@@ -329,14 +386,10 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     setError('')
     setNotice('')
     try {
-      const created = await api.createHTTPCollection({ name: 'New HTTP collection', sort_order: collections.length })
+      const created = await api.createHTTPCollection({ name: 'New HTTP collection', sort_order: collections.length, project_id: workspaceID || undefined })
       setSelectedCollectionID(created.id)
       setSelectedRequestID('')
       await refresh()
-      // A new collection starts unbound, and a scoped workspace only lists
-      // collections whose stack belongs to it. Say so instead of letting the
-      // row silently vanish.
-      if (workspaceName) setNotice(`New collections start unbound, so this one is listed under All Workspaces. Bind a stack to keep it in ${workspaceName}.`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create collection')
     } finally {
@@ -360,10 +413,20 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     setError('')
     try {
       await api.updateHTTPCollection(collection.id, { stack_id: stackID })
-      if (stackID) setNotice('')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to bind stack')
+    }
+  }
+
+  const saveCollectionWorkspace = async (projectID: string) => {
+    if (!collection) return
+    setError('')
+    try {
+      await api.updateHTTPCollection(collection.id, { project_id: projectID })
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to move collection')
     }
   }
 
@@ -418,10 +481,10 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     setNotice('')
     try {
       const created = await api.importHTTPCollection(parseHTTPCollectionDocument(JSON.parse(await file.text())))
+      if (workspaceID) await api.updateHTTPCollection(created.id, { project_id: workspaceID })
       await refresh()
       setSelectedCollectionID(created.id)
       setSelectedRequestID(created.requests?.[0]?.id ?? '')
-      if (workspaceName) setNotice(`Imported collections start unbound, so this one is listed under All Workspaces. Bind a stack to keep it in ${workspaceName}.`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to import collection')
     } finally {
@@ -486,6 +549,30 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     }
   }
 
+  const persistCollectionOrder = async (fromID: string, toID: string) => {
+    const patches = sortOrderPatches(collections, reorderByID(collections, fromID, toID))
+    if (!patches.length) return
+    setError('')
+    try {
+      await Promise.all(patches.map(patch => api.updateHTTPCollection(patch.id, { sort_order: patch.sort_order })))
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reorder collections')
+    }
+  }
+
+  const persistRequestOrder = async (fromID: string, toID: string) => {
+    const patches = sortOrderPatches(listedRequests, reorderByID(listedRequests, fromID, toID))
+    if (!patches.length) return
+    setError('')
+    try {
+      await Promise.all(patches.map(patch => api.updateHTTPRequest(patch.id, { sort_order: patch.sort_order })))
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reorder requests')
+    }
+  }
+
   const togglePanel = (panel: 'collections' | 'requests') => {
     setCollapsed(current => {
       const next = { ...current, [panel]: !current[panel] }
@@ -497,6 +584,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const envNames = [...(library.names ?? ['local'])]
   const envValue = (stack ? stack.environment : collection?.environment) || envNames[0] || 'local'
   if (envValue && !envNames.includes(envValue)) envNames.push(envValue)
+  const workspaceProjects = projects ?? data.projects
+  const workspaceStacks = data.stacks
 
   return <section className={`http-workspace${collapsed.collections ? ' http-collections-collapsed' : ''}`} data-testid="http-page">
     <aside className={`http-rail${collapsed.collections ? ' collapsed' : ''}`}>
@@ -505,25 +594,29 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
           {collapsed.collections ? <PanelLeftOpen /> : <PanelLeftClose />}
         </button>
         <strong>Collections</strong>
-        <input ref={fileInputRef} type="file" accept="application/json,.json" hidden data-testid="import-http-collection" onChange={event => { void importCollectionFile(event.target.files?.[0]) }} />
-        <button type="button" className="button small" data-testid="import-http-collection-button" onClick={() => fileInputRef.current?.click()}><Upload /> Import</button>
-        <button type="button" className="button small" data-testid="new-http-collection" onClick={createCollection} disabled={creating}><Plus /> New</button>
+        <div className="http-rail-actions">
+          <input ref={fileInputRef} type="file" accept="application/json,.json" hidden data-testid="import-http-collection" onChange={event => { void importCollectionFile(event.target.files?.[0]) }} />
+          <button type="button" className="button small" data-testid="import-http-collection-button" onClick={() => fileInputRef.current?.click()}><Upload /> Import</button>
+          <button type="button" className="button small" data-testid="new-http-collection" onClick={createCollection} disabled={creating}><Plus /> New</button>
+        </div>
       </div>
       {!collapsed.collections && !!notice && <p className="http-empty" data-testid="http-workspace-notice">{notice}</p>}
       {!collapsed.collections && (!collections.length ? <p className="http-empty">No HTTP collections yet. Create one to save independent requests.</p> : collections.map(item => {
         const bound = data.stacks.find(stackItem => stackItem.id === item.stack_id)
-        return <button key={item.id} type="button" className={item.id === collection?.id ? 'active' : ''} title={item.name} data-testid={`http-collection-${item.id}`} onClick={() => selectCollection(item.id)}>
+        const home = workspaceProjects.find(project => project.id === item.project_id)
+        return <SortableRow key={item.id} id={item.id} testId={`http-collection-${item.id}`} dragTestId={`http-collection-drag-${item.id}`} active={item.id === collection?.id} title={item.name} draggingID={draggingID} onDragStart={setDraggingID} onMove={(fromID, toID) => { void persistCollectionOrder(fromID, toID) }} onSelect={() => selectCollection(item.id)}>
           <Globe2 />
-          <span><strong>{item.name}</strong><small>{bound ? bound.name : 'Unbound'} · {item.requests?.length ?? 0} request{(item.requests?.length ?? 0) === 1 ? '' : 's'}</small></span>
-        </button>
+          <span><strong>{item.name}</strong><small>{bound ? bound.name : home?.name ?? 'All Workspaces'} · {item.requests?.length ?? 0} request{(item.requests?.length ?? 0) === 1 ? '' : 's'}</small></span>
+        </SortableRow>
       }))}
     </aside>
-    {!collection ? <div className="http-empty-main"><strong>HTTP collections</strong><span>Saved API requests, separate from Tests. Bind a stack to interpolate its environment.</span></div> : <div className="http-main">
+    {!collection ? <div className="http-empty-main"><strong>HTTP collections</strong><span>Saved API requests, separate from Tests. Assign a workspace to keep a collection in that Project; a stack bind is optional.</span></div> : <div className="http-main">
       <header className="http-collection-head">
-        <div>
+        <div className="http-collection-identity">
           <input className="http-collection-name" aria-label="Collection name" data-testid="http-collection-name" value={collectionName} onChange={event => setCollectionName(event.target.value)} onBlur={saveCollectionName} />
           <div className="http-bind">
-            <label className="bind-field">Stack<select aria-label="Bound stack" data-testid="http-collection-stack" value={collection.stack_id ?? ''} onChange={event => saveCollectionBind(event.target.value)}><option value="">No stack</option>{data.stacks.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className="bind-field">Workspace<select aria-label="Collection workspace" data-testid="http-collection-workspace" value={collection.project_id ?? ''} onChange={event => saveCollectionWorkspace(event.target.value)}><option value="">All Workspaces</option>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className="bind-field">Stack<select aria-label="Bound stack" data-testid="http-collection-stack" value={collection.stack_id ?? ''} onChange={event => saveCollectionBind(event.target.value)}><option value="">No stack</option>{workspaceStacks.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <EnvPicker compact label={stack ? 'Environment (stack)' : 'Environment'} names={envNames} value={httpEnv} testId="http-collection-environment" ariaLabel={stack ? 'Stack environment' : 'Collection environment'} onChange={saveEnvironment} />
             {stack ? <button type="button" className="button small" data-testid="http-open-stack" onClick={() => openStack(stack)}>Open stack</button> : null}
             {request ? <>
@@ -547,9 +640,9 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <strong>Requests</strong>
             <button type="button" className="button small http-request-actions" data-testid="new-http-request" onClick={addRequest} disabled={!collection}><Plus /></button>
           </div>
-          {!collapsed.requests && (collection.requests ?? []).map(item => <button key={item.id} type="button" className={item.id === request?.id ? 'active' : ''} title={item.id === request?.id ? draft.name : item.name} data-testid={`http-request-${item.id}`} onClick={() => selectRequest(item.id)}>
+          {!collapsed.requests && listedRequests.map(item => <SortableRow key={item.id} id={item.id} testId={`http-request-${item.id}`} dragTestId={`http-request-drag-${item.id}`} active={item.id === request?.id} title={item.id === request?.id ? draft.name : item.name} draggingID={draggingID} onDragStart={setDraggingID} onMove={(fromID, toID) => { void persistRequestOrder(fromID, toID) }} onSelect={() => selectRequest(item.id)}>
             <em>{item.method ?? 'GET'}</em><span>{item.id === request?.id ? draft.name : item.name}</span>
-          </button>)}
+          </SortableRow>)}
         </div>
         {request ? <div className="http-editor">
           <input className="http-request-name" aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} onBlur={() => { void saveRequestName() }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }} />

@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_status_idx ON runs(status);
 CREATE INDEX IF NOT EXISTS runs_command_idx ON runs(command_definition_id);
 CREATE TABLE IF NOT EXISTS projects (
- id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, root_path TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'product',
+ archive_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS commands (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, command TEXT NOT NULL, cwd TEXT NOT NULL,
@@ -70,7 +71,7 @@ CREATE TABLE IF NOT EXISTS commands (
 	 collection_id TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '',
 	 created_from_run_id TEXT NOT NULL DEFAULT '', discovery_source TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', stable_key TEXT NOT NULL DEFAULT '',
 	 lifecycle_mode TEXT NOT NULL DEFAULT 'managed', stop_command TEXT NOT NULL DEFAULT '', restart_command TEXT NOT NULL DEFAULT '',
-	 parameters TEXT NOT NULL DEFAULT '[]',
+	 parameters TEXT NOT NULL DEFAULT '[]', visible_in TEXT NOT NULL DEFAULT '[]',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS stacks (
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS stacks (
 	 depends_on_stacks TEXT NOT NULL DEFAULT '[]',
 	 environment TEXT NOT NULL DEFAULT 'local', env TEXT NOT NULL DEFAULT '{}',
 	 project_id TEXT NOT NULL DEFAULT '', collection_id TEXT NOT NULL DEFAULT '', stable_key TEXT NOT NULL DEFAULT '',
+	 visible_in TEXT NOT NULL DEFAULT '[]',
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS environment_library (
@@ -94,11 +96,12 @@ CREATE TABLE IF NOT EXISTS checks (
  http_method TEXT NOT NULL DEFAULT '', http_url TEXT NOT NULL DEFAULT '', http_headers TEXT NOT NULL DEFAULT '{}',
  http_body TEXT NOT NULL DEFAULT '', expected_status TEXT NOT NULL DEFAULT '[]', body_contains TEXT NOT NULL DEFAULT '',
  timeout_ms INTEGER NOT NULL DEFAULT 10000, trigger TEXT NOT NULL DEFAULT 'manual', tags TEXT NOT NULL DEFAULT '[]',
-	 created_by TEXT NOT NULL DEFAULT '', http_scope TEXT NOT NULL DEFAULT 'local', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+	 created_by TEXT NOT NULL DEFAULT '', http_scope TEXT NOT NULL DEFAULT 'local', visible_in TEXT NOT NULL DEFAULT '[]',
+	 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS http_collections (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', stack_id TEXT NOT NULL DEFAULT '',
- environment TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ project_id TEXT NOT NULL DEFAULT '', environment TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS http_requests (
  id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, name TEXT NOT NULL, method TEXT NOT NULL DEFAULT 'GET',
@@ -110,10 +113,12 @@ CREATE TABLE IF NOT EXISTS http_requests (
 	}
 	columns := map[string][]string{
 		"runs":          {"project_id TEXT NOT NULL DEFAULT ''", "lifecycle_action TEXT NOT NULL DEFAULT ''", "port_verifications TEXT NOT NULL DEFAULT '[]'", "check_definition_id TEXT NOT NULL DEFAULT ''", "check_owner_type TEXT NOT NULL DEFAULT ''", "check_owner_id TEXT NOT NULL DEFAULT ''"},
-		"commands":      {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'"},
-		"stacks":        {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'"},
-		"checks":        {"http_scope TEXT NOT NULL DEFAULT 'local'"},
+		"projects":      {"kind TEXT NOT NULL DEFAULT 'product'", "archive_at TEXT NOT NULL DEFAULT ''"},
+		"commands":      {"collection_id TEXT NOT NULL DEFAULT ''", "description TEXT NOT NULL DEFAULT ''", "created_by TEXT NOT NULL DEFAULT ''", "created_from_run_id TEXT NOT NULL DEFAULT ''", "discovery_source TEXT NOT NULL DEFAULT ''", "fingerprint TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "lifecycle_mode TEXT NOT NULL DEFAULT 'managed'", "stop_command TEXT NOT NULL DEFAULT ''", "restart_command TEXT NOT NULL DEFAULT ''", "parameters TEXT NOT NULL DEFAULT '[]'", "visible_in TEXT NOT NULL DEFAULT '[]'"},
+		"stacks":        {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'", "visible_in TEXT NOT NULL DEFAULT '[]'"},
+		"checks":        {"http_scope TEXT NOT NULL DEFAULT 'local'", "visible_in TEXT NOT NULL DEFAULT '[]'"},
 		"http_requests":         {"body_templates TEXT NOT NULL DEFAULT '[]'", "active_body_id TEXT NOT NULL DEFAULT ''"},
+		"http_collections":      {"project_id TEXT NOT NULL DEFAULT ''"},
 		"environment_library": {"secret_keys TEXT NOT NULL DEFAULT '[]'"},
 	}
 	for table, defs := range columns {
@@ -138,7 +143,19 @@ INSERT OR IGNORE INTO environment_library(id, names, keys, value_json) VALUES('w
 	if err != nil {
 		return err
 	}
+	if err = s.backfillHTTPCollectionProjects(); err != nil {
+		return err
+	}
 	return s.ensureSeededEnvironmentNames()
+}
+
+func (s *Store) backfillHTTPCollectionProjects() error {
+	_, err := s.db.Exec(`UPDATE http_collections
+SET project_id = COALESCE((
+  SELECT project_id FROM stacks WHERE id = http_collections.stack_id AND project_id <> ''
+), project_id)
+WHERE project_id = '' AND stack_id <> ''`)
+	return err
 }
 
 func (s *Store) ensureSeededEnvironmentNames() error {
@@ -195,6 +212,15 @@ func (s *Store) ensureColumn(table, definition string) error {
 }
 
 func js(v any) string { b, _ := json.Marshal(v); return string(b) }
+func decodeStringSlice(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var ids []string
+	_ = json.Unmarshal([]byte(raw), &ids)
+	return ids
+}
 func ts(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -375,42 +401,122 @@ func (s *Store) UpdateRunPortVerifications(ctx context.Context, id string, expec
 }
 
 func (s *Store) SaveProject(ctx context.Context, p *domain.Project) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO projects VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root_path=excluded.root_path,updated_at=excluded.updated_at`, p.ID, p.Name, p.RootPath, ts(p.CreatedAt), ts(p.UpdatedAt))
+	p.Kind = domain.NormalizeProjectKind(p.Kind)
+	archive := ""
+	if p.ArchiveAt != nil && !p.ArchiveAt.IsZero() {
+		archive = ts(*p.ArchiveAt)
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO projects(id,name,root_path,kind,archive_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root_path=excluded.root_path,kind=excluded.kind,archive_at=excluded.archive_at,updated_at=excluded.updated_at`, p.ID, p.Name, p.RootPath, p.Kind, archive, ts(p.CreatedAt), ts(p.UpdatedAt))
 	return err
 }
 func (s *Store) Project(ctx context.Context, id string) (domain.Project, error) {
+	return scanProject(s.db.QueryRowContext(ctx, `SELECT id,name,root_path,kind,archive_at,created_at,updated_at FROM projects WHERE id=?`, id))
+}
+func scanProject(row scanner) (domain.Project, error) {
 	var p domain.Project
-	var c, u string
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,root_path,created_at,updated_at FROM projects WHERE id=?`, id).Scan(&p.ID, &p.Name, &p.RootPath, &c, &u)
+	var c, u, archive string
+	err := row.Scan(&p.ID, &p.Name, &p.RootPath, &p.Kind, &archive, &c, &u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
+	if err != nil {
+		return p, err
+	}
+	p.Kind = domain.NormalizeProjectKind(p.Kind)
 	p.CreatedAt = parseTime(c)
 	p.UpdatedAt = parseTime(u)
-	return p, err
+	if archive != "" {
+		t := parseTime(archive)
+		p.ArchiveAt = &t
+	}
+	return p, nil
 }
 func (s *Store) Projects(ctx context.Context) ([]domain.Project, error) {
-	rows, e := s.db.QueryContext(ctx, `SELECT id,name,root_path,created_at,updated_at FROM projects ORDER BY name`)
+	rows, e := s.db.QueryContext(ctx, `SELECT id,name,root_path,kind,archive_at,created_at,updated_at FROM projects ORDER BY name`)
 	if e != nil {
 		return nil, e
 	}
 	defer rows.Close()
 	out := make([]domain.Project, 0)
 	for rows.Next() {
-		var p domain.Project
-		var c, u string
-		if e = rows.Scan(&p.ID, &p.Name, &p.RootPath, &c, &u); e != nil {
+		p, e := scanProject(rows)
+		if e != nil {
 			return nil, e
 		}
-		p.CreatedAt = parseTime(c)
-		p.UpdatedAt = parseTime(u)
 		out = append(out, p)
 	}
 	return out, rows.Err()
 }
 func (s *Store) DeleteProject(ctx context.Context, id string) error {
+	if e := s.stripVisibleIn(ctx, id); e != nil {
+		return e
+	}
+	if _, e := s.db.ExecContext(ctx, `UPDATE http_collections SET project_id='' WHERE project_id=?`, id); e != nil {
+		return e
+	}
 	r, e := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, id)
 	return affected(r, e)
+}
+
+func (s *Store) stripVisibleIn(ctx context.Context, workspaceID string) error {
+	stacks, err := s.Stacks(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range stacks {
+		next := domain.NormalizeVisibleIn(stacks[i].ProjectID, stacks[i].VisibleIn)
+		filtered := next[:0]
+		for _, id := range next {
+			if id != workspaceID {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) != len(stacks[i].VisibleIn) {
+			stacks[i].VisibleIn = filtered
+			if e := s.SaveStack(ctx, &stacks[i]); e != nil {
+				return e
+			}
+		}
+	}
+	commands, err := s.Commands(ctx)
+	if err != nil {
+		return err
+	}
+	for i := range commands {
+		next := domain.NormalizeVisibleIn(commands[i].ProjectID, commands[i].VisibleIn)
+		filtered := next[:0]
+		for _, id := range next {
+			if id != workspaceID {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) != len(commands[i].VisibleIn) {
+			commands[i].VisibleIn = filtered
+			if e := s.SaveCommand(ctx, &commands[i]); e != nil {
+				return e
+			}
+		}
+	}
+	checks, err := s.Checks(ctx, nil, nil)
+	if err != nil {
+		return err
+	}
+	for i := range checks {
+		next := domain.NormalizeVisibleIn("", checks[i].VisibleIn)
+		filtered := next[:0]
+		for _, id := range next {
+			if id != workspaceID {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) != len(checks[i].VisibleIn) {
+			checks[i].VisibleIn = filtered
+			if e := s.SaveCheck(ctx, &checks[i]); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) SaveCollection(ctx context.Context, v *domain.Collection) error {
@@ -476,7 +582,8 @@ func (s *Store) SaveCommand(ctx context.Context, c *domain.CommandDefinition) er
 	if c.Fingerprint == "" {
 		c.Fingerprint = domain.CommandFingerprint(*c)
 	}
-	_, e := s.db.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,parameters=excluded.parameters,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, js(c.Parameters), ts(c.CreatedAt), ts(c.UpdatedAt))
+	c.VisibleIn = domain.NormalizeVisibleIn(c.ProjectID, c.VisibleIn)
+	_, e := s.db.ExecContext(ctx, `INSERT INTO commands(`+commandCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,name=excluded.name,description=excluded.description,command=excluded.command,cwd=excluded.cwd,shell=excluded.shell,kind=excluded.kind,concurrency_policy=excluded.concurrency_policy,env=excluded.env,expected_ports=excluded.expected_ports,tags=excluded.tags,favorite=excluded.favorite,created_by=excluded.created_by,created_from_run_id=excluded.created_from_run_id,discovery_source=excluded.discovery_source,fingerprint=excluded.fingerprint,stable_key=excluded.stable_key,lifecycle_mode=excluded.lifecycle_mode,stop_command=excluded.stop_command,restart_command=excluded.restart_command,parameters=excluded.parameters,visible_in=excluded.visible_in,updated_at=excluded.updated_at`, c.ID, c.ProjectID, c.CollectionID, c.Name, c.Description, c.Command, c.Cwd, c.Shell, c.Kind, c.ConcurrencyPolicy, js(c.Env), js(c.ExpectedPorts), js(c.Tags), c.Favorite, c.CreatedBy, c.CreatedFromRunID, c.DiscoverySource, c.Fingerprint, c.StableKey, c.LifecycleMode, c.StopCommand, c.RestartCommand, js(c.Parameters), js(c.VisibleIn), ts(c.CreatedAt), ts(c.UpdatedAt))
 	if e != nil && strings.Contains(strings.ToLower(e.Error()), "unique constraint") {
 		return fmt.Errorf("%w: equivalent command or stable key already exists", ErrConflict)
 	}
@@ -484,9 +591,9 @@ func (s *Store) SaveCommand(ctx context.Context, c *domain.CommandDefinition) er
 }
 func scanCommand(row scanner) (domain.CommandDefinition, error) {
 	var c domain.CommandDefinition
-	var env, ports, tags, parameters, created, updated string
+	var env, ports, tags, parameters, visible, created, updated string
 	var fav int
-	err := row.Scan(&c.ID, &c.ProjectID, &c.CollectionID, &c.Name, &c.Description, &c.Command, &c.Cwd, &c.Shell, &c.Kind, &c.ConcurrencyPolicy, &env, &ports, &tags, &fav, &c.CreatedBy, &c.CreatedFromRunID, &c.DiscoverySource, &c.Fingerprint, &c.StableKey, &c.LifecycleMode, &c.StopCommand, &c.RestartCommand, &parameters, &created, &updated)
+	err := row.Scan(&c.ID, &c.ProjectID, &c.CollectionID, &c.Name, &c.Description, &c.Command, &c.Cwd, &c.Shell, &c.Kind, &c.ConcurrencyPolicy, &env, &ports, &tags, &fav, &c.CreatedBy, &c.CreatedFromRunID, &c.DiscoverySource, &c.Fingerprint, &c.StableKey, &c.LifecycleMode, &c.StopCommand, &c.RestartCommand, &parameters, &visible, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -500,10 +607,11 @@ func scanCommand(row scanner) (domain.CommandDefinition, error) {
 	_ = json.Unmarshal([]byte(ports), &c.ExpectedPorts)
 	_ = json.Unmarshal([]byte(tags), &c.Tags)
 	_ = json.Unmarshal([]byte(parameters), &c.Parameters)
+	c.VisibleIn = domain.NormalizeVisibleIn(c.ProjectID, decodeStringSlice(visible))
 	return c, nil
 }
 
-const commandCols = `id,project_id,collection_id,name,description,command,cwd,shell,kind,concurrency_policy,env,expected_ports,tags,favorite,created_by,created_from_run_id,discovery_source,fingerprint,stable_key,lifecycle_mode,stop_command,restart_command,parameters,created_at,updated_at`
+const commandCols = `id,project_id,collection_id,name,description,command,cwd,shell,kind,concurrency_policy,env,expected_ports,tags,favorite,created_by,created_from_run_id,discovery_source,fingerprint,stable_key,lifecycle_mode,stop_command,restart_command,parameters,visible_in,created_at,updated_at`
 
 func (s *Store) Command(ctx context.Context, id string) (domain.CommandDefinition, error) {
 	return scanCommand(s.db.QueryRowContext(ctx, `SELECT `+commandCols+` FROM commands WHERE id=?`, id))
@@ -624,7 +732,8 @@ func (s *Store) SaveStack(ctx context.Context, v *domain.Stack) error {
 	if envName == "" {
 		envName = domain.DefaultEnvironmentName
 	}
-	_, e := s.db.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,environment=excluded.environment,env=excluded.env,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), envName, js(v.Env), ts(v.CreatedAt), ts(v.UpdatedAt))
+	v.VisibleIn = domain.NormalizeVisibleIn(v.ProjectID, v.VisibleIn)
+	_, e := s.db.ExecContext(ctx, `INSERT INTO stacks(`+stackCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,collection_id=excluded.collection_id,stable_key=excluded.stable_key,name=excluded.name,description=excluded.description,start_strategy=excluded.start_strategy,failure_policy=excluded.failure_policy,favorite=excluded.favorite,members=excluded.members,depends_on_stacks=excluded.depends_on_stacks,environment=excluded.environment,env=excluded.env,visible_in=excluded.visible_in,updated_at=excluded.updated_at`, v.ID, v.ProjectID, v.CollectionID, v.StableKey, v.Name, v.Description, v.StartStrategy, v.FailurePolicy, v.Favorite, js(v.Members), js(v.DependsOnStacks), envName, js(v.Env), js(v.VisibleIn), ts(v.CreatedAt), ts(v.UpdatedAt))
 	if e != nil && strings.Contains(strings.ToLower(e.Error()), "unique constraint") {
 		return fmt.Errorf("%w: stack stable key already exists", ErrConflict)
 	}
@@ -632,9 +741,9 @@ func (s *Store) SaveStack(ctx context.Context, v *domain.Stack) error {
 }
 func scanStack(row scanner) (domain.Stack, error) {
 	var v domain.Stack
-	var members, prereqs, envJSON, c, u string
+	var members, prereqs, envJSON, visible, c, u string
 	var fav int
-	e := row.Scan(&v.ID, &v.ProjectID, &v.CollectionID, &v.StableKey, &v.Name, &v.Description, &v.StartStrategy, &v.FailurePolicy, &fav, &members, &prereqs, &v.Environment, &envJSON, &c, &u)
+	e := row.Scan(&v.ID, &v.ProjectID, &v.CollectionID, &v.StableKey, &v.Name, &v.Description, &v.StartStrategy, &v.FailurePolicy, &fav, &members, &prereqs, &v.Environment, &envJSON, &visible, &c, &u)
 	if errors.Is(e, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -647,6 +756,7 @@ func scanStack(row scanner) (domain.Stack, error) {
 	_ = json.Unmarshal([]byte(members), &v.Members)
 	_ = json.Unmarshal([]byte(prereqs), &v.DependsOnStacks)
 	_ = json.Unmarshal([]byte(envJSON), &v.Env)
+	v.VisibleIn = domain.NormalizeVisibleIn(v.ProjectID, decodeStringSlice(visible))
 	if strings.TrimSpace(v.Environment) == "" {
 		v.Environment = domain.DefaultEnvironmentName
 	}
@@ -654,7 +764,7 @@ func scanStack(row scanner) (domain.Stack, error) {
 	return v, nil
 }
 
-const stackCols = `id,project_id,collection_id,stable_key,name,description,start_strategy,failure_policy,favorite,members,depends_on_stacks,environment,env,created_at,updated_at`
+const stackCols = `id,project_id,collection_id,stable_key,name,description,start_strategy,failure_policy,favorite,members,depends_on_stacks,environment,env,visible_in,created_at,updated_at`
 
 func (s *Store) EnvironmentLibrary(ctx context.Context) (domain.EnvironmentLibrary, error) {
 	var names, keys, values, secretKeys string
@@ -737,26 +847,27 @@ func (s *Store) DeleteStack(ctx context.Context, id string) error {
 	return affected(r, e)
 }
 
-const checkCols = `id,owner_type,owner_id,name,description,kind,command_id,http_method,http_url,http_scope,http_headers,http_body,expected_status,body_contains,timeout_ms,trigger,tags,created_by,created_at,updated_at`
+const checkCols = `id,owner_type,owner_id,name,description,kind,command_id,http_method,http_url,http_scope,http_headers,http_body,expected_status,body_contains,timeout_ms,trigger,tags,created_by,visible_in,created_at,updated_at`
 
 func (s *Store) SaveCheck(ctx context.Context, v *domain.CheckDefinition) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO checks(`+checkCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	v.VisibleIn = domain.NormalizeVisibleIn("", v.VisibleIn)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO checks(`+checkCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET owner_type=excluded.owner_type,owner_id=excluded.owner_id,name=excluded.name,
 description=excluded.description,kind=excluded.kind,command_id=excluded.command_id,http_method=excluded.http_method,
 http_url=excluded.http_url,http_scope=excluded.http_scope,http_headers=excluded.http_headers,http_body=excluded.http_body,expected_status=excluded.expected_status,
 body_contains=excluded.body_contains,timeout_ms=excluded.timeout_ms,trigger=excluded.trigger,tags=excluded.tags,
-created_by=excluded.created_by,updated_at=excluded.updated_at`, v.ID, v.OwnerType, v.OwnerID, v.Name, v.Description,
+created_by=excluded.created_by,visible_in=excluded.visible_in,updated_at=excluded.updated_at`, v.ID, v.OwnerType, v.OwnerID, v.Name, v.Description,
 		v.Kind, v.CommandID, v.HTTPMethod, v.HTTPURL, v.HTTPScope, js(v.HTTPHeaders), v.HTTPBody, js(v.ExpectedStatus), v.BodyContains,
-		v.TimeoutMS, v.Trigger, js(v.Tags), v.CreatedBy, ts(v.CreatedAt), ts(v.UpdatedAt))
+		v.TimeoutMS, v.Trigger, js(v.Tags), v.CreatedBy, js(v.VisibleIn), ts(v.CreatedAt), ts(v.UpdatedAt))
 	return err
 }
 
 func scanCheck(row scanner) (domain.CheckDefinition, error) {
 	var v domain.CheckDefinition
-	var headers, statuses, tags, created, updated string
+	var headers, statuses, tags, visible, created, updated string
 	err := row.Scan(&v.ID, &v.OwnerType, &v.OwnerID, &v.Name, &v.Description, &v.Kind, &v.CommandID,
 		&v.HTTPMethod, &v.HTTPURL, &v.HTTPScope, &headers, &v.HTTPBody, &statuses, &v.BodyContains, &v.TimeoutMS,
-		&v.Trigger, &tags, &v.CreatedBy, &created, &updated)
+		&v.Trigger, &tags, &v.CreatedBy, &visible, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -768,6 +879,7 @@ func scanCheck(row scanner) (domain.CheckDefinition, error) {
 	_ = json.Unmarshal([]byte(headers), &v.HTTPHeaders)
 	_ = json.Unmarshal([]byte(statuses), &v.ExpectedStatus)
 	_ = json.Unmarshal([]byte(tags), &v.Tags)
+	v.VisibleIn = domain.NormalizeVisibleIn("", decodeStringSlice(visible))
 	return v, nil
 }
 
@@ -819,21 +931,21 @@ func (s *Store) DeleteCheck(ctx context.Context, id string) error {
 	return affected(r, err)
 }
 
-const httpCollectionCols = `id,name,description,stack_id,environment,sort_order,created_at,updated_at`
+const httpCollectionCols = `id,name,description,stack_id,project_id,environment,sort_order,created_at,updated_at`
 const httpRequestCols = `id,collection_id,name,method,url,headers,body,body_templates,active_body_id,timeout_ms,sort_order,last_result,created_at,updated_at`
 
 func (s *Store) SaveHTTPCollection(ctx context.Context, v *domain.HTTPCollection) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO http_collections(`+httpCollectionCols+`) VALUES(?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO http_collections(`+httpCollectionCols+`) VALUES(?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,stack_id=excluded.stack_id,
-environment=excluded.environment,sort_order=excluded.sort_order,updated_at=excluded.updated_at`,
-		v.ID, v.Name, v.Description, v.StackID, v.Environment, v.SortOrder, ts(v.CreatedAt), ts(v.UpdatedAt))
+project_id=excluded.project_id,environment=excluded.environment,sort_order=excluded.sort_order,updated_at=excluded.updated_at`,
+		v.ID, v.Name, v.Description, v.StackID, v.ProjectID, v.Environment, v.SortOrder, ts(v.CreatedAt), ts(v.UpdatedAt))
 	return err
 }
 
 func scanHTTPCollection(row scanner) (domain.HTTPCollection, error) {
 	var v domain.HTTPCollection
 	var created, updated string
-	err := row.Scan(&v.ID, &v.Name, &v.Description, &v.StackID, &v.Environment, &v.SortOrder, &created, &updated)
+	err := row.Scan(&v.ID, &v.Name, &v.Description, &v.StackID, &v.ProjectID, &v.Environment, &v.SortOrder, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
