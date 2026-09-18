@@ -287,14 +287,14 @@ export class DemoApi implements AgentShellApi {
 		}
 		throw new Error('HTTP request not found')
 	}
-  async sendHTTPRequest(id: string) {
+  async sendHTTPRequest(id: string, overlay?: Partial<Pick<HTTPRequestInput, 'method' | 'url' | 'headers' | 'body' | 'timeout_ms'>>) {
 		for (const collection of httpCollections) {
 			const item = collection.requests?.find(value => value.id === id)
 			if (!item) continue
 			const stack = stacks.find(value => value.id === collection.stack_id)
 			const { name, vars } = httpCollectionVars(environmentLibrary, collection, stack)
-			const url = interpolateTemplate(item.url, vars)
-			item.last_result = { status: 200, url, method: item.method ?? 'GET', headers: { 'Content-Type': 'application/json' }, body: '{"status":"ok"}', environment: name, duration_ms: 12, sent_at: new Date().toISOString() }
+			const url = interpolateTemplate(overlay?.url ?? item.url, vars)
+			item.last_result = { status: 200, url, method: overlay?.method ?? item.method ?? 'GET', headers: { 'Content-Type': 'application/json' }, body: '{"status":"ok"}', environment: name, duration_ms: 12, sent_at: new Date().toISOString() }
 			this.emit()
 			return structuredClone(item)
 		}

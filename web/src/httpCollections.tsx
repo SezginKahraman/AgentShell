@@ -509,12 +509,19 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
 
   const send = async () => {
     if (!request || !accepting) return
-    if (!await persistDraft()) return
+    let headers: Record<string, string> = {}
+    try { headers = JSON.parse(draft.headers || '{}') as Record<string, string> } catch { setError('Headers must be a JSON object'); return }
+    const timeout = Number(draft.timeout)
     setSending(true)
     setError('')
     try {
-      const sent = await api.sendHTTPRequest(request.id)
-      setSelectedRequestID(sent.id)
+      await api.sendHTTPRequest(request.id, {
+        method: draft.method,
+        url: draft.url,
+        headers,
+        body: draft.body,
+        timeout_ms: Number.isFinite(timeout) ? timeout : 10000,
+      })
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to send request')
@@ -710,7 +717,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             </div>
             <p className="http-body-hint">
               <span className={`http-save-state ${saving ? 'saving' : dirty ? 'unsaved' : 'saved'}`} data-testid="http-save-state">{saveLabel}</span>
-              New copies this body as a draft. Save to keep it, Delete to drop it. Refresh warns, then discards.
+              Send uses this body without saving it. Save writes the template. New copies it as a draft. Delete drops it. Refresh warns, then discards.
             </p>
             <label>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={body => setDraft(current => ({
               ...current,

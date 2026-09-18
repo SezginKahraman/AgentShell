@@ -137,7 +137,17 @@ func (s *Server) httpRequestsAPI(w http.ResponseWriter, r *http.Request, parts [
 		if !s.accepting(w) {
 			return
 		}
-		sent, sendErr := s.manager.SendHTTPRequest(ctx, request)
+		var overlay httpSendOverlay
+		if !decodeOptional(w, r, &overlay) {
+			return
+		}
+		wire := request
+		overlay.apply(&wire)
+		if err = s.validateHTTPRequest(ctx, &wire); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sent, sendErr := s.manager.SendHTTPRequest(ctx, wire)
 		if sendErr != nil {
 			respond(w, nil, sendErr)
 			return
@@ -501,6 +511,32 @@ func (p httpRequestPatch) apply(request *domain.HTTPRequest) {
 	}
 	if p.SortOrder != nil {
 		request.SortOrder = *p.SortOrder
+	}
+}
+
+type httpSendOverlay struct {
+	Method    *string            `json:"method"`
+	URL       *string            `json:"url"`
+	Headers   *map[string]string `json:"headers"`
+	Body      *string            `json:"body"`
+	TimeoutMS *int               `json:"timeout_ms"`
+}
+
+func (p httpSendOverlay) apply(request *domain.HTTPRequest) {
+	if p.Method != nil {
+		request.Method = *p.Method
+	}
+	if p.URL != nil {
+		request.URL = *p.URL
+	}
+	if p.Headers != nil {
+		request.Headers = *p.Headers
+	}
+	if p.Body != nil {
+		request.Body = *p.Body
+	}
+	if p.TimeoutMS != nil {
+		request.TimeoutMS = *p.TimeoutMS
 	}
 }
 

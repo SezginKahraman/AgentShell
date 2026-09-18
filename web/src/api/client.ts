@@ -37,7 +37,7 @@ export interface AgentShellApi {
   createHTTPRequest(input: HTTPRequestInput): Promise<HTTPRequest>
   updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>): Promise<HTTPRequest>
   deleteHTTPRequest(id: string): Promise<void>
-  sendHTTPRequest(id: string): Promise<HTTPRequest>
+  sendHTTPRequest(id: string, overlay?: Partial<Pick<HTTPRequestInput, 'method' | 'url' | 'headers' | 'body' | 'timeout_ms'>>): Promise<HTTPRequest>
   importHTTPRequest(collectionID: string, curl: string): Promise<HTTPRequest>
   exportHTTPCollection(id: string): Promise<HTTPCollectionDocument>
   importHTTPCollection(document: unknown): Promise<HTTPCollection>
@@ -122,7 +122,7 @@ export class HttpApi implements AgentShellApi {
   createHTTPRequest(input: HTTPRequestInput) { return request<HTTPRequest>('/api/http-requests', { method: 'POST', body: JSON.stringify(input) }) }
   updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>) { return request<HTTPRequest>(`/api/http-requests/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   async deleteHTTPRequest(id: string) { await request(`/api/http-requests/${id}`, { method: 'DELETE' }) }
-  sendHTTPRequest(id: string) { return request<HTTPRequest>(`/api/http-requests/${id}/send`, { method: 'POST' }) }
+  sendHTTPRequest(id: string, overlay?: Partial<Pick<HTTPRequestInput, 'method' | 'url' | 'headers' | 'body' | 'timeout_ms'>>) { return request<HTTPRequest>(`/api/http-requests/${id}/send`, { method: 'POST', body: overlay ? JSON.stringify(overlay) : undefined }) }
   importHTTPRequest(collectionID: string, curl: string) { return request<HTTPRequest>(`/api/http-collections/${collectionID}/import`, { method: 'POST', body: JSON.stringify({ curl }) }) }
   exportHTTPCollection(id: string) { return request<HTTPCollectionDocument>(`/api/http-collections/${id}/export`) }
   importHTTPCollection(document: unknown) { return request<HTTPCollection>('/api/http-collections/import', { method: 'POST', body: JSON.stringify(document) }) }

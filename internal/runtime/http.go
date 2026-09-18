@@ -128,13 +128,17 @@ func (m *Manager) SendHTTPRequest(ctx context.Context, request domain.HTTPReques
 
 func (m *Manager) persistHTTPResult(ctx context.Context, request domain.HTTPRequest, result domain.HTTPResult, vars map[string]string, secretKeys []string) (domain.HTTPRequest, error) {
 	domain.RedactHTTPResult(&result, vars, secretKeys)
-	now := time.Now().UTC()
-	request.LastResult = &result
-	request.UpdatedAt = now
-	if err := m.store.SaveHTTPRequest(ctx, &request); err != nil {
+	stored, err := m.store.HTTPRequest(ctx, request.ID)
+	if err != nil {
 		return request, err
 	}
-	return request, nil
+	now := time.Now().UTC()
+	stored.LastResult = &result
+	stored.UpdatedAt = now
+	if err := m.store.SaveHTTPRequest(ctx, &stored); err != nil {
+		return stored, err
+	}
+	return stored, nil
 }
 
 func validateHTTPClientURL(raw string) (*url.URL, error) {

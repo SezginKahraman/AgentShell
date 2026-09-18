@@ -83,6 +83,9 @@ describe('DemoApi', () => {
     expect(sent.last_result?.environment).toBe('local')
     expect(sent.last_result?.body).toContain('ok')
     expect(sent.last_result?.headers?.['Content-Type']).toBe('application/json')
+    const overlay = await api.sendHTTPRequest('http-health', { body: '{"probe":1}' })
+    expect(overlay.body ?? '').toBe('')
+    expect((await api.getSnapshot()).http_collections?.find(item => item.id === 'http-hotel')?.requests?.[0]?.body ?? '').toBe('')
   })
 
   it('imports curl into an HTTP collection and rewrites the origin', async () => {

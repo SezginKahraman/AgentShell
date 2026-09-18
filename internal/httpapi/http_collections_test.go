@@ -65,6 +65,19 @@ func TestHTTPCollectionCRUDAndSend(t *testing.T) {
 	if last["status"] != float64(200) || last["body"] != `{"hotels":[]}` || last["environment"] != "local" || !strings.HasSuffix(last["url"].(string), "/v1/hotels") {
 		t.Fatalf("last_result=%v", last)
 	}
+	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-requests/"+reqBody["id"].(string)+"/send", map[string]any{"body": `{"probe":true}`}, &sent); status != http.StatusOK {
+		t.Fatalf("overlay send status=%d body=%v", status, sent)
+	}
+	if body, _ := sent["body"].(string); body != "" {
+		t.Fatalf("send overlay must not persist body: %v", sent["body"])
+	}
+	var stored map[string]any
+	if status := request(t, client, http.MethodGet, srv.URL+"/api/http-requests/"+reqBody["id"].(string), nil, &stored); status != http.StatusOK {
+		t.Fatalf("get after overlay send status=%d body=%v", status, stored)
+	}
+	if body, _ := stored["body"].(string); body != "" {
+		t.Fatalf("stored body changed after send overlay: %v", stored["body"])
+	}
 	var imported map[string]any
 	if status := request(t, client, http.MethodPost, srv.URL+"/api/http-collections/"+collection["id"].(string)+"/import", map[string]any{
 		"curl": "curl -X POST '" + upstream.URL + "/v1/hotels' -H 'Content-Type: application/json' --data-raw '{\"city\":\"IST\"}'",

@@ -47,7 +47,7 @@ Catalog **collection** (existing) = folder for commands and stacks.
 
 - `collection_id` — required parent.
 - `name`, `method` (default GET), `url`, optional `headers` and `body`, optional `body_templates` and `active_body_id`, `timeout_ms` (default 10000, max 120000), `sort_order`.
-- `body` is the active template text used by Send and curl. Named templates stay on the request; switching copies the current body onto the previous template.
+- `body` is the saved active template. Dashboard Send may overlay unsaved editor text for that one call; it does not write `body` or `body_templates`. Named templates stay on the request; switching copies the current editor body onto the previous template in the draft only. Save persists.
 - `url` / headers / body may contain `{{KEY}}` (optional spaces). `KEY` must be a process env name.
 - `last_result` — last send only: resolved URL, status, duration, truncated body (256 KiB cap), error, environment name used. Not a Run.
 
