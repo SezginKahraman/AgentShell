@@ -388,6 +388,8 @@ type HTTPRequest struct {
 	Body          string             `json:"body,omitempty"`
 	BodyTemplates []HTTPBodyTemplate `json:"body_templates,omitempty"`
 	ActiveBodyID  string             `json:"active_body_id,omitempty"`
+	PreScript     string             `json:"pre_script,omitempty"`
+	PostScript    string             `json:"post_script,omitempty"`
 	TimeoutMS     int                `json:"timeout_ms,omitempty"`
 	SortOrder     int                `json:"sort_order"`
 	LastResult    *HTTPResult        `json:"last_result,omitempty"`
@@ -412,6 +414,7 @@ type HTTPResult struct {
 	Truncated   bool              `json:"truncated,omitempty"`
 	DurationMS  int               `json:"duration_ms,omitempty"`
 	Error       string            `json:"error,omitempty"`
+	ScriptLog   string            `json:"script_log,omitempty"`
 	Environment string            `json:"environment,omitempty"`
 	SentAt      time.Time         `json:"sent_at"`
 }

@@ -15,6 +15,8 @@ export type HTTPRequestDraft = {
   timeout: string
   bodyTemplates: HTTPBodyTemplate[]
   activeBodyID: string
+  preScript: string
+  postScript: string
 }
 
 export const normalizeBodyTemplates = (body: string, templates: HTTPBodyTemplate[] | undefined, activeID?: string): { body: string; templates: HTTPBodyTemplate[]; activeID: string } => {
@@ -57,6 +59,8 @@ export const draftFromRequest = (request: HTTPRequest): HTTPRequestDraft => {
     timeout: String(request.timeout_ms ?? 10000),
     bodyTemplates: normalized.templates,
     activeBodyID: normalized.activeID,
+    preScript: request.pre_script ?? '',
+    postScript: request.post_script ?? '',
   }
 }
 
@@ -65,6 +69,8 @@ export const isRequestDraftDirty = (request: HTTPRequest, draft: HTTPRequestDraf
   if ((request.method ?? 'GET') !== draft.method) return true
   if (request.url !== draft.url) return true
   if ((request.body ?? '') !== draft.body) return true
+  if ((request.pre_script ?? '') !== draft.preScript) return true
+  if ((request.post_script ?? '') !== draft.postScript) return true
   if (String(request.timeout_ms ?? 10000) !== draft.timeout) return true
   const saved = normalizeBodyTemplates(request.body ?? '', request.body_templates, request.active_body_id)
   if (saved.activeID !== draft.activeBodyID || saved.templates.length !== draft.bodyTemplates.length) return true
@@ -87,6 +93,8 @@ export const isDraftDirty = (saved: HTTPRequestDraft, draft: HTTPRequestDraft): 
   if (saved.method !== draft.method) return true
   if (saved.url !== draft.url) return true
   if (saved.body !== draft.body) return true
+  if (saved.preScript !== draft.preScript) return true
+  if (saved.postScript !== draft.postScript) return true
   if (saved.timeout !== draft.timeout) return true
   if (saved.activeBodyID !== draft.activeBodyID || saved.bodyTemplates.length !== draft.bodyTemplates.length) return true
   for (const item of draft.bodyTemplates) {

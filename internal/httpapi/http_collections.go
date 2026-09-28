@@ -266,6 +266,8 @@ func (s *Server) importHTTPCollection(w http.ResponseWriter, r *http.Request) {
 			Body:          item.Body,
 			BodyTemplates: item.BodyTemplates,
 			ActiveBodyID:  item.ActiveBodyID,
+			PreScript:     item.PreScript,
+			PostScript:    item.PostScript,
 			TimeoutMS:     item.TimeoutMS,
 			SortOrder:     i,
 			CreatedAt:     now,
@@ -427,6 +429,12 @@ func (s *Server) validateHTTPRequest(ctx context.Context, request *domain.HTTPRe
 	if len(request.BodyTemplates) > domain.MaxHTTPBodyTemplates {
 		return fmt.Errorf("at most %d body templates", domain.MaxHTTPBodyTemplates)
 	}
+	if err = domain.ValidateHTTPHookScript(request.PreScript); err != nil {
+		return err
+	}
+	if err = domain.ValidateHTTPHookScript(request.PostScript); err != nil {
+		return err
+	}
 	request.Body, request.BodyTemplates, request.ActiveBodyID = domain.NormalizeHTTPBodyTemplates(request.Body, request.BodyTemplates, request.ActiveBodyID)
 	return nil
 }
@@ -470,6 +478,8 @@ type httpRequestPatch struct {
 	Body          *string                    `json:"body"`
 	BodyTemplates *[]domain.HTTPBodyTemplate `json:"body_templates"`
 	ActiveBodyID  *string                    `json:"active_body_id"`
+	PreScript     *string                    `json:"pre_script"`
+	PostScript    *string                    `json:"post_script"`
 	TimeoutMS     *int                       `json:"timeout_ms"`
 	SortOrder     *int                       `json:"sort_order"`
 }
@@ -506,6 +516,12 @@ func (p httpRequestPatch) apply(request *domain.HTTPRequest) {
 			}
 		}
 	}
+	if p.PreScript != nil {
+		request.PreScript = *p.PreScript
+	}
+	if p.PostScript != nil {
+		request.PostScript = *p.PostScript
+	}
 	if p.TimeoutMS != nil {
 		request.TimeoutMS = *p.TimeoutMS
 	}
@@ -515,11 +531,13 @@ func (p httpRequestPatch) apply(request *domain.HTTPRequest) {
 }
 
 type httpSendOverlay struct {
-	Method    *string            `json:"method"`
-	URL       *string            `json:"url"`
-	Headers   *map[string]string `json:"headers"`
-	Body      *string            `json:"body"`
-	TimeoutMS *int               `json:"timeout_ms"`
+	Method     *string            `json:"method"`
+	URL        *string            `json:"url"`
+	Headers    *map[string]string `json:"headers"`
+	Body       *string            `json:"body"`
+	PreScript  *string            `json:"pre_script"`
+	PostScript *string            `json:"post_script"`
+	TimeoutMS  *int               `json:"timeout_ms"`
 }
 
 func (p httpSendOverlay) apply(request *domain.HTTPRequest) {
@@ -534,6 +552,12 @@ func (p httpSendOverlay) apply(request *domain.HTTPRequest) {
 	}
 	if p.Body != nil {
 		request.Body = *p.Body
+	}
+	if p.PreScript != nil {
+		request.PreScript = *p.PreScript
+	}
+	if p.PostScript != nil {
+		request.PostScript = *p.PostScript
 	}
 	if p.TimeoutMS != nil {
 		request.TimeoutMS = *p.TimeoutMS

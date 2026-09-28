@@ -287,7 +287,7 @@ export class DemoApi implements AgentShellApi {
 		}
 		throw new Error('HTTP request not found')
 	}
-  async sendHTTPRequest(id: string, overlay?: Partial<Pick<HTTPRequestInput, 'method' | 'url' | 'headers' | 'body' | 'timeout_ms'>>) {
+  async sendHTTPRequest(id: string, overlay?: Partial<Pick<HTTPRequestInput, 'method' | 'url' | 'headers' | 'body' | 'pre_script' | 'post_script' | 'timeout_ms'>>) {
 		for (const collection of httpCollections) {
 			const item = collection.requests?.find(value => value.id === id)
 			if (!item) continue

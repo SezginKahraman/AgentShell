@@ -148,6 +148,7 @@ export interface HTTPResult {
 	truncated?: boolean
 	duration_ms?: number
 	error?: string
+	script_log?: string
 	environment?: string
 	sent_at?: string
 }
@@ -166,6 +167,8 @@ export interface HTTPRequest {
 	body?: string
 	body_templates?: HTTPBodyTemplate[]
 	active_body_id?: string
+	pre_script?: string
+	post_script?: string
 	timeout_ms?: number
 	sort_order?: number
 	last_result?: HTTPResult

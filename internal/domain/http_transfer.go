@@ -15,11 +15,11 @@ var ErrHTTPCollectionImport = errors.New("invalid http collection import")
 
 // HTTPCollectionDocument is a portable HTTP collection. It has no ids, stack bind, or last_result.
 type HTTPCollectionDocument struct {
-	Kind        string                    `json:"kind,omitempty"`
-	Name        string                    `json:"name,omitempty"`
-	Description string                    `json:"description,omitempty"`
-	Environment string                    `json:"environment,omitempty"`
-	Requests    []HTTPRequestDocument     `json:"requests,omitempty"`
+	Kind        string                `json:"kind,omitempty"`
+	Name        string                `json:"name,omitempty"`
+	Description string                `json:"description,omitempty"`
+	Environment string                `json:"environment,omitempty"`
+	Requests    []HTTPRequestDocument `json:"requests,omitempty"`
 }
 
 type HTTPRequestDocument struct {
@@ -30,6 +30,8 @@ type HTTPRequestDocument struct {
 	Body          string             `json:"body,omitempty"`
 	BodyTemplates []HTTPBodyTemplate `json:"body_templates,omitempty"`
 	ActiveBodyID  string             `json:"active_body_id,omitempty"`
+	PreScript     string             `json:"pre_script,omitempty"`
+	PostScript    string             `json:"post_script,omitempty"`
 	TimeoutMS     int                `json:"timeout_ms,omitempty"`
 }
 
@@ -50,6 +52,8 @@ func ExportHTTPCollection(collection HTTPCollection) HTTPCollectionDocument {
 			Body:          request.Body,
 			BodyTemplates: cloneHTTPBodyTemplates(request.BodyTemplates),
 			ActiveBodyID:  request.ActiveBodyID,
+			PreScript:     request.PreScript,
+			PostScript:    request.PostScript,
 			TimeoutMS:     request.TimeoutMS,
 		})
 	}
@@ -130,9 +134,9 @@ func looksLikePostmanSchema(info json.RawMessage, items json.RawMessage) bool {
 }
 
 type postmanCollection struct {
-	Info postmanInfo     `json:"info"`
-	Auth *postmanAuth    `json:"auth"`
-	Item []postmanItem   `json:"item"`
+	Info postmanInfo   `json:"info"`
+	Auth *postmanAuth  `json:"auth"`
+	Item []postmanItem `json:"item"`
 }
 
 type postmanInfo struct {
@@ -163,10 +167,10 @@ type postmanHeader struct {
 }
 
 type postmanBody struct {
-	Mode       string              `json:"mode"`
-	Raw        string              `json:"raw"`
-	URLEncoded []postmanFormField  `json:"urlencoded"`
-	FormData   []postmanFormField  `json:"formdata"`
+	Mode       string             `json:"mode"`
+	Raw        string             `json:"raw"`
+	URLEncoded []postmanFormField `json:"urlencoded"`
+	FormData   []postmanFormField `json:"formdata"`
 }
 
 type postmanFormField struct {
@@ -177,9 +181,9 @@ type postmanFormField struct {
 }
 
 type postmanAuth struct {
-	Type   string              `json:"type"`
-	Bearer []postmanAuthEntry  `json:"bearer"`
-	Apikey []postmanAuthEntry  `json:"apikey"`
+	Type   string             `json:"type"`
+	Bearer []postmanAuthEntry `json:"bearer"`
+	Apikey []postmanAuthEntry `json:"apikey"`
 }
 
 type postmanAuthEntry struct {
@@ -188,7 +192,7 @@ type postmanAuthEntry struct {
 }
 
 type postmanURL struct {
-	Raw   string   `json:"raw"`
+	Raw   string `json:"raw"`
 	Query []struct {
 		Key      string `json:"key"`
 		Value    string `json:"value"`

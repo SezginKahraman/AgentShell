@@ -19,6 +19,7 @@ describe('isRequestDraftDirty', () => {
     expect(isRequestDraftDirty(saved, { ...draft, method: 'POST' })).toBe(true)
     expect(isRequestDraftDirty(saved, { ...draft, url: '{{API_URL}}/v2' })).toBe(true)
     expect(isRequestDraftDirty(saved, { ...draft, body: '{"a":1}' })).toBe(true)
+    expect(isRequestDraftDirty(saved, { ...draft, preScript: 'package hook\n' })).toBe(true)
   })
 })
 

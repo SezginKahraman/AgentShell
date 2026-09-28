@@ -129,7 +129,7 @@ export function HTTPResponsePane({ result, sending, pendingLabel, testId, empty,
     const timer = window.setTimeout(() => setCopied(''), 1400)
     return () => window.clearTimeout(timer)
   }, [copied])
-  const dump = result ? [result.error, result.status ? `HTTP ${result.status}` : '', ...headers.map(([key, value]) => `${key}: ${value}`), body].filter(Boolean).join('\n\n') : ''
+  const dump = result ? [result.script_log, result.error, result.status ? `HTTP ${result.status}` : '', ...headers.map(([key, value]) => `${key}: ${value}`), body].filter(Boolean).join('\n\n') : ''
   const summary = result ? `${result.method ?? ''} ${result.url ?? ''}`.trim() : ''
   const copy = (kind: 'request' | 'response' | 'body', text: string) => {
     if (!text) return
@@ -160,6 +160,7 @@ export function HTTPResponsePane({ result, sending, pendingLabel, testId, empty,
         <p>Waiting for response…</p>
         {pendingLabel ? <small>{pendingLabel}</small> : null}
       </div> : !result ? <p className="http-response-idle">{empty}</p> : <>
+        {result.script_log && <pre className="http-response-log" data-testid={`${testId}-script-log`}>{result.script_log}</pre>}
         {result.error && <pre className="http-response-error">{result.error}</pre>}
         {!!headers.length && <dl className="http-response-headers" data-testid={headerTestId}>{headers.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
         {body && <div className="http-response-payload">
@@ -299,6 +300,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         body: next.body,
         body_templates: next.bodyTemplates,
         active_body_id: next.activeBodyID,
+        pre_script: next.preScript,
+        post_script: next.postScript,
         timeout_ms: Number.isFinite(timeout) ? timeout : 10000,
       })
       baselineRef.current = next
@@ -520,6 +523,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         url: draft.url,
         headers,
         body: draft.body,
+        pre_script: draft.preScript,
+        post_script: draft.postScript,
         timeout_ms: Number.isFinite(timeout) ? timeout : 10000,
       })
       await refresh()
@@ -682,6 +687,12 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
           </div>
           <p className="http-preview" data-testid="http-url-preview">{resolved.preview}</p>
           <label>Headers<TemplateField multiline minHeight={72} ariaLabel="Request headers" value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} /></label>
+          <label className="http-script">Pre-request
+            <textarea aria-label="Pre-request script" data-testid="http-pre-script" spellCheck={false} placeholder={'package hook\n\nfunc Pre(req *Request) error {\n\treturn nil\n}'} value={draft.preScript} onChange={event => setDraft(current => ({ ...current, preScript: event.target.value }))} />
+          </label>
+          <label className="http-script">Post-response
+            <textarea aria-label="Post-response script" data-testid="http-post-script" spellCheck={false} placeholder={'package hook\n\nfunc Post(req *Request, res *Response) error {\n\treturn nil\n}'} value={draft.postScript} onChange={event => setDraft(current => ({ ...current, postScript: event.target.value }))} />
+          </label>
           <div className="http-body-block">
             <div className="http-body-toolbar">
               <label>Saved body

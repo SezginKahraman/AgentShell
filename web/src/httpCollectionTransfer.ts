@@ -10,6 +10,8 @@ export interface HTTPRequestDocument {
   body?: string
   body_templates?: HTTPBodyTemplate[]
   active_body_id?: string
+  pre_script?: string
+  post_script?: string
   timeout_ms?: number
 }
 
@@ -37,6 +39,8 @@ export function exportHTTPCollectionDocument(collection: HTTPCollection): HTTPCo
       body: request.body,
       body_templates: request.body_templates?.length ? request.body_templates.map(item => ({ ...item })) : undefined,
       active_body_id: request.active_body_id,
+      pre_script: request.pre_script || undefined,
+      post_script: request.post_script || undefined,
       timeout_ms: request.timeout_ms,
     })),
   }

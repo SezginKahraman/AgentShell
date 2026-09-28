@@ -64,8 +64,39 @@ func (m *Manager) SendHTTPRequest(ctx context.Context, request domain.HTTPReques
 		}
 		headers[key] = interpolated
 	}
+	hookReq := httpHookRequest{Method: method, URL: target.String(), Headers: headers, Body: body, Env: cloneStringMap(vars)}
+	scriptLog := ""
+	if strings.TrimSpace(request.PreScript) != "" {
+		before := cloneStringMap(hookReq.Env)
+		log, hookErr := m.runHTTPHook(ctx, "pre", request.PreScript, &hookReq, nil)
+		scriptLog = joinHookLog(scriptLog, log)
+		if hookErr != nil {
+			result := domain.HTTPResult{URL: target.String(), Method: method, Environment: envName, ScriptLog: scriptLog, Error: hookErr.Error(), SentAt: time.Now().UTC()}
+			return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
+		}
+		if err = m.persistHTTPHookEnv(ctx, &lib, envName, before, hookReq.Env); err != nil {
+			result := domain.HTTPResult{URL: target.String(), Method: method, Environment: envName, ScriptLog: scriptLog, Error: err.Error(), SentAt: time.Now().UTC()}
+			return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
+		}
+		vars = cloneStringMap(hookReq.Env)
+	}
+	method, err = domain.NormalizeHTTPMethod(hookReq.Method)
+	if err != nil {
+		result := domain.HTTPResult{URL: hookReq.URL, Method: hookReq.Method, Environment: envName, ScriptLog: scriptLog, Error: err.Error(), SentAt: time.Now().UTC()}
+		return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
+	}
+	target, err = validateHTTPClientURL(hookReq.URL)
+	if err != nil {
+		result := domain.HTTPResult{URL: hookReq.URL, Method: method, Environment: envName, ScriptLog: scriptLog, Error: err.Error(), SentAt: time.Now().UTC()}
+		return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
+	}
+	body = hookReq.Body
+	headers = hookReq.Headers
+	if headers == nil {
+		headers = map[string]string{}
+	}
 	timeout := time.Duration(domain.NormalizeHTTPRequestTimeout(request.TimeoutMS)) * time.Millisecond
-	result := domain.HTTPResult{URL: target.String(), Method: method, Environment: envName, SentAt: time.Now().UTC()}
+	result := domain.HTTPResult{URL: target.String(), Method: method, Environment: envName, ScriptLog: scriptLog, SentAt: time.Now().UTC()}
 	sendCtx, cancel := context.WithTimeout(m.ctx, timeout)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -123,6 +154,31 @@ func (m *Manager) SendHTTPRequest(ctx context.Context, request domain.HTTPReques
 		result.Truncated = true
 	}
 	result.Body = string(raw)
+	if strings.TrimSpace(request.PostScript) != "" {
+		hookReq.Method = method
+		hookReq.URL = target.String()
+		hookReq.Headers = cloneStringMap(headers)
+		hookReq.Body = body
+		hookReq.Env = cloneStringMap(vars)
+		hookRes := httpHookResponse{Status: result.Status, Headers: cloneStringMap(result.Headers), Body: result.Body}
+		before := cloneStringMap(hookReq.Env)
+		log, hookErr := m.runHTTPHook(ctx, "post", request.PostScript, &hookReq, &hookRes)
+		result.ScriptLog = joinHookLog(result.ScriptLog, log)
+		if hookErr != nil {
+			result.Error = hookErr.Error()
+		} else if err = m.persistHTTPHookEnv(ctx, &lib, envName, before, hookReq.Env); err != nil {
+			result.Error = err.Error()
+		} else {
+			vars = cloneStringMap(hookReq.Env)
+			result.Status = hookRes.Status
+			result.Headers = hookRes.Headers
+			if len(hookRes.Body) > domain.MaxHTTPRequestBody {
+				hookRes.Body = hookRes.Body[:domain.MaxHTTPRequestBody]
+				result.Truncated = true
+			}
+			result.Body = hookRes.Body
+		}
+	}
 	return m.persistHTTPResult(ctx, request, result, vars, lib.SecretKeys)
 }
 

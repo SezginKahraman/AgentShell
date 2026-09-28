@@ -233,6 +233,7 @@ func RedactHTTPResult(result *HTTPResult, vars map[string]string, secretKeys []s
 	result.URL = RedactSecretValues(result.URL, vars, secretKeys)
 	result.Body = RedactSecretValues(result.Body, vars, secretKeys)
 	result.Error = RedactSecretValues(result.Error, vars, secretKeys)
+	result.ScriptLog = RedactSecretValues(result.ScriptLog, vars, secretKeys)
 	if result.Headers == nil {
 		return
 	}
@@ -241,6 +242,59 @@ func RedactHTTPResult(result *HTTPResult, vars map[string]string, secretKeys []s
 		headers[key] = RedactSecretValues(value, vars, secretKeys)
 	}
 	result.Headers = headers
+}
+
+// ApplyHTTPHookEnv copies changed hook env values into one environment profile.
+// Existing secret_keys stay secret. New keys are stored in the clear.
+func ApplyHTTPHookEnv(lib EnvironmentLibrary, envName string, before, after map[string]string) (EnvironmentLibrary, bool) {
+	envName = strings.ToLower(strings.TrimSpace(envName))
+	if !ValidEnvironmentName(envName) {
+		return lib, false
+	}
+	writes := map[string]string{}
+	for key, value := range after {
+		key = strings.TrimSpace(key)
+		if !ValidEnvKey(key) || before[key] == value {
+			continue
+		}
+		writes[key] = value
+	}
+	if len(writes) == 0 {
+		return lib, false
+	}
+	keys := append([]string{}, lib.Keys...)
+	seen := map[string]bool{}
+	for _, key := range keys {
+		seen[key] = true
+	}
+	values := map[string]map[string]string{}
+	for key, row := range lib.Values {
+		copied := map[string]string{}
+		for env, value := range row {
+			copied[env] = value
+		}
+		values[key] = copied
+	}
+	for key, value := range writes {
+		if !seen[key] {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+		if values[key] == nil {
+			values[key] = map[string]string{}
+		}
+		values[key][envName] = value
+	}
+	next := lib
+	next.Names = append([]string{}, lib.Names...)
+	next.Keys = keys
+	next.SecretKeys = append([]string{}, lib.SecretKeys...)
+	next.Values = values
+	normalized, err := NormalizeEnvironmentLibrary(next)
+	if err != nil {
+		return lib, false
+	}
+	return normalized, true
 }
 
 func MemberEnvironmentName(stackEnv, pin string) string {

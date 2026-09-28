@@ -1592,6 +1592,8 @@ type SaveHTTPRequestInput struct {
 	Body          string                    `json:"body,omitempty" jsonschema:"Optional non-sensitive body; may include {{KEY}}. This is the active template text used by send and curl"`
 	BodyTemplates []domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Named saved bodies for this request. Prefer another template here instead of a second request when only the payload differs (same URL and method, different hotel id)"`
 	ActiveBodyID  string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active; Body is kept in sync with that template"`
+	PreScript     string                    `json:"pre_script,omitempty" jsonschema:"Optional Go source, package hook, with func Pre(req *Request) error. Runs after interpolation and may change method, URL, headers, body, and req.Env. Env writes persist to the active environment profile. Stdlib only."`
+	PostScript    string                    `json:"post_script,omitempty" jsonschema:"Optional Go source, package hook, with func Post(req *Request, res *Response) error. Runs after the HTTP response. req.Env writes persist to the active environment profile. Stdlib only."`
 	TimeoutMS     int                       `json:"timeout_ms,omitempty" jsonschema:"Timeout in ms; default 10000, max 120000"`
 	SortOrder     int                       `json:"sort_order,omitempty" jsonschema:"Display order inside the collection"`
 }
@@ -1612,7 +1614,10 @@ func (in SaveHTTPRequestInput) validate() error {
 	if in.TimeoutMS < 0 {
 		return fmt.Errorf("timeout_ms must be >= 0")
 	}
-	return nil
+	if err := domain.ValidateHTTPHookScript(in.PreScript); err != nil {
+		return err
+	}
+	return domain.ValidateHTTPHookScript(in.PostScript)
 }
 
 type UpdateHTTPRequestInput struct {
@@ -1625,6 +1630,8 @@ type UpdateHTTPRequestInput struct {
 	Body          *string                    `json:"body,omitempty" jsonschema:"New active body; keep in sync with the active template"`
 	BodyTemplates *[]domain.HTTPBodyTemplate `json:"body_templates,omitempty" jsonschema:"Replacement named body templates. When adding a payload-only variant, include every existing template plus the new one"`
 	ActiveBodyID  *string                    `json:"active_body_id,omitempty" jsonschema:"Which saved body is active; send and curl use this template"`
+	PreScript     *string                    `json:"pre_script,omitempty" jsonschema:"Replacement Go pre-request script, package hook. Empty clears it."`
+	PostScript    *string                    `json:"post_script,omitempty" jsonschema:"Replacement Go post-response script, package hook. Empty clears it."`
 	TimeoutMS     *int                       `json:"timeout_ms,omitempty" jsonschema:"New timeout in ms"`
 	SortOrder     *int                       `json:"sort_order,omitempty" jsonschema:"New display order"`
 }
@@ -1651,6 +1658,16 @@ func (in UpdateHTTPRequestInput) validate() error {
 	}
 	if in.TimeoutMS != nil && *in.TimeoutMS < 0 {
 		return fmt.Errorf("timeout_ms must be >= 0")
+	}
+	if in.PreScript != nil {
+		if err := domain.ValidateHTTPHookScript(*in.PreScript); err != nil {
+			return err
+		}
+	}
+	if in.PostScript != nil {
+		if err := domain.ValidateHTTPHookScript(*in.PostScript); err != nil {
+			return err
+		}
 	}
 	return nil
 }

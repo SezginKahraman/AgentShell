@@ -480,6 +480,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .http-url-actions { align-items: center; display: flex; flex: 0 0 auto; gap: 8px; }
 .http-editor input, .http-editor select, .http-editor textarea { background: var(--surface-inset); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-strong); font: 12px/1.45 'DM Mono', monospace; outline: 0; padding: 8px 9px; width: 100%; }
 .http-editor textarea { min-height: 72px; resize: vertical; }
+.http-editor .http-script { color: var(--muted); display: grid; font-size: 10px; gap: 4px; }
+.http-editor .http-script textarea { min-height: 140px; }
+.http-response-log { color: var(--muted); margin: 0; white-space: pre-wrap; }
 .http-editor .http-template-input, .http-curl .http-template-input {
   background: transparent;
   border: 0;

@@ -16,6 +16,7 @@ const DefaultHTTPRequestTimeoutMS = 10000
 const MaxHTTPRequestTimeoutMS = 120000
 const MaxHTTPRequestBody = 256 << 10
 const MaxHTTPBodyTemplates = 20
+const MaxHTTPHookScript = 64 << 10
 const DefaultHTTPBodyTemplateID = "default"
 const DefaultHTTPBodyTemplateName = "Default"
 
@@ -196,6 +197,13 @@ func RenameHTTPBodyTemplate(templates []HTTPBodyTemplate, id, name string) ([]HT
 		}
 	}
 	return templates, fmt.Errorf("%w: unknown body template", ErrHTTPRequest)
+}
+
+func ValidateHTTPHookScript(script string) error {
+	if len(script) > MaxHTTPHookScript {
+		return fmt.Errorf("%w: hook script exceeds %d bytes", ErrHTTPRequest, MaxHTTPHookScript)
+	}
+	return nil
 }
 
 func NormalizeHTTPRequestTimeout(ms int) int {

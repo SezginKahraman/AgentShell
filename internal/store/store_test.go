@@ -346,6 +346,15 @@ func TestHTTPCollectionsCRUDAndStackUnbind(t *testing.T) {
 	if err != nil || stored.ActiveBodyID != "search" || len(stored.BodyTemplates) != 2 || stored.BodyTemplates[1].Body != `{"id":1}` {
 		t.Fatalf("body templates: %+v err=%v", stored, err)
 	}
+	request.PreScript = "package hook\nfunc Pre(req *Request) error { return nil }\n"
+	request.PostScript = "package hook\nfunc Post(req *Request, res *Response) error { return nil }\n"
+	if err = s.SaveHTTPRequest(ctx, &request); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = s.HTTPRequest(ctx, request.ID)
+	if err != nil || stored.PreScript != request.PreScript || stored.PostScript != request.PostScript {
+		t.Fatalf("scripts: %+v err=%v", stored, err)
+	}
 	legacy := domain.HTTPRequest{ID: "http-req-legacy", CollectionID: collection.ID, Name: "Legacy", Method: "POST", URL: "{{API_URL}}/search", Body: `{"legacy":true}`, TimeoutMS: 5000, CreatedAt: now, UpdatedAt: now}
 	if err = s.SaveHTTPRequest(ctx, &legacy); err != nil {
 		t.Fatal(err)
