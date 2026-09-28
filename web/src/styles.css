@@ -31,10 +31,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .workspace-picker-copy small { color: var(--muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-picker-menu { background: var(--surface-raised); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 16px 40px var(--shadow-color-strong); display: grid; gap: 2px; max-height: min(420px, calc(100vh - 24px)); overflow: auto; padding: 8px; position: fixed; z-index: 80; }
 .workspace-picker-heading { color: var(--text-faint); font-size: 9px; font-weight: 700; letter-spacing: .08em; padding: 4px 8px 6px; text-transform: uppercase; }
-.workspace-picker-menu > button { align-items: flex-start; background: none; border: 0; border-radius: 8px; color: inherit; cursor: pointer; display: flex; padding: 8px; text-align: left; width: 100%; }
-.workspace-picker-menu > button:hover, .workspace-picker-menu > button.active { background: var(--surface-hover); }
-.workspace-picker-menu > button strong { display: block; font-size: 12px; }
-.workspace-picker-menu > button small { color: var(--muted); display: block; font-size: 10px; margin-top: 2px; }
+.workspace-picker-menu button[role="option"] { align-items: flex-start; background: none; border: 0; border-radius: 8px; color: inherit; cursor: pointer; display: flex; min-width: 0; padding: 8px; text-align: left; width: 100%; }
+.workspace-picker-menu button[role="option"]:hover, .workspace-picker-menu button[role="option"].active { background: var(--surface-hover); }
+.workspace-picker-menu button[role="option"] > span { display: grid; min-width: 0; }
+.workspace-picker-menu button[role="option"] strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.workspace-picker-menu button[role="option"] small { color: var(--muted); display: block; font-size: 10px; margin-top: 2px; }
 .workspace-picker-footer { border-top: 1px solid var(--line); display: grid; gap: 2px; margin-top: 4px; padding-top: 6px; }
 .workspace-picker-footer button { align-items: center; background: none; border: 0; border-radius: 8px; color: var(--text-secondary); cursor: pointer; display: flex; font-size: 12px; gap: 8px; padding: 8px; text-align: left; width: 100%; }
 .workspace-picker-footer button:hover { background: var(--surface-hover); color: var(--text-strong); }
