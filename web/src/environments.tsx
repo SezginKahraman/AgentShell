@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import { Braces, Check, ChevronDown, Download, Eye, EyeOff, Plus, Trash2, Upload } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
+import { downloadEnvironmentLibrary, environmentLibraryJSON, parseEnvironmentLibraryImport } from './environmentTransfer'
 import type { EnvironmentLibrary, Stack } from './types'
 
 export type EnvTone = 'local' | 'prod' | 'stage' | 'test' | 'custom'
@@ -150,6 +151,9 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [revealed, setRevealed] = useState<Record<string, boolean>>({})
+  const [jsonView, setJsonView] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  const importRef = useRef<HTMLInputElement>(null)
 
   const load = () => api.getEnvironments().then(next => {
     setLibrary(next)
@@ -219,11 +223,36 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
 
   const setCount = library.keys.filter(key => (library.values?.[key]?.[selectedName] ?? '') !== '').length
 
+  const exportLibrary = (revealSecrets: boolean) => {
+    downloadEnvironmentLibrary(library, revealSecrets)
+    setExportOpen(false)
+  }
+
+  const importLibrary = async (file?: File) => {
+    if (!file) return
+    setError('')
+    try {
+      const next = parseEnvironmentLibraryImport(JSON.parse(await file.text()) as unknown)
+      if (!window.confirm('Replace the environment library with this file? Cells written as *** keep their current secret values.')) return
+      await persist(next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to import environments')
+    } finally {
+      if (importRef.current) importRef.current.value = ''
+    }
+  }
+
   return <section className="panel env-panel" data-testid="environments-panel">
     <header className="env-panel-head">
       <div>
         <h2>Environments</h2>
         <p className="env-lead">Workspace keys for the selected profile. Mark a key secret to keep its value out of chat and MCP; Send still interpolates it locally.</p>
+        <div className="env-library-actions">
+          <button type="button" className={`env-json-switch${jsonView ? ' on' : ''}`} data-testid="env-json-toggle" aria-pressed={jsonView} onClick={() => setJsonView(current => !current)}><Braces /> JSON</button>
+          <button type="button" className="button small" data-testid="env-export" onClick={() => setExportOpen(true)}><Download /> Export</button>
+          <input ref={importRef} type="file" accept="application/json,.json" hidden data-testid="env-import-file" onChange={event => { void importLibrary(event.target.files?.[0]) }} />
+          <button type="button" className="button small" data-testid="env-import" onClick={() => importRef.current?.click()} disabled={busy}><Upload /> Import</button>
+        </div>
       </div>
       <div className="env-panel-tools">
         <EnvPicker label="Profile" names={library.names} value={selectedName} testId="environments-profile" ariaLabel="Environment profile" onChange={setSelectedName} removable={name => !seededNames.has(name)} onRemove={removeName} />
@@ -237,7 +266,10 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
       </div>
     </header>
     {error && <p className="env-error">{error}</p>}
+    {exportOpen && <><button type="button" className="modal-scrim" aria-label="Cancel export" onClick={() => setExportOpen(false)} /><section className="modal env-export-dialog" role="dialog" aria-modal="true" aria-labelledby="env-export-title" data-testid="env-export-dialog"><h2 id="env-export-title">Export environments</h2><p>The file contains every profile. Hide secrets writes <code>***</code> for secret cells. Show secrets writes the stored values.</p><footer><button type="button" className="button" onClick={() => setExportOpen(false)}>Cancel</button><button type="button" className="button" data-testid="env-export-hide" onClick={() => exportLibrary(false)}>Hide secrets</button><button type="button" className="button primary" data-testid="env-export-show" onClick={() => exportLibrary(true)}>Show secrets</button></footer></section></>}
     <div className="env-library" data-testid="environments-table">
+      {jsonView ? <textarea className="env-json-view" data-testid="env-json-view" aria-label="Environment library JSON" readOnly spellCheck={false} value={environmentLibraryJSON(library)} /> : null}
+      {!jsonView && <>
       <div className={`env-key-list env-${envTone(selectedName)}`}>
         <div className="env-key-list-head">
           <span>Keys</span>
@@ -268,7 +300,7 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
           <input data-testid="env-add-key" value={keyDraft} onChange={event => setKeyDraft(event.target.value)} placeholder="API_URL" onKeyDown={event => event.key === 'Enter' && (event.preventDefault(), addKey())} />
           <button className="button small" data-testid="env-add-key-save" onClick={addKey} disabled={busy || !keyDraft.trim()}><Plus /> Add key</button>
         </div>
-      </div>
+      </div></>}
     </div>
   </section>
 }

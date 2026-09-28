@@ -121,3 +121,52 @@ func TestSendHTTPRequestPreHookErrorSkipsHTTP(t *testing.T) {
 		t.Fatalf("hits=%d last=%+v", hits, sent.LastResult)
 	}
 }
+
+func TestSendHTTPRequestPreCallsHookStoredInEnvironment(t *testing.T) {
+	var got string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Mark")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "http.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	m := NewManager(st, events.New(), Config{DataDir: dir, StopGrace: 50 * time.Millisecond, PollInterval: 50 * time.Millisecond})
+	defer m.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err = st.SaveEnvironmentLibrary(ctx, domain.EnvironmentLibrary{
+		Names: []string{"local"},
+		Keys:  []string{"API_URL", "MARK_HOOK"},
+		Values: map[string]map[string]string{
+			"API_URL":   {"local": upstream.URL},
+			"MARK_HOOK": {"local": "package hook\n\nfunc MARK_HOOK(req *Request) error {\n\treq.Headers[\"X-Mark\"] = \"from-env\"\n\treturn nil\n}\n"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	collection := domain.HTTPCollection{ID: "col", Name: "API", Environment: "local", CreatedAt: now, UpdatedAt: now}
+	if err = st.SaveHTTPCollection(ctx, &collection); err != nil {
+		t.Fatal(err)
+	}
+	request := domain.HTTPRequest{
+		ID: "req", CollectionID: collection.ID, Name: "Health", Method: "GET", URL: "{{API_URL}}/health", TimeoutMS: 5000,
+		PreScript: "package hook\n\nfunc Pre(req *Request) error {\n\treturn MARK_HOOK(req)\n}\n",
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err = st.SaveHTTPRequest(ctx, &request); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := m.SendHTTPRequest(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "from-env" || sent.LastResult == nil || sent.LastResult.Status != 204 {
+		t.Fatalf("header=%q last=%+v", got, sent.LastResult)
+	}
+}

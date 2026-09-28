@@ -1,16 +1,28 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, Copy, Download, Globe2, GripVertical, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2, Upload } from 'lucide-react'
+import { ChevronDown, Copy, Download, Folder, Globe2, GripVertical, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
 import { beautifyHTTPBody, formatHTTPBody } from './httpBeautify'
 import { curlCanCollapse, curlFromHTTPRequest, curlPreviewLine } from './httpCurl'
 import { collectionDeletePrompt, confirmedHTTPCollectionDelete, requestDeleteWarning } from './httpDeleteConfirm'
 import { addBodyTemplate, applyCurlToDraft, curlFromDraft, draftFromRequest, isDraftDirty, MAX_BODY_TEMPLATES, newBodyTemplateID, removeBodyTemplate, renameBodyTemplate, switchBodyTemplate, type HTTPRequestDraft } from './httpDraft'
+import { HeaderEditor } from './httpHeaderEditor'
 import { httpCollectionVars, interpolateTemplate, maskSecretVars } from './httpInterpolate'
 import { downloadHTTPCollection, parseHTTPCollectionDocument } from './httpCollectionTransfer'
 import { bySortOrder, reorderByID, sortOrderPatches } from './httpSortOrder'
 import { TemplateField } from './httpTemplate'
-import type { EnvironmentLibrary, HTTPCollection, HTTPRequest, HTTPResult, Project, Snapshot, Stack } from './types'
+import type { EnvironmentLibrary, HTTPCollection, HTTPFolder, HTTPRequest, HTTPResult, Project, Snapshot, Stack } from './types'
+
+type DragKind = 'collection' | 'request' | 'folder'
+type DragGhost = { id: string; kind: DragKind; title: string; x: number; y: number; overID: string; overKind: string; overFolder: string }
+type DragHit = { rowID: string; kind: string; folderID: string }
+
+function dragHit(event: { clientX: number; clientY: number }): DragHit {
+  const el = document.elementFromPoint(event.clientX, event.clientY)
+  const row = el?.closest<HTMLElement>('[data-drag-id]')
+  const folder = el?.closest<HTMLElement>('[data-folder-drop]')
+  return { rowID: row?.dataset.dragId ?? '', kind: row?.dataset.dragKind ?? '', folderID: folder?.dataset.folderDrop ?? '' }
+}
 
 const methods: NonNullable<HTTPRequest['method']>[] = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 const emptyRequest = (collectionID: string): HTTPRequest => ({
@@ -35,32 +47,78 @@ function writeCollapsedPanels(next: { collections: boolean; requests: boolean })
 
 export { formatHTTPBody }
 
+function RowMenu({ testId, label, items }: { testId: string; label: string; items: { id: string; label: string; testId?: string; onSelect: () => void }[] }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const close = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [open])
+  return <div className="http-row-menu" ref={ref} onPointerDown={event => event.stopPropagation()}>
+    <button type="button" className="icon-button http-row-menu-button" data-testid={testId} aria-label={label} aria-expanded={open} title={label} onClick={event => { event.stopPropagation(); setOpen(current => !current) }}>
+      <MoreHorizontal />
+    </button>
+    {open && <div className="http-row-menu-pop" role="menu">
+      {items.map(item => <button key={item.id} type="button" role="menuitem" data-testid={item.testId ?? `${testId}-${item.id}`} onClick={event => { event.stopPropagation(); setOpen(false); item.onSelect() }}>{item.label}</button>)}
+    </div>}
+  </div>
+}
+
 function SortableRow({
   id,
+  kind,
   testId,
   dragTestId,
   active,
   title,
-  draggingID,
+  drag,
   onDragStart,
-  onMove,
   onSelect,
+  menu,
   children,
 }: {
   id: string
+  kind: DragKind
   testId: string
   dragTestId: string
   active: boolean
   title: string
-  draggingID: string
-  onDragStart: (id: string) => void
-  onMove: (fromID: string, toID: string) => void
+  drag: DragGhost | null
+  onDragStart: (event: { clientX: number; clientY: number }, id: string) => void
   onSelect: () => void
+  menu: ReactNode
   children: ReactNode
 }) {
+  const dragging = drag?.id === id && drag.kind === kind
+  const drop = !!drag && drag.kind === kind && drag.id !== id && drag.overID === id && drag.overKind === kind
   return <div
-    className={`http-rail-row${active ? ' active' : ''}${draggingID === id ? ' dragging' : ''}${draggingID && draggingID !== id ? ' drop-target' : ''}`}
-    onPointerUp={() => { if (draggingID && draggingID !== id) onMove(draggingID, id) }}
+    className={`http-rail-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${drop ? ' drop-target' : ''}`}
+    data-drag-id={id}
+    data-drag-kind={kind}
+    onPointerDown={event => {
+      if ((event.target as HTMLElement).closest('.http-row-menu, .http-drag-handle')) return
+      const startX = event.clientX
+      const startY = event.clientY
+      const pointerId = event.pointerId
+      const move = (pointer: PointerEvent) => {
+        if (pointer.pointerId !== pointerId) return
+        if (Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 5) return
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        onDragStart(pointer, id)
+      }
+      const up = (pointer: PointerEvent) => {
+        if (pointer.pointerId !== pointerId) return
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
+    }}
   >
     <button
       type="button"
@@ -71,7 +129,7 @@ function SortableRow({
       onPointerDown={event => {
         event.preventDefault()
         event.stopPropagation()
-        onDragStart(id)
+        onDragStart(event, id)
       }}
     >
       <GripVertical />
@@ -79,6 +137,7 @@ function SortableRow({
     <button type="button" className="http-rail-pick" title={title} data-testid={testId} onClick={onSelect}>
       {children}
     </button>
+    {menu}
   </div>
 }
 
@@ -187,9 +246,14 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   workspaceID?: string
 }) {
   const collections = useMemo(() => [...(data.http_collections ?? [])].sort(bySortOrder), [data.http_collections])
+  const folders = useMemo(() => [...(data.http_folders ?? [])].sort(bySortOrder), [data.http_folders])
   const [selectedCollectionID, setSelectedCollectionID] = useState(collections[0]?.id ?? '')
   const [selectedRequestID, setSelectedRequestID] = useState(collections[0]?.requests?.[0]?.id ?? '')
-  const [draggingID, setDraggingID] = useState('')
+  const [drag, setDrag] = useState<DragGhost | null>(null)
+  const [closedFolders, setClosedFolders] = useState<Record<string, boolean>>({})
+  const [folderDraft, setFolderDraft] = useState<{ id?: string; name: string; parentID?: string } | null>(null)
+  const [editorTab, setEditorTab] = useState<'headers' | 'body' | 'scripts'>('body')
+  const [scriptsOpen, setScriptsOpen] = useState({ pre: true, post: true })
   const [library, setLibrary] = useState<EnvironmentLibrary>({ names: ['local', 'prod', 'stage', 'test'], keys: [], values: {} })
   const [draft, setDraft] = useState<HTTPRequestDraft>(() => draftFromRequest(emptyRequest('')))
   const [collectionName, setCollectionName] = useState('')
@@ -208,10 +272,18 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const baselineRef = useRef<HTTPRequestDraft | null>(null)
   const curlFocusedRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const dragRef = useRef<DragGhost | null>(null)
+  const dragListening = useRef(false)
+  const collectionsRef = useRef(collections)
+  const foldersRef = useRef(folders)
+  const listedRequestsRef = useRef<HTTPRequest[]>([])
   draftRef.current = draft
+  collectionsRef.current = collections
+  foldersRef.current = folders
 
   const collection = collections.find(item => item.id === selectedCollectionID) ?? collections[0]
   const listedRequests = useMemo(() => [...(collection?.requests ?? [])].sort(bySortOrder), [collection])
+  listedRequestsRef.current = listedRequests
   const request = listedRequests.find(item => item.id === selectedRequestID) ?? listedRequests[0]
   const stack = data.stacks.find(item => item.id === collection?.stack_id)
 
@@ -234,12 +306,6 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     if (next && next.id !== selectedRequestID) setSelectedRequestID(next.id)
   }, [collections, selectedCollectionID, selectedRequestID])
   useEffect(() => { if (collection) setCollectionName(collection.name) }, [collection?.id])
-  useEffect(() => {
-    if (!draggingID) return
-    const stop = () => setDraggingID('')
-    window.addEventListener('pointerup', stop)
-    return () => window.removeEventListener('pointerup', stop)
-  }, [draggingID])
   useEffect(() => {
     if (!request) return
     const next = draftFromRequest(request)
@@ -561,11 +627,39 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     }
   }
 
-  const persistCollectionOrder = async (fromID: string, toID: string) => {
-    const patches = sortOrderPatches(collections, reorderByID(collections, fromID, toID))
+  const persistRequestOrder = async (fromID: string, toID: string) => {
+    const list = listedRequestsRef.current
+    const patches = sortOrderPatches(list, reorderByID(list, fromID, toID))
     if (!patches.length) return
     setError('')
+    await Promise.all(patches.map(patch => api.updateHTTPRequest(patch.id, { sort_order: patch.sort_order })))
+    await refresh()
+  }
+
+  const persistFolderOrder = async (fromID: string, toID: string) => {
+    const all = foldersRef.current
+    const from = all.find(item => item.id === fromID)
+    const target = all.find(item => item.id === toID)
+    if (!from || !target || (from.parent_id ?? '') !== (target.parent_id ?? '')) return
+    const list = all.filter(item => (item.parent_id ?? '') === (from.parent_id ?? ''))
+    const patches = sortOrderPatches(list, reorderByID(list, fromID, toID))
+    if (!patches.length) return
+    setError('')
+    await Promise.all(patches.map(patch => api.updateHTTPFolder(patch.id, { sort_order: patch.sort_order })))
+    await refresh()
+  }
+
+  const dropCollection = async (fromID: string, toID: string) => {
+    const list = collectionsRef.current
+    const from = list.find(item => item.id === fromID)
+    const target = list.find(item => item.id === toID)
+    if (!from || !target) return
+    setError('')
     try {
+      if ((from.folder_id ?? '') !== (target.folder_id ?? '')) {
+        await api.updateHTTPCollection(fromID, { folder_id: target.folder_id ?? '' })
+      }
+      const patches = sortOrderPatches(list, reorderByID(list, fromID, toID))
       await Promise.all(patches.map(patch => api.updateHTTPCollection(patch.id, { sort_order: patch.sort_order })))
       await refresh()
     } catch (err) {
@@ -573,16 +667,235 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     }
   }
 
-  const persistRequestOrder = async (fromID: string, toID: string) => {
-    const patches = sortOrderPatches(listedRequests, reorderByID(listedRequests, fromID, toID))
-    if (!patches.length) return
+  const moveCollectionToFolder = async (collectionID: string, folderID: string) => {
+    const item = collectionsRef.current.find(value => value.id === collectionID)
+    if (!item || (item.folder_id ?? '') === folderID) return
     setError('')
     try {
-      await Promise.all(patches.map(patch => api.updateHTTPRequest(patch.id, { sort_order: patch.sort_order })))
+      await api.updateHTTPCollection(collectionID, { folder_id: folderID })
       await refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to reorder requests')
+      setError(err instanceof Error ? err.message : 'Unable to move collection')
     }
+  }
+
+  const finishDrop = (current: DragGhost, hit: DragHit) => {
+    if (current.kind === 'folder' && hit.rowID && hit.kind === 'folder' && hit.rowID !== current.id) {
+      void persistFolderOrder(current.id, hit.rowID).catch(err => {
+        setError(err instanceof Error ? err.message : 'Unable to reorder folders')
+      })
+      return
+    }
+    if (current.kind === 'collection' && hit.rowID && hit.kind === 'collection' && hit.rowID !== current.id) {
+      void dropCollection(current.id, hit.rowID)
+      return
+    }
+    if (current.kind === 'collection' && hit.kind === 'folder' && hit.folderID) {
+      void moveCollectionToFolder(current.id, hit.folderID)
+      return
+    }
+    if (current.kind === 'request' && hit.rowID && hit.kind === 'request' && hit.rowID !== current.id) {
+      void persistRequestOrder(current.id, hit.rowID).catch(err => {
+        setError(err instanceof Error ? err.message : 'Unable to reorder requests')
+      })
+    }
+  }
+
+  const beginDrag = (kind: DragKind, title: string) => (event: { clientX: number; clientY: number }, id: string) => {
+    const next: DragGhost = { id, kind, title, x: event.clientX, y: event.clientY, overID: '', overKind: '', overFolder: '' }
+    dragRef.current = next
+    setDrag(next)
+    if (dragListening.current) return
+    dragListening.current = true
+    const move = (pointer: PointerEvent) => {
+      const current = dragRef.current
+      if (!current) return
+      const hit = dragHit(pointer)
+      const updated = { ...current, x: pointer.clientX, y: pointer.clientY, overID: hit.rowID, overKind: hit.kind, overFolder: hit.folderID }
+      dragRef.current = updated
+      setDrag(updated)
+    }
+    const up = (pointer: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      dragListening.current = false
+      const current = dragRef.current
+      dragRef.current = null
+      setDrag(null)
+      if (current) finishDrop(current, dragHit(pointer))
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const renameCollection = async (item: HTTPCollection) => {
+    const typed = window.prompt('Rename collection', item.name)
+    const name = typed?.trim() ?? ''
+    if (!typed || !name || name === item.name) return
+    setError('')
+    try {
+      await api.updateHTTPCollection(item.id, { name })
+      if (item.id === collection?.id) setCollectionName(name)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to rename collection')
+    }
+  }
+
+  const duplicateCollection = async (item: HTTPCollection) => {
+    setError('')
+    try {
+      const created = await api.createHTTPCollection({
+        name: `${item.name} copy`,
+        description: item.description,
+        project_id: item.project_id,
+        stack_id: item.stack_id,
+        environment: item.environment,
+        folder_id: item.folder_id,
+        sort_order: collections.length,
+      })
+      for (const saved of [...(item.requests ?? [])].sort(bySortOrder)) {
+        await api.createHTTPRequest({
+          collection_id: created.id,
+          name: saved.name,
+          method: saved.method,
+          url: saved.url,
+          headers: saved.headers,
+          body: saved.body,
+          body_templates: saved.body_templates,
+          active_body_id: saved.active_body_id,
+          pre_script: saved.pre_script,
+          post_script: saved.post_script,
+          timeout_ms: saved.timeout_ms,
+          sort_order: saved.sort_order,
+        })
+      }
+      setSelectedCollectionID(created.id)
+      setSelectedRequestID('')
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to duplicate collection')
+    }
+  }
+
+  const removeCollectionItem = async (item: HTTPCollection) => {
+    const typed = window.prompt(collectionDeletePrompt(item.name))
+    if (!confirmedHTTPCollectionDelete(item.name, typed)) return
+    try {
+      await api.deleteHTTPCollection(item.id)
+      if (item.id === collection?.id) {
+        setSelectedCollectionID('')
+        setSelectedRequestID('')
+      }
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete collection')
+    }
+  }
+
+  const duplicateRequest = async (item: HTTPRequest) => {
+    if (!collection) return
+    setError('')
+    try {
+      const created = await api.createHTTPRequest({
+        collection_id: collection.id,
+        name: `${item.name} copy`,
+        method: item.method,
+        url: item.url,
+        headers: item.headers,
+        body: item.body,
+        body_templates: item.body_templates,
+        active_body_id: item.active_body_id,
+        pre_script: item.pre_script,
+        post_script: item.post_script,
+        timeout_ms: item.timeout_ms,
+        sort_order: listedRequests.length,
+      })
+      setSelectedRequestID(created.id)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to duplicate request')
+    }
+  }
+
+  const renameRequest = async (item: HTTPRequest) => {
+    const typed = window.prompt('Rename request', item.id === request?.id ? draft.name : item.name)
+    const name = typed?.trim() ?? ''
+    if (!typed || !name || name === item.name) return
+    setError('')
+    try {
+      await api.updateHTTPRequest(item.id, { name })
+      if (item.id === request?.id) {
+        setDraft(current => ({ ...current, name }))
+        if (baselineRef.current) baselineRef.current = { ...baselineRef.current, name }
+      }
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to rename request')
+    }
+  }
+
+  const removeRequestItem = async (item: HTTPRequest) => {
+    if (!window.confirm(requestDeleteWarning(item.name))) return
+    try {
+      await api.deleteHTTPRequest(item.id)
+      if (item.id === request?.id) setSelectedRequestID('')
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete request')
+    }
+  }
+
+  const saveFolderDraft = async () => {
+    if (!folderDraft) return
+    const name = folderDraft.name.trim()
+    if (!name) return
+    setError('')
+    try {
+      if (folderDraft.id) {
+        const current = folders.find(folder => folder.id === folderDraft.id)
+        if (current && name !== current.name) await api.updateHTTPFolder(folderDraft.id, { name })
+      } else {
+        const parent = folders.find(folder => folder.id === folderDraft.parentID)
+        const siblings = folders.filter(folder => (folder.parent_id ?? '') === (folderDraft.parentID ?? ''))
+        await api.createHTTPFolder({
+          name,
+          project_id: parent ? (parent.project_id || undefined) : (workspaceID || undefined),
+          parent_id: folderDraft.parentID || undefined,
+          sort_order: siblings.length,
+        })
+      }
+      setFolderDraft(null)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to save folder')
+    }
+  }
+
+  const removeFolder = async (folder: HTTPFolder) => {
+    if (!window.confirm(`Delete folder “${folder.name}”? Collections inside it stay in the list. Folders inside it move up.`)) return
+    setError('')
+    try {
+      await api.deleteHTTPFolder(folder.id)
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete folder')
+    }
+  }
+
+  const collectionMenu = (item: HTTPCollection) => {
+    const moves = folders.filter(folder => folder.id !== item.folder_id).map(folder => ({
+      id: `folder-${folder.id}`,
+      label: `Move to ${folder.name}`,
+      onSelect: () => { void moveCollectionToFolder(item.id, folder.id) },
+    }))
+    if (item.folder_id) moves.push({ id: 'unfolder', label: 'Remove from folder', onSelect: () => { void moveCollectionToFolder(item.id, '') } })
+    return [
+      { id: 'rename', label: 'Rename', onSelect: () => { void renameCollection(item) } },
+      { id: 'duplicate', label: 'Duplicate', onSelect: () => { void duplicateCollection(item) } },
+      ...moves,
+      { id: 'delete', label: 'Delete', onSelect: () => { void removeCollectionItem(item) } },
+    ]
   }
 
   const togglePanel = (panel: 'collections' | 'requests') => {
@@ -598,6 +911,80 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   if (envValue && !envNames.includes(envValue)) envNames.push(envValue)
   const workspaceProjects = projects ?? data.projects
   const workspaceStacks = data.stacks
+  const folderIDs = new Set(folders.map(folder => folder.id))
+  const looseCollections = collections.filter(item => !item.folder_id || !folderIDs.has(item.folder_id))
+  const renderCollection = (item: HTTPCollection) => {
+    const bound = data.stacks.find(stackItem => stackItem.id === item.stack_id)
+    const home = workspaceProjects.find(project => project.id === item.project_id)
+    return <SortableRow key={item.id} id={item.id} kind="collection" testId={`http-collection-${item.id}`} dragTestId={`http-collection-drag-${item.id}`} active={item.id === collection?.id} title={item.name} drag={drag} onDragStart={beginDrag('collection', item.name)} onSelect={() => selectCollection(item.id)} menu={<RowMenu testId={`http-collection-menu-${item.id}`} label={`Actions for ${item.name}`} items={collectionMenu(item)} />}>
+      <Globe2 />
+      <span><strong>{item.name}</strong><small>{bound ? bound.name : home?.name ?? 'All Workspaces'} · {item.requests?.length ?? 0} request{(item.requests?.length ?? 0) === 1 ? '' : 's'}</small></span>
+    </SortableRow>
+  }
+  const renderFolder = (folder: HTTPFolder): ReactNode => {
+    const open = !closedFolders[folder.id]
+    const dragging = drag?.kind === 'folder' && drag.id === folder.id
+    const dropHere = !!drag && drag.id !== folder.id && drag.overKind === 'folder' && drag.overID === folder.id
+    const children = folders.filter(item => item.parent_id === folder.id)
+    const inside = collections.filter(item => item.folder_id === folder.id)
+    return <div key={folder.id} className="http-folder" data-testid={`http-folder-${folder.id}`}>
+      <div
+        className={`http-folder-head${dragging ? ' dragging' : ''}${dropHere ? ' drop-target' : ''}`}
+        data-folder-drop={folder.id}
+        data-drag-id={folder.id}
+        data-drag-kind="folder"
+        onPointerDown={event => {
+          if ((event.target as HTMLElement).closest('.http-row-menu, .http-drag-handle, .http-folder-toggle')) return
+          const startX = event.clientX
+          const startY = event.clientY
+          const pointerId = event.pointerId
+          const move = (pointer: PointerEvent) => {
+            if (pointer.pointerId !== pointerId) return
+            if (Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 5) return
+            window.removeEventListener('pointermove', move)
+            window.removeEventListener('pointerup', up)
+            beginDrag('folder', folder.name)(pointer, folder.id)
+          }
+          const up = (pointer: PointerEvent) => {
+            if (pointer.pointerId !== pointerId) return
+            window.removeEventListener('pointermove', move)
+            window.removeEventListener('pointerup', up)
+          }
+          window.addEventListener('pointermove', move)
+          window.addEventListener('pointerup', up)
+        }}
+      >
+        <button
+          type="button"
+          className="http-drag-handle"
+          data-testid={`http-folder-drag-${folder.id}`}
+          aria-label={`Reorder ${folder.name}`}
+          title={`Reorder ${folder.name}`}
+          onPointerDown={event => {
+            event.preventDefault()
+            event.stopPropagation()
+            beginDrag('folder', folder.name)(event, folder.id)
+          }}
+        >
+          <GripVertical />
+        </button>
+        <button type="button" className="icon-button http-folder-toggle" aria-expanded={open} aria-label={open ? `Collapse ${folder.name}` : `Expand ${folder.name}`} onClick={() => setClosedFolders(current => ({ ...current, [folder.id]: open }))}>
+          <ChevronDown className={open ? '' : 'collapsed'} />
+        </button>
+        <Folder />
+        <strong>{folder.name}</strong>
+        <small>{inside.length + children.length}</small>
+        <RowMenu testId={`http-folder-menu-${folder.id}`} label={`Actions for ${folder.name}`} items={[
+          { id: 'folder', label: 'Folder', testId: `http-folder-create-${folder.id}`, onSelect: () => setFolderDraft({ name: '', parentID: folder.id }) },
+          { id: 'rename', label: 'Rename', onSelect: () => setFolderDraft({ id: folder.id, name: folder.name }) },
+          { id: 'delete', label: 'Delete', onSelect: () => { void removeFolder(folder) } },
+        ]} />
+      </div>
+      {open && children.map(renderFolder)}
+      {open && inside.map(renderCollection)}
+    </div>
+  }
+  const rootFolders = folders.filter(folder => !folder.parent_id || !folderIDs.has(folder.parent_id))
 
   return <section className={`http-workspace${collapsed.collections ? ' http-collections-collapsed' : ''}`} data-testid="http-page">
     <aside className={`http-rail${collapsed.collections ? ' collapsed' : ''}`}>
@@ -606,21 +993,17 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
           {collapsed.collections ? <PanelLeftOpen /> : <PanelLeftClose />}
         </button>
         <strong>Collections</strong>
-        <div className="http-rail-actions">
-          <input ref={fileInputRef} type="file" accept="application/json,.json" hidden data-testid="import-http-collection" onChange={event => { void importCollectionFile(event.target.files?.[0]) }} />
-          <button type="button" className="button small" data-testid="import-http-collection-button" onClick={() => fileInputRef.current?.click()}><Upload /> Import</button>
-          <button type="button" className="button small" data-testid="new-http-collection" onClick={createCollection} disabled={creating}><Plus /> New</button>
-        </div>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" hidden data-testid="import-http-collection" onChange={event => { void importCollectionFile(event.target.files?.[0]) }} />
+        <RowMenu testId="http-collections-menu" label="Collection actions" items={[
+          { id: 'import', label: 'Import', testId: 'import-http-collection-button', onSelect: () => fileInputRef.current?.click() },
+          { id: 'new', label: 'New', testId: 'new-http-collection', onSelect: () => { void createCollection() } },
+          { id: 'folder', label: 'Folder', testId: 'new-http-folder', onSelect: () => setFolderDraft({ name: '' }) },
+        ]} />
       </div>
       {!collapsed.collections && !!notice && <p className="http-empty" data-testid="http-workspace-notice">{notice}</p>}
-      {!collapsed.collections && (!collections.length ? <p className="http-empty">No HTTP collections yet. Create one to save independent requests.</p> : collections.map(item => {
-        const bound = data.stacks.find(stackItem => stackItem.id === item.stack_id)
-        const home = workspaceProjects.find(project => project.id === item.project_id)
-        return <SortableRow key={item.id} id={item.id} testId={`http-collection-${item.id}`} dragTestId={`http-collection-drag-${item.id}`} active={item.id === collection?.id} title={item.name} draggingID={draggingID} onDragStart={setDraggingID} onMove={(fromID, toID) => { void persistCollectionOrder(fromID, toID) }} onSelect={() => selectCollection(item.id)}>
-          <Globe2 />
-          <span><strong>{item.name}</strong><small>{bound ? bound.name : home?.name ?? 'All Workspaces'} · {item.requests?.length ?? 0} request{(item.requests?.length ?? 0) === 1 ? '' : 's'}</small></span>
-        </SortableRow>
-      }))}
+      {!collapsed.collections && !collections.length && !folders.length && <p className="http-empty">No HTTP collections yet. Create one to save independent requests.</p>}
+      {!collapsed.collections && rootFolders.map(renderFolder)}
+      {!collapsed.collections && looseCollections.map(renderCollection)}
     </aside>
     {!collection ? <div className="http-empty-main"><strong>HTTP collections</strong><span>Saved API requests, separate from Tests. Assign a workspace to keep a collection in that Project; a stack bind is optional.</span></div> : <div className="http-main">
       <header className="http-collection-head">
@@ -652,9 +1035,16 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <strong>Requests</strong>
             <button type="button" className="button small http-request-actions" data-testid="new-http-request" onClick={addRequest} disabled={!collection}><Plus /></button>
           </div>
-          {!collapsed.requests && listedRequests.map(item => <SortableRow key={item.id} id={item.id} testId={`http-request-${item.id}`} dragTestId={`http-request-drag-${item.id}`} active={item.id === request?.id} title={item.id === request?.id ? draft.name : item.name} draggingID={draggingID} onDragStart={setDraggingID} onMove={(fromID, toID) => { void persistRequestOrder(fromID, toID) }} onSelect={() => selectRequest(item.id)}>
-            <em>{item.method ?? 'GET'}</em><span>{item.id === request?.id ? draft.name : item.name}</span>
-          </SortableRow>)}
+          {!collapsed.requests && listedRequests.map(item => {
+            const title = item.id === request?.id ? draft.name : item.name
+            return <SortableRow key={item.id} id={item.id} kind="request" testId={`http-request-${item.id}`} dragTestId={`http-request-drag-${item.id}`} active={item.id === request?.id} title={title} drag={drag} onDragStart={beginDrag('request', title)} onSelect={() => selectRequest(item.id)} menu={<RowMenu testId={`http-request-menu-${item.id}`} label={`Actions for ${title}`} items={[
+              { id: 'rename', label: 'Rename', onSelect: () => { void renameRequest(item) } },
+              { id: 'duplicate', label: 'Duplicate', onSelect: () => { void duplicateRequest(item) } },
+              { id: 'delete', label: 'Delete', onSelect: () => { void removeRequestItem(item) } },
+            ]} />}>
+              <em>{item.method ?? 'GET'}</em><span>{title}</span>
+            </SortableRow>
+          })}
         </div>
         {request ? <div className="http-editor">
           <input className="http-request-name" aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} onBlur={() => { void saveRequestName() }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }} />
@@ -686,14 +1076,27 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
             <label>Timeout ms<input aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} /></label>
           </div>
           <p className="http-preview" data-testid="http-url-preview">{resolved.preview}</p>
-          <label>Headers<TemplateField multiline minHeight={72} ariaLabel="Request headers" value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} /></label>
-          <label className="http-script">Pre-request
-            <textarea aria-label="Pre-request script" data-testid="http-pre-script" spellCheck={false} placeholder={'package hook\n\nfunc Pre(req *Request) error {\n\treturn nil\n}'} value={draft.preScript} onChange={event => setDraft(current => ({ ...current, preScript: event.target.value }))} />
-          </label>
-          <label className="http-script">Post-response
-            <textarea aria-label="Post-response script" data-testid="http-post-script" spellCheck={false} placeholder={'package hook\n\nfunc Post(req *Request, res *Response) error {\n\treturn nil\n}'} value={draft.postScript} onChange={event => setDraft(current => ({ ...current, postScript: event.target.value }))} />
-          </label>
-          <div className="http-body-block">
+          <div className="http-editor-tabs" role="tablist" aria-label="Request editor">
+            {([['headers', 'Headers'], ['body', 'Body'], ['scripts', 'Scripts']] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={editorTab === id} data-testid={`http-tab-${id}`} className={editorTab === id ? 'active' : ''} onClick={() => setEditorTab(id)}>{label}</button>)}
+          </div>
+          {editorTab === 'headers' && <HeaderEditor value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} />}
+          {editorTab === 'scripts' && <div className="http-script-stack">
+            <section className={`http-script-card${scriptsOpen.pre ? '' : ' collapsed'}`}>
+              <header>
+                <span>Pre-request</span>
+                <button type="button" className="icon-button" data-testid="http-pre-script-toggle" aria-expanded={scriptsOpen.pre} aria-label={scriptsOpen.pre ? 'Collapse pre-request' : 'Expand pre-request'} onClick={() => setScriptsOpen(current => ({ ...current, pre: !current.pre }))}><ChevronDown /></button>
+              </header>
+              {scriptsOpen.pre && <textarea aria-label="Pre-request script" data-testid="http-pre-script" spellCheck={false} placeholder={'package hook\n\nfunc Pre(req *Request) error {\n\treturn nil\n}'} value={draft.preScript} onChange={event => setDraft(current => ({ ...current, preScript: event.target.value }))} />}
+            </section>
+            <section className={`http-script-card${scriptsOpen.post ? '' : ' collapsed'}`}>
+              <header>
+                <span>Post-response</span>
+                <button type="button" className="icon-button" data-testid="http-post-script-toggle" aria-expanded={scriptsOpen.post} aria-label={scriptsOpen.post ? 'Collapse post-response' : 'Expand post-response'} onClick={() => setScriptsOpen(current => ({ ...current, post: !current.post }))}><ChevronDown /></button>
+              </header>
+              {scriptsOpen.post && <textarea aria-label="Post-response script" data-testid="http-post-script" spellCheck={false} placeholder={'package hook\n\nfunc Post(req *Request, res *Response) error {\n\treturn nil\n}'} value={draft.postScript} onChange={event => setDraft(current => ({ ...current, postScript: event.target.value }))} />}
+            </section>
+          </div>}
+          {editorTab === 'body' && <div className="http-body-block">
             <div className="http-body-toolbar">
               <label>Saved body
                 <select aria-label="Saved body" data-testid="http-body-template" value={draft.activeBodyID} onChange={event => {
@@ -735,11 +1138,25 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
               body,
               bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, body } : item),
             }))} /></label>
-          </div>
+          </div>}
           <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} sending={sending} pendingLabel={`${draft.method} ${resolved.preview || draft.url}`.trim()} empty="Send to capture the last result here. This is not a process Run." curl={paneCurl} />
         </div> : <div className="http-empty-main"><strong>No requests</strong><span>Add a request or import curl.</span></div>}
       </div>
     </div>}
+    {drag && <div className="http-drag-ghost" style={{ left: drag.x, top: drag.y }}>{drag.title}</div>}
+    {folderDraft && <>
+      <button type="button" className="modal-scrim" aria-label="Cancel folder" onClick={() => setFolderDraft(null)} />
+      <form className="modal collection-modal" role="dialog" aria-modal="true" aria-labelledby="http-folder-title" data-testid="http-folder-dialog" onSubmit={event => { event.preventDefault(); void saveFolderDraft() }}>
+        <span className="modal-icon"><Folder /></span>
+        <h2 id="http-folder-title">{folderDraft.id ? 'Rename folder' : 'New folder'}</h2>
+        <p>{folderDraft.parentID ? `Creates a folder inside ${folders.find(folder => folder.id === folderDraft.parentID)?.name ?? 'this folder'}.` : 'Groups collections on this page. Requests stay inside their collection.'}</p>
+        <label>Name<input autoFocus data-testid="http-folder-name" value={folderDraft.name} placeholder="Availability" onChange={event => setFolderDraft(current => current ? { ...current, name: event.target.value } : current)} required /></label>
+        <footer>
+          <button type="button" className="button" onClick={() => setFolderDraft(null)}>Cancel</button>
+          <button type="submit" className="button primary" data-testid="http-folder-save" disabled={!folderDraft.name.trim()}>{folderDraft.id ? 'Rename' : 'Create'}</button>
+        </footer>
+      </form>
+    </>}
   </section>
 }
 

@@ -1557,6 +1557,7 @@ type UpdateHTTPCollectionInput struct {
 	ProjectID   *string `json:"project_id,omitempty" jsonschema:"New workspace (Project); empty string lists it only under All Workspaces"`
 	StackID     *string `json:"stack_id,omitempty" jsonschema:"New stack bind; empty string unbinds"`
 	Environment *string `json:"environment,omitempty" jsonschema:"New unbound environment name; empty follows the default library name"`
+	FolderID    *string `json:"folder_id,omitempty" jsonschema:"HTTP folder that groups this collection; empty string removes it from a folder"`
 	SortOrder   *int    `json:"sort_order,omitempty" jsonschema:"New display order"`
 }
 
@@ -1574,6 +1575,11 @@ func (in UpdateHTTPCollectionInput) validate() error {
 	}
 	if in.StackID != nil && strings.TrimSpace(*in.StackID) != "" {
 		if err := identifier("stack_id", *in.StackID); err != nil {
+			return err
+		}
+	}
+	if in.FolderID != nil && strings.TrimSpace(*in.FolderID) != "" {
+		if err := identifier("folder_id", *in.FolderID); err != nil {
 			return err
 		}
 	}

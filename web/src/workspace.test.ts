@@ -27,6 +27,10 @@ const snapshot = (patch: Partial<Snapshot> = {}): Snapshot => ({
     { id: 'http-other', name: 'Other', project_id: 'project-web' },
     { id: 'http-loose', name: 'Loose' },
   ],
+  http_folders: [
+    { id: 'folder-api', name: 'Hotel', project_id: 'project-api' },
+    { id: 'folder-web', name: 'Web', project_id: 'project-web' },
+  ],
   ...patch,
 })
 
@@ -86,6 +90,7 @@ describe('workspace scope', () => {
     expect(scoped.ports.map(item => item.port)).toEqual([8080])
     expect(scoped.checks.map(item => item.id)).toEqual(['check-stack'])
     expect(scoped.http_collections?.map(item => item.id)).toEqual(['http-hotel', 'http-owned'])
+    expect(scoped.http_folders?.map(item => item.id)).toEqual(['folder-api'])
     expect(scoped.summary).toEqual({ running: 1, ports: 1, failed: 0, commands: 0 })
   })
 

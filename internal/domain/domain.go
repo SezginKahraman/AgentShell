@@ -362,6 +362,18 @@ func StackPrerequisiteCycle(start string, edges []StackPrerequisite, graph map[s
 	return visit(start)
 }
 
+// HTTPFolder groups HTTP collections in the dashboard. It does not own requests.
+// ParentID nests this folder inside another HTTP folder.
+type HTTPFolder struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	ProjectID string    `json:"project_id,omitempty"`
+	ParentID  string    `json:"parent_id,omitempty"`
+	SortOrder int       `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // HTTPCollection is a Postman-like group of independent HTTP requests.
 // It is not a catalog Collection (launcher folder) and not a CheckDefinition.
 type HTTPCollection struct {
@@ -371,6 +383,7 @@ type HTTPCollection struct {
 	ProjectID   string        `json:"project_id,omitempty"`
 	StackID     string        `json:"stack_id,omitempty"`
 	Environment string        `json:"environment,omitempty"`
+	FolderID    string        `json:"folder_id,omitempty"`
 	SortOrder   int           `json:"sort_order"`
 	Requests    []HTTPRequest `json:"requests,omitempty"`
 	CreatedAt   time.Time     `json:"created_at"`

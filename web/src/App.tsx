@@ -36,7 +36,7 @@ type CheckDraft = { name: string; description: string; kind: 'http' | 'command';
 const isPrerequisiteError = (error: unknown): error is Error & { status?: number; needed_stacks?: NeededStack[] } =>
 	error instanceof Error && (error as Error & { status?: number }).status === 409 && Array.isArray((error as Error & { needed_stacks?: NeededStack[] }).needed_stacks)
 
-const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [], checks: [], http_collections: [] }
+const empty: Snapshot = { summary: { running: 0, ports: 0, failed: 0, commands: 0 }, runs: [], ports: [], history: [], commands: [], stacks: [], projects: [], collections: [], checks: [], http_collections: [], http_folders: [] }
 const running = (status?: string) => status === 'running' || status === 'starting' || status === 'stopping'
 const externalDisplayState = (lifecycleMode?: string, observedState?: string, status?: string, canStop?: boolean) => {
 	if (lifecycleMode !== 'external') return status ?? 'stopped'

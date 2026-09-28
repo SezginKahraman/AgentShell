@@ -1,5 +1,5 @@
 import type { AgentShellApi } from './client'
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPRequest, HTTPRequestInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPFolder, HTTPFolderInput, HTTPRequest, HTTPRequestInput, Project, ProjectInput, PromoteRunInput, Run, RuntimeInfo, SavedCommand, Snapshot, Stack, StackInput } from '../types'
 import { httpCollectionVars, interpolateTemplate } from '../httpInterpolate'
 import { exportHTTPCollectionDocument, parseHTTPCollectionDocument } from '../httpCollectionTransfer'
 import { parseCurl, rewriteURLWithVars } from '../parseCurl'
@@ -50,6 +50,7 @@ const stacks: Stack[] = [
 
 let environmentLibrary: EnvironmentLibrary = { names: ['local', 'prod', 'stage', 'test'], keys: ['API_URL'], secret_keys: [], values: { API_URL: { local: 'http://127.0.0.1:8080', prod: 'https://api.example.com', stage: 'https://staging.example.com', test: 'http://127.0.0.1:8081' } } }
 
+const httpFolders: HTTPFolder[] = []
 const httpCollections: HTTPCollection[] = [
 	{ id: 'http-hotel', name: 'Hotel Meta API', project_id: 'project-api', stack_id: 'stack-internal', sort_order: 0, requests: [
 		{ id: 'http-health', collection_id: 'http-hotel', name: 'Health', method: 'GET', url: '{{API_URL}}/health', timeout_ms: 5000, sort_order: 0 },
@@ -73,7 +74,7 @@ export class DemoApi implements AgentShellApi {
     const listedHTTP = structuredClone(httpCollections)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
       .map(item => ({ ...item, requests: [...(item.requests ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)) }))
-    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks), http_collections: listedHTTP }
+    return { summary: { running: runs.filter(r => r.status === 'running').length, ports: ports.length, failed: history.filter(r => r.status === 'failed').length, commands: history.length }, runs: structuredClone(runs), ports, history: structuredClone(history), commands: structuredClone(commands), stacks: structuredClone(stacks), projects: structuredClone(projects), collections: structuredClone(collections), checks: structuredClone(checks), http_collections: listedHTTP, http_folders: structuredClone(httpFolders).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)) }
   }
   async getRuntime(): Promise<RuntimeInfo> {
     return { status: this.runtimeStatus, instance_id: 'demo-browser-runtime', pid: 0, api_url: 'browser demo adapter', started_at: new Date(now).toISOString(), uptime_seconds: Math.max(0, Math.round((Date.now() - now) / 1000)), managed_runs: runs.filter(run => runningStatus(run.status)).length, database: { path: 'No database (browser demo)' }, mcp: { count: 0, clients: [] } }
@@ -257,6 +258,27 @@ export class DemoApi implements AgentShellApi {
 		const index = httpCollections.findIndex(value => value.id === id)
 		if (index < 0) throw new Error('HTTP collection not found')
 		httpCollections.splice(index, 1)
+		this.emit()
+	}
+  async createHTTPFolder(input: HTTPFolderInput) {
+		const item: HTTPFolder = { ...structuredClone(input), id: `http-folder-${Date.now()}` }
+		httpFolders.push(item)
+		this.emit()
+		return structuredClone(item)
+	}
+  async updateHTTPFolder(id: string, input: Partial<HTTPFolderInput>) {
+		const item = httpFolders.find(value => value.id === id)
+		if (!item) throw new Error('HTTP folder not found')
+		Object.assign(item, structuredClone(input))
+		this.emit()
+		return structuredClone(item)
+	}
+  async deleteHTTPFolder(id: string) {
+		const index = httpFolders.findIndex(value => value.id === id)
+		if (index < 0) throw new Error('HTTP folder not found')
+		const [removed] = httpFolders.splice(index, 1)
+		httpFolders.forEach(item => { if (item.parent_id === id) item.parent_id = removed.parent_id ?? '' })
+		httpCollections.forEach(item => { if (item.folder_id === id) item.folder_id = '' })
 		this.emit()
 	}
   async createHTTPRequest(input: HTTPRequestInput) {

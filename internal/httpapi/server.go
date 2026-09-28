@@ -136,6 +136,9 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	case "http-collections":
 		s.httpCollectionsAPI(w, r, parts[2:])
 		return
+	case "http-folders":
+		s.httpFoldersAPI(w, r, parts[2:])
+		return
 	case "http-requests":
 		s.httpRequestsAPI(w, r, parts[2:])
 		return

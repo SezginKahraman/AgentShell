@@ -137,6 +137,7 @@ export function scopeSnapshot(data: Snapshot, projectID: string | null): Snapsho
     if (!collection.stack_id) return false
     return stackIDs.has(collection.stack_id)
   })
+  const http_folders = (data.http_folders ?? []).filter(folder => folder.project_id === projectID)
   return {
     ...data,
     commands,
@@ -147,6 +148,7 @@ export function scopeSnapshot(data: Snapshot, projectID: string | null): Snapsho
     ports,
     checks,
     http_collections,
+    http_folders,
     projects: data.projects.filter(item => item.id === projectID),
     summary: {
       running: runs.filter(run => isActiveRun(run.status)).length,

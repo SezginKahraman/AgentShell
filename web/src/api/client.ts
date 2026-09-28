@@ -1,4 +1,4 @@
-import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPRequest, HTTPRequestInput, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
+import type { CheckDefinition, CheckInput, Collection, CollectionInput, CommandSource, EnvironmentLibrary, HTTPCollection, HTTPCollectionInput, HTTPFolder, HTTPFolderInput, HTTPRequest, HTTPRequestInput, LogResponse, NeededStack, Project, ProjectInput, PromoteRunInput, PromoteRunResult, Run, RuntimeInfo, SavedCommand, ShutdownResult, Snapshot, Stack, StackInput, Summary, Listener } from '../types'
 import type { HTTPCollectionDocument } from '../httpCollectionTransfer'
 
 export interface AgentShellApi {
@@ -34,6 +34,9 @@ export interface AgentShellApi {
   createHTTPCollection(input: HTTPCollectionInput): Promise<HTTPCollection>
   updateHTTPCollection(id: string, input: Partial<HTTPCollectionInput>): Promise<HTTPCollection>
   deleteHTTPCollection(id: string): Promise<void>
+  createHTTPFolder(input: HTTPFolderInput): Promise<HTTPFolder>
+  updateHTTPFolder(id: string, input: Partial<HTTPFolderInput>): Promise<HTTPFolder>
+  deleteHTTPFolder(id: string): Promise<void>
   createHTTPRequest(input: HTTPRequestInput): Promise<HTTPRequest>
   updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>): Promise<HTTPRequest>
   deleteHTTPRequest(id: string): Promise<void>
@@ -76,15 +79,16 @@ export class HttpApi implements AgentShellApi {
   mode = 'live' as const
   async health() { return request<{ status: string }>('/api/health') }
   async getSnapshot(): Promise<Snapshot> {
-    const [summary, runs, ports, history, commands, stacks, projects, collections, checks, httpCollections] = await Promise.all([
+    const [summary, runs, ports, history, commands, stacks, projects, collections, checks, httpCollections, httpFolders] = await Promise.all([
       request<Summary>('/api/summary'), request<Run[] | { items?: Run[] } | null>('/api/runs'),
       request<Listener[] | { items?: Listener[] } | null>('/api/ports'), request<Run[] | { items?: Run[] } | null>('/api/history'),
       request<SavedCommand[] | { items?: SavedCommand[] } | null>('/api/commands'), request<Stack[] | { items?: Stack[] } | null>('/api/stacks'),
       request<Project[] | { items?: Project[] } | null>('/api/projects'), optionalArrayRequest<Collection>('/api/collections'),
 		optionalArrayRequest<CheckDefinition>('/api/checks'),
 		optionalArrayRequest<HTTPCollection>('/api/http-collections'),
+		optionalArrayRequest<HTTPFolder>('/api/http-folders'),
     ])
-    return { summary, runs: array(runs), ports: array(ports), history: array(history), commands: array(commands), stacks: array(stacks), projects: array(projects), collections: array(collections), checks: array(checks), http_collections: array(httpCollections) }
+    return { summary, runs: array(runs), ports: array(ports), history: array(history), commands: array(commands), stacks: array(stacks), projects: array(projects), collections: array(collections), checks: array(checks), http_collections: array(httpCollections), http_folders: array(httpFolders) }
   }
   getRuntime() { return request<RuntimeInfo>('/api/runtime') }
   shutdownRuntime() { return request<ShutdownResult>('/api/runtime/shutdown', { method: 'POST', body: JSON.stringify({ confirm: true }) }) }
@@ -119,6 +123,9 @@ export class HttpApi implements AgentShellApi {
   createHTTPCollection(input: HTTPCollectionInput) { return request<HTTPCollection>('/api/http-collections', { method: 'POST', body: JSON.stringify(input) }) }
   updateHTTPCollection(id: string, input: Partial<HTTPCollectionInput>) { return request<HTTPCollection>(`/api/http-collections/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   async deleteHTTPCollection(id: string) { await request(`/api/http-collections/${id}`, { method: 'DELETE' }) }
+  createHTTPFolder(input: HTTPFolderInput) { return request<HTTPFolder>('/api/http-folders', { method: 'POST', body: JSON.stringify(input) }) }
+  updateHTTPFolder(id: string, input: Partial<HTTPFolderInput>) { return request<HTTPFolder>(`/api/http-folders/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
+  async deleteHTTPFolder(id: string) { await request(`/api/http-folders/${id}`, { method: 'DELETE' }) }
   createHTTPRequest(input: HTTPRequestInput) { return request<HTTPRequest>('/api/http-requests', { method: 'POST', body: JSON.stringify(input) }) }
   updateHTTPRequest(id: string, input: Partial<HTTPRequestInput>) { return request<HTTPRequest>(`/api/http-requests/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
   async deleteHTTPRequest(id: string) { await request(`/api/http-requests/${id}`, { method: 'DELETE' }) }

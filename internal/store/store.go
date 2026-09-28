@@ -103,6 +103,10 @@ CREATE TABLE IF NOT EXISTS http_collections (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', stack_id TEXT NOT NULL DEFAULT '',
  project_id TEXT NOT NULL DEFAULT '', environment TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS http_folders (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', parent_id TEXT NOT NULL DEFAULT '',
+ sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS http_requests (
  id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, name TEXT NOT NULL, method TEXT NOT NULL DEFAULT 'GET',
  url TEXT NOT NULL, headers TEXT NOT NULL DEFAULT '{}', body TEXT NOT NULL DEFAULT '', timeout_ms INTEGER NOT NULL DEFAULT 10000,
@@ -118,7 +122,8 @@ CREATE TABLE IF NOT EXISTS http_requests (
 		"stacks":              {"project_id TEXT NOT NULL DEFAULT ''", "collection_id TEXT NOT NULL DEFAULT ''", "stable_key TEXT NOT NULL DEFAULT ''", "depends_on_stacks TEXT NOT NULL DEFAULT '[]'", "environment TEXT NOT NULL DEFAULT 'local'", "env TEXT NOT NULL DEFAULT '{}'", "visible_in TEXT NOT NULL DEFAULT '[]'"},
 		"checks":              {"http_scope TEXT NOT NULL DEFAULT 'local'", "visible_in TEXT NOT NULL DEFAULT '[]'"},
 		"http_requests":       {"body_templates TEXT NOT NULL DEFAULT '[]'", "active_body_id TEXT NOT NULL DEFAULT ''", "pre_script TEXT NOT NULL DEFAULT ''", "post_script TEXT NOT NULL DEFAULT ''"},
-		"http_collections":    {"project_id TEXT NOT NULL DEFAULT ''"},
+		"http_collections":    {"project_id TEXT NOT NULL DEFAULT ''", "folder_id TEXT NOT NULL DEFAULT ''"},
+		"http_folders":        {"parent_id TEXT NOT NULL DEFAULT ''"},
 		"environment_library": {"secret_keys TEXT NOT NULL DEFAULT '[]'"},
 	}
 	for table, defs := range columns {
@@ -452,6 +457,9 @@ func (s *Store) DeleteProject(ctx context.Context, id string) error {
 		return e
 	}
 	if _, e := s.db.ExecContext(ctx, `UPDATE http_collections SET project_id='' WHERE project_id=?`, id); e != nil {
+		return e
+	}
+	if _, e := s.db.ExecContext(ctx, `UPDATE http_folders SET project_id='' WHERE project_id=?`, id); e != nil {
 		return e
 	}
 	r, e := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id=?`, id)
@@ -931,21 +939,22 @@ func (s *Store) DeleteCheck(ctx context.Context, id string) error {
 	return affected(r, err)
 }
 
-const httpCollectionCols = `id,name,description,stack_id,project_id,environment,sort_order,created_at,updated_at`
+const httpCollectionCols = `id,name,description,stack_id,project_id,environment,sort_order,created_at,updated_at,folder_id`
 const httpRequestCols = `id,collection_id,name,method,url,headers,body,body_templates,active_body_id,timeout_ms,sort_order,last_result,created_at,updated_at,pre_script,post_script`
 
 func (s *Store) SaveHTTPCollection(ctx context.Context, v *domain.HTTPCollection) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO http_collections(`+httpCollectionCols+`) VALUES(?,?,?,?,?,?,?,?,?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO http_collections(`+httpCollectionCols+`) VALUES(?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,stack_id=excluded.stack_id,
-project_id=excluded.project_id,environment=excluded.environment,sort_order=excluded.sort_order,updated_at=excluded.updated_at`,
-		v.ID, v.Name, v.Description, v.StackID, v.ProjectID, v.Environment, v.SortOrder, ts(v.CreatedAt), ts(v.UpdatedAt))
+project_id=excluded.project_id,environment=excluded.environment,sort_order=excluded.sort_order,updated_at=excluded.updated_at,
+folder_id=excluded.folder_id`,
+		v.ID, v.Name, v.Description, v.StackID, v.ProjectID, v.Environment, v.SortOrder, ts(v.CreatedAt), ts(v.UpdatedAt), v.FolderID)
 	return err
 }
 
 func scanHTTPCollection(row scanner) (domain.HTTPCollection, error) {
 	var v domain.HTTPCollection
 	var created, updated string
-	err := row.Scan(&v.ID, &v.Name, &v.Description, &v.StackID, &v.ProjectID, &v.Environment, &v.SortOrder, &created, &updated)
+	err := row.Scan(&v.ID, &v.Name, &v.Description, &v.StackID, &v.ProjectID, &v.Environment, &v.SortOrder, &created, &updated, &v.FolderID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
@@ -1010,6 +1019,63 @@ func (s *Store) DeleteHTTPCollection(ctx context.Context, id string) error {
 		return err
 	}
 	r, err := s.db.ExecContext(ctx, `DELETE FROM http_collections WHERE id=?`, id)
+	return affected(r, err)
+}
+
+func (s *Store) SaveHTTPFolder(ctx context.Context, v *domain.HTTPFolder) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO http_folders(id,name,project_id,parent_id,sort_order,created_at,updated_at) VALUES(?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name,project_id=excluded.project_id,parent_id=excluded.parent_id,sort_order=excluded.sort_order,updated_at=excluded.updated_at`,
+		v.ID, v.Name, v.ProjectID, v.ParentID, v.SortOrder, ts(v.CreatedAt), ts(v.UpdatedAt))
+	return err
+}
+
+func (s *Store) HTTPFolders(ctx context.Context) ([]domain.HTTPFolder, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,project_id,parent_id,sort_order,created_at,updated_at FROM http_folders ORDER BY sort_order,name,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.HTTPFolder, 0)
+	for rows.Next() {
+		var v domain.HTTPFolder
+		var created, updated string
+		if err = rows.Scan(&v.ID, &v.Name, &v.ProjectID, &v.ParentID, &v.SortOrder, &created, &updated); err != nil {
+			return nil, err
+		}
+		v.CreatedAt = parseTime(created)
+		v.UpdatedAt = parseTime(updated)
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) HTTPFolder(ctx context.Context, id string) (domain.HTTPFolder, error) {
+	var v domain.HTTPFolder
+	var created, updated string
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,project_id,parent_id,sort_order,created_at,updated_at FROM http_folders WHERE id=?`, id).Scan(&v.ID, &v.Name, &v.ProjectID, &v.ParentID, &v.SortOrder, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		return v, ErrNotFound
+	}
+	if err != nil {
+		return v, err
+	}
+	v.CreatedAt = parseTime(created)
+	v.UpdatedAt = parseTime(updated)
+	return v, nil
+}
+
+func (s *Store) DeleteHTTPFolder(ctx context.Context, id string) error {
+	folder, err := s.HTTPFolder(ctx, id)
+	if err != nil {
+		return err
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE http_folders SET parent_id=? WHERE parent_id=?`, folder.ParentID, id); err != nil {
+		return err
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE http_collections SET folder_id='' WHERE folder_id=?`, id); err != nil {
+		return err
+	}
+	r, err := s.db.ExecContext(ctx, `DELETE FROM http_folders WHERE id=?`, id)
 	return affected(r, err)
 }
 

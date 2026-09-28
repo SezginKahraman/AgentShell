@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ type httpHookOutput struct {
 }
 
 func (m *Manager) runHTTPHook(ctx context.Context, phase, script string, req *httpHookRequest, res *httpHookResponse) (string, error) {
-	binary, err := m.httpHookBinary(ctx, script)
+	binary, err := m.httpHookBinary(ctx, script, httpHookLibraryFiles(req.Env))
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +127,7 @@ func (m *Manager) persistHTTPHookEnv(ctx context.Context, lib *domain.Environmen
 	return nil
 }
 
-func (m *Manager) httpHookBinary(ctx context.Context, script string) (string, error) {
+func (m *Manager) httpHookBinary(ctx context.Context, script string, extras map[string]string) (string, error) {
 	if _, err := exec.LookPath("go"); err != nil {
 		return "", fmt.Errorf("http hook: go toolchain not found")
 	}
@@ -137,7 +138,7 @@ func (m *Manager) httpHookBinary(ctx context.Context, script string) (string, er
 	if !hasPre && !hasPost {
 		return "", fmt.Errorf("http hook: script must define Pre or Post")
 	}
-	sum := sha256.Sum256([]byte(httpHookHarnessVersion + "\n" + script))
+	sum := sha256.Sum256([]byte(httpHookCacheIdentity(script, extras)))
 	dir := filepath.Join(m.httpHookRoot(), hex.EncodeToString(sum[:]))
 	binary := filepath.Join(dir, "hook.bin")
 	httpHookBuildMu.Lock()
@@ -156,6 +157,9 @@ func (m *Manager) httpHookBinary(ctx context.Context, script string) (string, er
 	}
 	if !hasPre || !hasPost {
 		files[filepath.Join("hook", "missing.go")] = httpHookStubs(hasPre, hasPost)
+	}
+	for name, content := range extras {
+		files[filepath.Join("hook", name)] = content
 	}
 	for name, content := range files {
 		if err = os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -194,6 +198,58 @@ func (m *Manager) httpHookRoot() string {
 		root = os.TempDir()
 	}
 	return filepath.Join(root, "http-hooks")
+}
+
+func httpHookCacheIdentity(script string, extras map[string]string) string {
+	var b strings.Builder
+	b.WriteString(httpHookHarnessVersion)
+	b.WriteString("\n")
+	b.WriteString(script)
+	names := make([]string, 0, len(extras))
+	for name := range extras {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b.WriteString("\n---\n")
+		b.WriteString(name)
+		b.WriteString("\n")
+		b.WriteString(extras[name])
+	}
+	return b.String()
+}
+
+func httpHookLibraryFiles(env map[string]string) map[string]string {
+	names := make([]string, 0)
+	for key, value := range env {
+		if httpHookLibrarySource(value) {
+			names = append(names, key)
+		}
+	}
+	sort.Strings(names)
+	out := map[string]string{}
+	for _, key := range names {
+		out["lib_"+safeHookFile(key)+".go"] = strings.TrimSpace(env[key]) + "\n"
+	}
+	return out
+}
+
+func httpHookLibrarySource(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "package hook\n") || strings.HasPrefix(trimmed, "package hook\r\n")
+}
+
+func safeHookFile(key string) string {
+	var b strings.Builder
+	for _, r := range key {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "snippet"
+	}
+	return b.String()
 }
 
 func httpHookFuncs(src string) (hasPre, hasPost bool, err error) {
@@ -276,7 +332,7 @@ func replaceEnv(base []string, overrides map[string]string) []string {
 
 const httpHookGoMod = `module agentshell.http.hook
 
-go 1.25.0
+go 1.22
 `
 
 const httpHookTypes = `package hook

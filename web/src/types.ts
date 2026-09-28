@@ -183,12 +183,23 @@ export interface HTTPCollection {
 	project_id?: string
 	stack_id?: string
 	environment?: string
+	folder_id?: string
 	sort_order?: number
 	requests?: HTTPRequest[]
 	created_at?: string
 	updated_at?: string
 }
 export type HTTPCollectionInput = Omit<HTTPCollection, 'id' | 'requests' | 'created_at' | 'updated_at'>
+export interface HTTPFolder {
+	id: string
+	name: string
+	project_id?: string
+	parent_id?: string
+	sort_order?: number
+	created_at?: string
+	updated_at?: string
+}
+export type HTTPFolderInput = Omit<HTTPFolder, 'id' | 'created_at' | 'updated_at'>
 
 export interface Snapshot {
   summary: Summary
@@ -201,4 +212,5 @@ export interface Snapshot {
   collections: Collection[]
 	checks: CheckDefinition[]
 	http_collections?: HTTPCollection[]
+	http_folders?: HTTPFolder[]
 }

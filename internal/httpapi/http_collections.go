@@ -393,6 +393,15 @@ func (s *Server) validateHTTPCollection(ctx context.Context, collection *domain.
 			return stackErr
 		}
 	}
+	collection.FolderID = strings.TrimSpace(collection.FolderID)
+	if collection.FolderID != "" {
+		if _, folderErr := s.store.HTTPFolder(ctx, collection.FolderID); folderErr != nil {
+			if errors.Is(folderErr, store.ErrNotFound) {
+				return errors.New("unknown folder_id")
+			}
+			return folderErr
+		}
+	}
 	return nil
 }
 
@@ -445,6 +454,7 @@ type httpCollectionPatch struct {
 	ProjectID   *string `json:"project_id"`
 	StackID     *string `json:"stack_id"`
 	Environment *string `json:"environment"`
+	FolderID    *string `json:"folder_id"`
 	SortOrder   *int    `json:"sort_order"`
 }
 
@@ -463,6 +473,9 @@ func (p httpCollectionPatch) apply(collection *domain.HTTPCollection) {
 	}
 	if p.Environment != nil {
 		collection.Environment = *p.Environment
+	}
+	if p.FolderID != nil {
+		collection.FolderID = *p.FolderID
 	}
 	if p.SortOrder != nil {
 		collection.SortOrder = *p.SortOrder
@@ -600,4 +613,152 @@ func remapHTTPCollectionsAfterLibraryChange(ctx context.Context, s *store.Store,
 		}
 	}
 	return nil
+}
+
+func writeHTTPFolderClientError(w http.ResponseWriter, err error) bool {
+	switch err.Error() {
+	case "unknown parent_id", "folder parent cycle", "parent_id cannot equal id", "parent folder must belong to the same project":
+		writeError(w, http.StatusBadRequest, err.Error())
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) validateHTTPFolderParent(ctx context.Context, id, projectID, parentID string) error {
+	if parentID == "" {
+		return nil
+	}
+	if id != "" && parentID == id {
+		return errors.New("parent_id cannot equal id")
+	}
+	parent, err := s.store.HTTPFolder(ctx, parentID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return errors.New("unknown parent_id")
+		}
+		return err
+	}
+	if parent.ProjectID != projectID {
+		return errors.New("parent folder must belong to the same project")
+	}
+	for parent.ParentID != "" {
+		if parent.ParentID == id {
+			return errors.New("folder parent cycle")
+		}
+		parent, err = s.store.HTTPFolder(ctx, parent.ParentID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil
+			}
+			return err
+		}
+		if parent.ID == id {
+			return errors.New("folder parent cycle")
+		}
+	}
+	return nil
+}
+
+func (s *Server) httpFoldersAPI(w http.ResponseWriter, r *http.Request, parts []string) {
+	ctx := r.Context()
+	if len(parts) == 0 {
+		switch r.Method {
+		case http.MethodGet:
+			list, err := s.store.HTTPFolders(ctx)
+			respond(w, list, err)
+		case http.MethodPost:
+			var folder domain.HTTPFolder
+			if !decode(w, r, &folder) {
+				return
+			}
+			folder.ID = runtimepkg.NewID("httpfld")
+			now := time.Now().UTC()
+			folder.CreatedAt, folder.UpdatedAt = now, now
+			folder.Name = strings.TrimSpace(folder.Name)
+			folder.ProjectID = strings.TrimSpace(folder.ProjectID)
+			folder.ParentID = strings.TrimSpace(folder.ParentID)
+			if folder.Name == "" {
+				writeError(w, http.StatusBadRequest, "name is required")
+				return
+			}
+			if folder.ProjectID != "" {
+				if _, err := s.store.Project(ctx, folder.ProjectID); err != nil {
+					if errors.Is(err, store.ErrNotFound) {
+						writeError(w, http.StatusBadRequest, "unknown project_id")
+						return
+					}
+					respond(w, nil, err)
+					return
+				}
+			}
+			if err := s.validateHTTPFolderParent(ctx, folder.ID, folder.ProjectID, folder.ParentID); err != nil {
+				if !writeHTTPFolderClientError(w, err) {
+					respond(w, nil, err)
+				}
+				return
+			}
+			err := s.store.SaveHTTPFolder(ctx, &folder)
+			respondAction(w, folder, err)
+		default:
+			method(w)
+		}
+		return
+	}
+	if len(parts) != 1 {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	folder, err := s.store.HTTPFolder(ctx, parts[0])
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		respond(w, folder, nil)
+	case http.MethodPut:
+		var patch struct {
+			Name      *string `json:"name"`
+			ProjectID *string `json:"project_id"`
+			ParentID  *string `json:"parent_id"`
+			SortOrder *int    `json:"sort_order"`
+		}
+		if !decode(w, r, &patch) {
+			return
+		}
+		if patch.Name != nil {
+			folder.Name = strings.TrimSpace(*patch.Name)
+		}
+		if patch.ProjectID != nil {
+			folder.ProjectID = strings.TrimSpace(*patch.ProjectID)
+		}
+		if patch.ParentID != nil {
+			folder.ParentID = strings.TrimSpace(*patch.ParentID)
+		}
+		if patch.SortOrder != nil {
+			folder.SortOrder = *patch.SortOrder
+		}
+		if folder.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if err := s.validateHTTPFolderParent(ctx, folder.ID, folder.ProjectID, folder.ParentID); err != nil {
+			if !writeHTTPFolderClientError(w, err) {
+				respond(w, nil, err)
+			}
+			return
+		}
+		folder.UpdatedAt = time.Now().UTC()
+		err = s.store.SaveHTTPFolder(ctx, &folder)
+		respond(w, folder, err)
+	case http.MethodDelete:
+		err = s.store.DeleteHTTPFolder(ctx, folder.ID)
+		if err == nil {
+			s.catalog("http_folder.deleted", map[string]string{"id": folder.ID})
+		}
+		respond(w, map[string]string{"status": "deleted"}, err)
+	default:
+		method(w)
+	}
 }
