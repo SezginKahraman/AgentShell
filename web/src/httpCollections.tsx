@@ -1,7 +1,37 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronDown, Copy, Download, Folder, Globe2, GripVertical, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { ChevronDown, ChevronsDownUp, ChevronsUpDown, Copy, Download, Folder, Globe2, GripVertical, Loader2, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Play, Plus, Trash2 } from 'lucide-react'
 import type { AgentShellApi } from './api/client'
 import { EnvPicker, setLibraryValue } from './environments'
+import { button, buttonPrimary, buttonSmall, cn, iconButton } from './ui'
+
+const press = 'enabled:active:!translate-y-px disabled:!translate-none disabled:!opacity-[.48]'
+const btn = cn(button, press)
+const btnSmall = cn(btn, buttonSmall, '!min-h-[31px] !px-[11px] !text-[11px]')
+const primary = '!border-green-border !bg-green-soft !text-green-strong hover:!border-green-border hover:!bg-green-soft'
+const btnPrimary = cn(btn, buttonPrimary, primary)
+const btnSmallPrimary = cn(btnSmall, buttonPrimary, primary)
+const iconBtn = cn(iconButton, press)
+const iconBtn28 = cn(iconBtn, '!size-7 !min-h-7 [&_svg]:!size-3.5')
+const spin = 'animate-[spin_0.8s_linear_infinite] motion-reduce:animate-none'
+const field = 'w-full rounded-md border border-line-strong bg-inset px-[9px] py-2 font-mono !text-[12px] !leading-[1.45] text-strong ![outline:0]'
+const field34 = cn(field, 'h-[34px] min-h-[34px]')
+const editorLabel = 'grid gap-[5px] text-[10px] text-muted'
+const responsePre = 'm-0 overflow-visible font-mono text-[11px] leading-[1.55] wrap-anywhere whitespace-pre-wrap [word-break:break-word]'
+const pill = 'rounded-full border px-[7px] py-1 font-mono text-[9px] leading-none'
+const statusToneClass = {
+  ok: 'border-green-border bg-green-soft text-green-strong',
+  warn: 'border-amber-border bg-amber-soft text-amber-text',
+  error: 'border-red-border bg-red-soft text-red-text',
+  sending: 'border-blue-border bg-blue-soft text-blue-text',
+} as const
+
+function railPane(collapsed: boolean) {
+  return cn(
+    'flex min-h-0 min-w-0 flex-col border-r border-line bg-subtle',
+    'max-[880px]:max-h-[180px] max-[880px]:border-b max-[880px]:!border-r-0',
+    collapsed ? '!overflow-hidden max-[880px]:!max-h-12' : 'overflow-auto',
+  )
+}
 import { beautifyHTTPBody, formatHTTPBody } from './httpBeautify'
 import { curlCanCollapse, curlFromHTTPRequest, curlPreviewLine } from './httpCurl'
 import { collectionDeletePrompt, confirmedHTTPCollectionDelete, requestDeleteWarning } from './httpDeleteConfirm'
@@ -45,9 +75,30 @@ function writeCollapsedPanels(next: { collections: boolean; requests: boolean })
   try { localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(next)) } catch { /* ignore quota / private mode */ }
 }
 
+const RAIL_WIDTH_KEY = 'agentshell.http.rail-widths'
+const MIN_RAIL = 180
+const MAX_RAIL = 480
+
+function clampRail(value: unknown, fallback: number) {
+  const width = Number(value)
+  if (!Number.isFinite(width)) return fallback
+  return Math.min(MAX_RAIL, Math.max(MIN_RAIL, Math.round(width)))
+}
+
+function readRailWidths(): { collections: number; requests: number } {
+  try {
+    const raw = localStorage.getItem(RAIL_WIDTH_KEY)
+    if (!raw) return { collections: 252, requests: 248 }
+    const parsed = JSON.parse(raw) as { collections?: number; requests?: number }
+    return { collections: clampRail(parsed.collections, 252), requests: clampRail(parsed.requests, 248) }
+  } catch {
+    return { collections: 252, requests: 248 }
+  }
+}
+
 export { formatHTTPBody }
 
-function RowMenu({ testId, label, items }: { testId: string; label: string; items: { id: string; label: string; testId?: string; onSelect: () => void }[] }) {
+function RowMenu({ testId, label, items, flush = false, className }: { testId: string; label: string; items: { id: string; label: string; testId?: string; onSelect: () => void }[]; flush?: boolean; className?: string }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -58,12 +109,12 @@ function RowMenu({ testId, label, items }: { testId: string; label: string; item
     window.addEventListener('pointerdown', close)
     return () => window.removeEventListener('pointerdown', close)
   }, [open])
-  return <div className="http-row-menu" ref={ref} onPointerDown={event => event.stopPropagation()}>
-    <button type="button" className="icon-button http-row-menu-button" data-testid={testId} aria-label={label} aria-expanded={open} title={label} onClick={event => { event.stopPropagation(); setOpen(current => !current) }}>
+  return <div className={cn('http-row-menu relative flex shrink-0 items-center', className)} ref={ref} onPointerDown={event => event.stopPropagation()}>
+    <button type="button" className={cn(iconBtn28, !flush && 'mr-1')} data-testid={testId} aria-label={label} aria-expanded={open} title={label} onClick={event => { event.stopPropagation(); setOpen(current => !current) }}>
       <MoreHorizontal />
     </button>
-    {open && <div className="http-row-menu-pop" role="menu">
-      {items.map(item => <button key={item.id} type="button" role="menuitem" data-testid={item.testId ?? `${testId}-${item.id}`} onClick={event => { event.stopPropagation(); setOpen(false); item.onSelect() }}>{item.label}</button>)}
+    {open && <div className="absolute top-[30px] right-1 z-[6] grid min-w-[168px] rounded-lg border border-line-strong bg-surface p-1 shadow-[0_10px_28px_rgba(0,0,0,.16)]" role="menu">
+      {items.map(item => <button key={item.id} type="button" role="menuitem" className="cursor-pointer rounded-md border-0 bg-transparent px-2.5 py-[7px] text-left !text-[12px] !leading-[1.35] text-inherit hover:bg-subtle" data-testid={item.testId ?? `${testId}-${item.id}`} onClick={event => { event.stopPropagation(); setOpen(false); item.onSelect() }}>{item.label}</button>)}
     </div>}
   </div>
 }
@@ -80,6 +131,7 @@ function SortableRow({
   onSelect,
   menu,
   children,
+  indented = false,
 }: {
   id: string
   kind: DragKind
@@ -92,11 +144,12 @@ function SortableRow({
   onSelect: () => void
   menu: ReactNode
   children: ReactNode
+  indented?: boolean
 }) {
   const dragging = drag?.id === id && drag.kind === kind
   const drop = !!drag && drag.kind === kind && drag.id !== id && drag.overID === id && drag.overKind === kind
   return <div
-    className={`http-rail-row${active ? ' active' : ''}${dragging ? ' dragging' : ''}${drop ? ' drop-target' : ''}`}
+    className={cn('relative flex w-full min-w-0 items-stretch border-b border-line', indented && 'pl-2', active && 'bg-selected', dragging && 'opacity-[.45]', drop && 'bg-blue-soft shadow-[inset_0_2px_0_var(--blue)]')}
     data-drag-id={id}
     data-drag-kind={kind}
     onPointerDown={event => {
@@ -122,7 +175,7 @@ function SortableRow({
   >
     <button
       type="button"
-      className="http-drag-handle"
+      className="http-drag-handle flex shrink-0 cursor-grab items-center justify-center border-0 bg-transparent py-[10px] pr-0.5 pl-2 text-muted active:cursor-grabbing [&_svg]:size-3.5"
       data-testid={dragTestId}
       aria-label={`Reorder ${title}`}
       title={`Reorder ${title}`}
@@ -134,7 +187,7 @@ function SortableRow({
     >
       <GripVertical />
     </button>
-    <button type="button" className="http-rail-pick" title={title} data-testid={testId} onClick={onSelect}>
+    <button type="button" className="http-rail-pick flex min-w-0 flex-1 cursor-pointer items-start gap-3 border-0 bg-transparent py-3 pr-3.5 pl-1.5 text-left text-inherit [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0" title={title} data-testid={testId} onClick={onSelect}>
       {children}
     </button>
     {menu}
@@ -153,13 +206,14 @@ function CurlStrip({ curl, testId, copied, onCopy }: { curl: string; testId: str
   const [open, setOpen] = useState(false)
   useEffect(() => { setOpen(false) }, [curl])
   const shown = collapsible && !open ? curlPreviewLine(curl) : curl
-  return <div className={`http-response-curl${collapsible && !open ? ' collapsed' : ''}`}>
-    <span className="http-response-curl-prompt" aria-hidden="true">$</span>
-    {collapsible ? <button type="button" className="http-response-curl-toggle" data-testid={`${testId}-curl`} aria-expanded={open} aria-label={open ? 'Collapse curl' : 'Expand curl'} onClick={() => setOpen(current => !current)}>
-      <pre>{shown}</pre>
-      <ChevronDown aria-hidden="true" />
-    </button> : <pre data-testid={`${testId}-curl`}>{curl}</pre>}
-    <button type="button" className="button small" data-testid={`${testId}-copy-request`} onClick={onCopy}>{copied ? 'Copied' : 'Copy request'}</button>
+  const curlText = cn(responsePre, 'text-strong', collapsible && !open ? '!max-h-none !overflow-hidden !text-ellipsis !whitespace-nowrap' : 'max-h-[7.25em]')
+  return <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2.5 border-b border-line bg-raised px-3 py-2 max-[880px]:grid-cols-[auto_minmax(0,1fr)]">
+    <span className="pt-px font-mono text-[11px] leading-[1.45] text-green-strong" aria-hidden="true">$</span>
+    {collapsible ? <button type="button" className="grid min-w-0 cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-start gap-2 border-0 bg-transparent p-0 text-left text-inherit max-[880px]:col-start-2" data-testid={`${testId}-curl`} aria-expanded={open} aria-label={open ? 'Collapse curl' : 'Expand curl'} onClick={() => setOpen(current => !current)}>
+      <pre className={curlText}>{shown}</pre>
+      <ChevronDown aria-hidden="true" className={cn('mt-px size-3.5 shrink-0 text-muted transition-transform duration-150 ease-[ease] motion-reduce:transition-none', open && 'rotate-180')} />
+    </button> : <pre className={curlText} data-testid={`${testId}-curl`}>{curl}</pre>}
+    <button type="button" className={cn(btnSmall, 'max-[880px]:col-span-full max-[880px]:justify-self-end')} data-testid={`${testId}-copy-request`} onClick={onCopy}>{copied ? 'Copied' : 'Copy request'}</button>
   </div>
 }
 
@@ -195,41 +249,42 @@ export function HTTPResponsePane({ result, sending, pendingLabel, testId, empty,
     void navigator.clipboard?.writeText(text).then(() => setCopied(kind)).catch(() => undefined)
   }
 
-  return <section className={`http-response${sending ? ' sending' : ''}`} data-testid={testId} aria-busy={sending || undefined}>
+  const copyBody = 'inline-flex cursor-pointer items-center gap-[5px] rounded-full border border-terminal-line bg-[color-mix(in_srgb,var(--terminal-surface)_88%,#000)] px-[9px] py-[5px] font-mono text-[9px] leading-none tracking-[.04em] text-terminal-muted hover:border-green-border hover:text-terminal-text focus-visible:!border-green-border focus-visible:!text-terminal-text focus-visible:!outline-2 focus-visible:!outline-offset-2 focus-visible:!outline-green disabled:!cursor-default disabled:opacity-[.45] disabled:hover:border-terminal-line disabled:hover:text-terminal-muted [&_svg]:size-[11px]'
+  return <section className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-terminal p-0" data-testid={testId} aria-busy={sending || undefined}>
     {curl ? <CurlStrip curl={curl} testId={testId} copied={copied === 'request'} onCopy={() => copy('request', curl)} /> : null}
-    <header className="http-response-chrome">
-      <span className="terminal-lights" aria-hidden="true"><i /><i /><i /></span>
-      <div className="http-response-title">
-        <strong>Response</strong>
-        <small title={sending ? pendingLabel || undefined : summary || undefined}>{sending ? (pendingLabel || 'Sending…') : (summary || 'idle')}</small>
+    <header className="flex min-h-11 min-w-0 items-center gap-2.5 border-b border-line bg-linear-to-b from-raised to-surface px-3 py-[7px] max-[880px]:flex-wrap max-[880px]:items-start">
+      <span className="flex gap-[5px]" aria-hidden="true"><i className="size-2 rounded-full bg-terminal-red" /><i className="size-2 rounded-full bg-terminal-yellow" /><i className="size-2 rounded-full bg-terminal-green" /></span>
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <strong className="text-[11px]">Response</strong>
+        <small className="truncate font-mono text-[10px] leading-[1.3] text-faint" title={sending ? pendingLabel || undefined : summary || undefined}>{sending ? (pendingLabel || 'Sending…') : (summary || 'idle')}</small>
       </div>
-      {sending ? <div className="http-response-pills"><span className="http-response-status sending">Sending</span></div> : result ? <div className="http-response-pills">
-        <span className={`http-response-status ${tone}`}>{result.status || 'error'}</span>
-        {result.environment ? <span>{result.environment}</span> : null}
-        {result.duration_ms ? <span>{result.duration_ms}ms</span> : null}
+      {sending ? <div className="flex flex-[0_1_auto] flex-wrap items-center justify-end gap-1.5 max-[880px]:w-full"><span className={cn(pill, statusToneClass.sending)}>Sending</span></div> : result ? <div className="flex flex-[0_1_auto] flex-wrap items-center justify-end gap-1.5 max-[880px]:w-full">
+        <span className={cn(pill, statusToneClass[tone])}>{result.status || 'error'}</span>
+        {result.environment ? <span className={cn(pill, 'border-line bg-inset text-muted')}>{result.environment}</span> : null}
+        {result.duration_ms ? <span className={cn(pill, 'border-line bg-inset text-muted')}>{result.duration_ms}ms</span> : null}
       </div> : null}
-      <div className="http-response-actions">
-        {dump && !sending ? <button type="button" className="button small" data-testid={`${testId}-copy-response`} onClick={() => copy('response', dump)}>{copied === 'response' ? 'Copied' : 'Copy response'}</button> : null}
+      <div className="flex shrink-0 items-center gap-1.5 max-[880px]:w-full max-[880px]:justify-end">
+        {dump && !sending ? <button type="button" className={btnSmall} data-testid={`${testId}-copy-response`} onClick={() => copy('response', dump)}>{copied === 'response' ? 'Copied' : 'Copy response'}</button> : null}
         {actions}
       </div>
     </header>
-    <div className="http-response-screen">
-      {sending ? <div className="http-response-pending" data-testid={`${testId}-pending`}>
-        <Loader2 className="http-spin" aria-hidden="true" />
-        <p>Waiting for response…</p>
-        {pendingLabel ? <small>{pendingLabel}</small> : null}
-      </div> : !result ? <p className="http-response-idle">{empty}</p> : <>
-        {result.script_log && <pre className="http-response-log" data-testid={`${testId}-script-log`}>{result.script_log}</pre>}
-        {result.error && <pre className="http-response-error">{result.error}</pre>}
-        {!!headers.length && <dl className="http-response-headers" data-testid={headerTestId}>{headers.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}
-        {body && <div className="http-response-payload">
-          <div className="http-response-payload-head">
-            <button type="button" className="http-response-copy-body" data-testid={`${testId}-copy-body`} aria-label={copied === 'body' ? 'Copied response body' : 'Copy response body'} onClick={() => copy('body', body)}><Copy />{copied === 'body' ? 'Copied' : 'Copy body'}</button>
-            <button type="button" className="http-response-copy-body" data-testid={`${testId}-beautify`} disabled={!canBeautify} onClick={() => setBeautified(true)}>Beautify</button>
+    <div className="http-response-screen grid max-h-[min(52vh,520px)] min-h-[168px] min-w-0 grid-cols-[minmax(0,1fr)] gap-3 overflow-auto bg-[radial-gradient(circle_at_50%_0,var(--terminal-surface)_0,var(--terminal-bg)_58%)] px-4 py-3.5 text-terminal-text">
+      {sending ? <div className="flex min-h-[140px] flex-col items-center justify-center gap-2.5 text-center text-terminal-muted" data-testid={`${testId}-pending`}>
+        <Loader2 className={cn('size-[18px]', spin)} aria-hidden="true" />
+        <p className="m-0 font-mono text-[12px] leading-[1.4] text-terminal-text">Waiting for response…</p>
+        {pendingLabel ? <small className="font-mono text-[10px] leading-[1.4]">{pendingLabel}</small> : null}
+      </div> : !result ? <p className="m-0 font-mono text-[11px] leading-[1.5] text-terminal-muted">{empty}</p> : <>
+        {result.script_log && <pre className={cn(responsePre, 'text-muted')} data-testid={`${testId}-script-log`}>{result.script_log}</pre>}
+        {result.error && <pre className={cn(responsePre, 'text-terminal-red')}>{result.error}</pre>}
+        {!!headers.length && <dl className="m-0 mb-3 grid gap-[3px] border-b border-dashed border-terminal-line p-0 pb-3" data-testid={headerTestId}>{headers.map(([key, value]) => <div className="grid grid-cols-[minmax(80px,180px)_minmax(0,1fr)] gap-2 font-mono text-[11px] leading-[1.45]" key={key}><dt className="font-medium text-terminal-muted">{key}</dt><dd className="m-0 wrap-anywhere text-terminal-text">{value}</dd></div>)}</dl>}
+        {body && <div className="grid min-w-0 gap-2">
+          <div className="sticky top-0 left-0 z-[1] flex w-max items-center justify-start gap-2 bg-terminal py-0.5">
+            <button type="button" className={copyBody} data-testid={`${testId}-copy-body`} aria-label={copied === 'body' ? 'Copied response body' : 'Copy response body'} onClick={() => copy('body', body)}><Copy />{copied === 'body' ? 'Copied' : 'Copy body'}</button>
+            <button type="button" className={copyBody} data-testid={`${testId}-beautify`} disabled={!canBeautify} onClick={() => setBeautified(true)}>Beautify</button>
           </div>
-          <pre className="http-response-body">{body}</pre>
+          <pre className={cn('http-response-body', responsePre, 'text-terminal-text [text-shadow:0_0_10px_var(--green-glow)]')}>{body}</pre>
         </div>}
-        {result.truncated && <p className="http-response-idle">Body truncated</p>}
+        {result.truncated && <p className="m-0 font-mono text-[11px] leading-[1.5] text-terminal-muted">Body truncated</p>}
       </>}
     </div>
   </section>
@@ -267,6 +322,8 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const [sending, setSending] = useState(false)
   const [saving, setSaving] = useState(false)
   const [collapsed, setCollapsed] = useState(readCollapsedPanels)
+  const [railWidths, setRailWidths] = useState(readRailWidths)
+  const railWidthsRef = useRef(railWidths)
   const [httpEnv, setHttpEnv] = useState('local')
   const draftRef = useRef(draft)
   const baselineRef = useRef<HTTPRequestDraft | null>(null)
@@ -898,6 +955,40 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     ]
   }
 
+  const resizeRail = (panel: 'collections' | 'requests', event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const start = railWidthsRef.current[panel]
+    const pointerId = event.pointerId
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const move = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return
+      const next = { ...railWidthsRef.current, [panel]: clampRail(start + pointer.clientX - startX, start) }
+      railWidthsRef.current = next
+      setRailWidths(next)
+    }
+    const up = (pointer: PointerEvent) => {
+      if (pointer.pointerId !== pointerId) return
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      try { localStorage.setItem(RAIL_WIDTH_KEY, JSON.stringify(railWidthsRef.current)) } catch { /* ignore quota / private mode */ }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const nudgeRail = (panel: 'collections' | 'requests', delta: number) => {
+    const next = { ...railWidthsRef.current, [panel]: clampRail(railWidthsRef.current[panel] + delta, railWidthsRef.current[panel]) }
+    railWidthsRef.current = next
+    setRailWidths(next)
+    try { localStorage.setItem(RAIL_WIDTH_KEY, JSON.stringify(next)) } catch { /* ignore quota / private mode */ }
+  }
+
   const togglePanel = (panel: 'collections' | 'requests') => {
     setCollapsed(current => {
       const next = { ...current, [panel]: !current[panel] }
@@ -913,12 +1004,12 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
   const workspaceStacks = data.stacks
   const folderIDs = new Set(folders.map(folder => folder.id))
   const looseCollections = collections.filter(item => !item.folder_id || !folderIDs.has(item.folder_id))
-  const renderCollection = (item: HTTPCollection) => {
+  const renderCollection = (item: HTTPCollection, indented = false) => {
     const bound = data.stacks.find(stackItem => stackItem.id === item.stack_id)
     const home = workspaceProjects.find(project => project.id === item.project_id)
-    return <SortableRow key={item.id} id={item.id} kind="collection" testId={`http-collection-${item.id}`} dragTestId={`http-collection-drag-${item.id}`} active={item.id === collection?.id} title={item.name} drag={drag} onDragStart={beginDrag('collection', item.name)} onSelect={() => selectCollection(item.id)} menu={<RowMenu testId={`http-collection-menu-${item.id}`} label={`Actions for ${item.name}`} items={collectionMenu(item)} />}>
+    return <SortableRow key={item.id} id={item.id} kind="collection" indented={indented} testId={`http-collection-${item.id}`} dragTestId={`http-collection-drag-${item.id}`} active={item.id === collection?.id} title={item.name} drag={drag} onDragStart={beginDrag('collection', item.name)} onSelect={() => selectCollection(item.id)} menu={<RowMenu testId={`http-collection-menu-${item.id}`} label={`Actions for ${item.name}`} items={collectionMenu(item)} />}>
       <Globe2 />
-      <span><strong>{item.name}</strong><small>{bound ? bound.name : home?.name ?? 'All Workspaces'} · {item.requests?.length ?? 0} request{(item.requests?.length ?? 0) === 1 ? '' : 's'}</small></span>
+      <span className="grid min-w-0 gap-1"><strong className="truncate text-[13px] leading-[1.35]">{item.name}</strong><small className="line-clamp-2 text-[11px] leading-[1.4] text-muted">{bound ? bound.name : home?.name ?? 'All Workspaces'} · {item.requests?.length ?? 0} request{(item.requests?.length ?? 0) === 1 ? '' : 's'}</small></span>
     </SortableRow>
   }
   const renderFolder = (folder: HTTPFolder): ReactNode => {
@@ -927,9 +1018,9 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
     const dropHere = !!drag && drag.id !== folder.id && drag.overKind === 'folder' && drag.overID === folder.id
     const children = folders.filter(item => item.parent_id === folder.id)
     const inside = collections.filter(item => item.folder_id === folder.id)
-    return <div key={folder.id} className="http-folder" data-testid={`http-folder-${folder.id}`}>
+    return <div key={folder.id} className="border-b border-line" data-testid={`http-folder-${folder.id}`}>
       <div
-        className={`http-folder-head${dragging ? ' dragging' : ''}${dropHere ? ' drop-target' : ''}`}
+        className={cn('flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-0', dragging && 'opacity-[.45]', dropHere && 'bg-blue-soft shadow-[inset_0_2px_0_var(--blue)]')}
         data-folder-drop={folder.id}
         data-drag-id={folder.id}
         data-drag-kind="folder"
@@ -956,7 +1047,7 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
       >
         <button
           type="button"
-          className="http-drag-handle"
+          className="http-drag-handle flex shrink-0 cursor-grab items-center justify-center border-0 bg-transparent !py-1.5 !pr-0.5 !pl-1.5 text-muted active:cursor-grabbing [&_svg]:size-3.5"
           data-testid={`http-folder-drag-${folder.id}`}
           aria-label={`Reorder ${folder.name}`}
           title={`Reorder ${folder.name}`}
@@ -968,72 +1059,83 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
         >
           <GripVertical />
         </button>
-        <button type="button" className="icon-button http-folder-toggle" aria-expanded={open} aria-label={open ? `Collapse ${folder.name}` : `Expand ${folder.name}`} onClick={() => setClosedFolders(current => ({ ...current, [folder.id]: open }))}>
-          <ChevronDown className={open ? '' : 'collapsed'} />
+        <button type="button" className={cn(iconBtn, 'http-folder-toggle [&_svg]:!size-3.5')} aria-expanded={open} aria-label={open ? `Collapse ${folder.name}` : `Expand ${folder.name}`} onClick={() => setClosedFolders(current => ({ ...current, [folder.id]: open }))}>
+          <ChevronDown className={cn('transition-transform duration-[120ms] ease-[ease]', !open && '-rotate-90')} />
         </button>
-        <Folder />
-        <strong>{folder.name}</strong>
-        <small>{inside.length + children.length}</small>
+        <Folder className="size-3.5 shrink-0" />
+        <strong className="min-w-0 flex-1 truncate text-[12px]">{folder.name}</strong>
+        <small className="text-[11px] text-muted">{inside.length + children.length}</small>
         <RowMenu testId={`http-folder-menu-${folder.id}`} label={`Actions for ${folder.name}`} items={[
           { id: 'folder', label: 'Folder', testId: `http-folder-create-${folder.id}`, onSelect: () => setFolderDraft({ name: '', parentID: folder.id }) },
           { id: 'rename', label: 'Rename', onSelect: () => setFolderDraft({ id: folder.id, name: folder.name }) },
           { id: 'delete', label: 'Delete', onSelect: () => { void removeFolder(folder) } },
         ]} />
       </div>
-      {open && children.map(renderFolder)}
-      {open && inside.map(renderCollection)}
+      {open && (children.length > 0 || inside.length > 0) && <div className="ml-8 border-l border-line-strong">
+        {children.map(renderFolder)}
+        {inside.map(item => renderCollection(item, true))}
+      </div>}
     </div>
   }
   const rootFolders = folders.filter(folder => !folder.parent_id || !folderIDs.has(folder.parent_id))
+  const allFoldersClosed = folders.length > 0 && folders.every(folder => closedFolders[folder.id])
+  const toggleAllFolders = () => {
+    setClosedFolders(allFoldersClosed ? {} : Object.fromEntries(folders.map(folder => [folder.id, true])))
+  }
 
-  return <section className={`http-workspace${collapsed.collections ? ' http-collections-collapsed' : ''}`} data-testid="http-page">
-    <aside className={`http-rail${collapsed.collections ? ' collapsed' : ''}`}>
-      <div className="http-rail-head">
-        <button type="button" className="icon-button http-panel-toggle" data-testid="http-toggle-collections" aria-expanded={!collapsed.collections} aria-label={collapsed.collections ? 'Show collections' : 'Hide collections'} title={collapsed.collections ? 'Show collections' : 'Hide collections'} onClick={() => togglePanel('collections')}>
+  const railHead = (isCollapsed: boolean) => cn('flex flex-nowrap items-center gap-2', isCollapsed ? 'justify-center px-1.5 py-2.5' : 'justify-between py-2.5 pr-2 pl-3')
+  const oneColumn = 'max-[880px]:!grid-cols-1 @max-[880px]:!grid-cols-1'
+  const railSplitter = 'relative z-20 hidden h-full min-h-full w-1.5 cursor-col-resize touch-none self-stretch border-0 bg-transparent p-0 before:absolute before:inset-y-0 before:-left-1 before:-right-3 before:content-[""] after:pointer-events-none after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-line hover:before:bg-blue/30 focus-visible:before:bg-blue/30 min-[881px]:block'
+  return <section className={cn('grid min-h-[calc(100vh-120px)] min-w-0 gap-0 overflow-hidden rounded-[10px] border border-line bg-surface', collapsed.collections ? 'grid-cols-[44px_minmax(0,1fr)]' : 'grid-cols-[var(--http-collections)_6px_minmax(0,1fr)]', oneColumn)} style={{ ['--http-collections' as string]: `${railWidths.collections}px` }} data-testid="http-page">
+    <aside className={cn('http-rail', railPane(collapsed.collections), !collapsed.collections && 'min-[881px]:border-r-0')}>
+      <div className={railHead(collapsed.collections)}>
+        <button type="button" className={cn(iconBtn28, 'shrink-0')} data-testid="http-toggle-collections" aria-expanded={!collapsed.collections} aria-label={collapsed.collections ? 'Show collections' : 'Hide collections'} title={collapsed.collections ? 'Show collections' : 'Hide collections'} onClick={() => togglePanel('collections')}>
           {collapsed.collections ? <PanelLeftOpen /> : <PanelLeftClose />}
         </button>
-        <strong>Collections</strong>
+        <strong className={cn('min-w-0 flex-[1_1_auto] truncate text-[13px]', collapsed.collections && 'hidden')}>Collections</strong>
+        {!!folders.length && <button type="button" className={cn(iconBtn28, 'shrink-0', collapsed.collections && 'hidden')} data-testid="http-toggle-all-folders" aria-pressed={allFoldersClosed} aria-label={allFoldersClosed ? 'Expand all folders' : 'Collapse all folders'} title={allFoldersClosed ? 'Expand all folders' : 'Collapse all folders'} onClick={toggleAllFolders}>{allFoldersClosed ? <ChevronsUpDown /> : <ChevronsDownUp />}</button>}
         <input ref={fileInputRef} type="file" accept="application/json,.json" hidden data-testid="import-http-collection" onChange={event => { void importCollectionFile(event.target.files?.[0]) }} />
-        <RowMenu testId="http-collections-menu" label="Collection actions" items={[
+        <RowMenu flush className={cn(collapsed.collections && 'hidden')} testId="http-collections-menu" label="Collection actions" items={[
           { id: 'import', label: 'Import', testId: 'import-http-collection-button', onSelect: () => fileInputRef.current?.click() },
           { id: 'new', label: 'New', testId: 'new-http-collection', onSelect: () => { void createCollection() } },
           { id: 'folder', label: 'Folder', testId: 'new-http-folder', onSelect: () => setFolderDraft({ name: '' }) },
         ]} />
       </div>
-      {!collapsed.collections && !!notice && <p className="http-empty" data-testid="http-workspace-notice">{notice}</p>}
-      {!collapsed.collections && !collections.length && !folders.length && <p className="http-empty">No HTTP collections yet. Create one to save independent requests.</p>}
+      {!collapsed.collections && !!notice && <p className="p-4 text-[11px] leading-[1.5] text-muted" data-testid="http-workspace-notice">{notice}</p>}
+      {!collapsed.collections && !collections.length && !folders.length && <p className="p-4 text-[11px] leading-[1.5] text-muted">No HTTP collections yet. Create one to save independent requests.</p>}
       {!collapsed.collections && rootFolders.map(renderFolder)}
-      {!collapsed.collections && looseCollections.map(renderCollection)}
+      {!collapsed.collections && looseCollections.map(item => renderCollection(item))}
     </aside>
-    {!collection ? <div className="http-empty-main"><strong>HTTP collections</strong><span>Saved API requests, separate from Tests. Assign a workspace to keep a collection in that Project; a stack bind is optional.</span></div> : <div className="http-main">
-      <header className="http-collection-head">
-        <div className="http-collection-identity">
-          <input className="http-collection-name" aria-label="Collection name" data-testid="http-collection-name" value={collectionName} onChange={event => setCollectionName(event.target.value)} onBlur={saveCollectionName} />
-          <div className="http-bind">
-            <label className="bind-field">Workspace<select aria-label="Collection workspace" data-testid="http-collection-workspace" value={collection.project_id ?? ''} onChange={event => saveCollectionWorkspace(event.target.value)}><option value="">All Workspaces</option>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label className="bind-field">Stack<select aria-label="Bound stack" data-testid="http-collection-stack" value={collection.stack_id ?? ''} onChange={event => saveCollectionBind(event.target.value)}><option value="">No stack</option>{workspaceStacks.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <EnvPicker compact label={stack ? 'Environment (stack)' : 'Environment'} names={envNames} value={httpEnv} testId="http-collection-environment" ariaLabel={stack ? 'Stack environment' : 'Collection environment'} onChange={saveEnvironment} />
-            {stack ? <button type="button" className="button small" data-testid="http-open-stack" onClick={() => openStack(stack)}>Open stack</button> : null}
+    {!collapsed.collections && <div role="separator" aria-orientation="vertical" aria-label="Resize collections" aria-valuemin={MIN_RAIL} aria-valuemax={MAX_RAIL} aria-valuenow={railWidths.collections} tabIndex={0} data-testid="resize-http-collections" title="Drag to resize" className={railSplitter} onPointerDown={event => resizeRail('collections', event)} onKeyDown={event => { if (event.key === 'ArrowLeft') nudgeRail('collections', -16); if (event.key === 'ArrowRight') nudgeRail('collections', 16) }} />}
+    {!collection ? <div className="grid place-content-center gap-2 p-4 text-center text-[11px] leading-[1.5] text-muted"><strong>HTTP collections</strong><span>Saved API requests, separate from Tests. Assign a workspace to keep a collection in that Project; a stack bind is optional.</span></div> : <div className="flex min-w-0 flex-col">
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3 border-b border-line px-4 py-3.5">
+        <div className="min-w-0 flex-[1_1_220px]">
+          <input className="mb-2 w-[min(420px,100%)] rounded-md border border-transparent bg-transparent px-1.5 py-1 !text-[16px] !leading-[1.3] text-strong hover:border-line-strong focus:border-line-strong" aria-label="Collection name" data-testid="http-collection-name" value={collectionName} onChange={event => setCollectionName(event.target.value)} onBlur={saveCollectionName} />
+          <div className="flex flex-wrap items-end gap-x-3 gap-y-2.5">
+            <label className="grid gap-1.5 text-[9px] font-bold tracking-[.08em] text-muted uppercase">Workspace<select className="h-[34px] w-[min(180px,100%)] max-w-full min-w-0 rounded-lg border border-line bg-surface px-2.5 !font-medium !text-[11px] !leading-[1.2] tracking-normal text-strong normal-case" aria-label="Collection workspace" data-testid="http-collection-workspace" value={collection.project_id ?? ''} onChange={event => saveCollectionWorkspace(event.target.value)}><option value="">All Workspaces</option>{workspaceProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className="grid gap-1.5 text-[9px] font-bold tracking-[.08em] text-muted uppercase">Stack<select className="h-[34px] w-[min(180px,100%)] max-w-full min-w-0 rounded-lg border border-line bg-surface px-2.5 !font-medium !text-[11px] !leading-[1.2] tracking-normal text-strong normal-case" aria-label="Bound stack" data-testid="http-collection-stack" value={collection.stack_id ?? ''} onChange={event => saveCollectionBind(event.target.value)}><option value="">No stack</option>{workspaceStacks.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            {stack ? <button type="button" className={cn(btnSmall, 'mb-px')} data-testid="http-open-stack" onClick={() => openStack(stack)}>Open stack</button> : null}
             {request ? <>
-              <button type="button" className="button small" data-testid="import-curl" aria-pressed={importOpen} title={importOpen ? 'Hide curl' : 'Show curl'} onClick={() => setImportOpen(open => !open)}>curl</button>
-              <button type="button" className="button small" data-testid="delete-http-request" onClick={removeRequest}><Trash2 /> Delete request</button>
+              <button type="button" className={cn(btnSmall, 'mb-px', importOpen && primary)} data-testid="import-curl" aria-pressed={importOpen} title={importOpen ? 'Hide curl' : 'Show curl'} onClick={() => setImportOpen(open => !open)}>curl</button>
+              <button type="button" className={cn(btnSmall, 'mb-px')} data-testid="delete-http-request" onClick={removeRequest}><Trash2 /> Delete request</button>
             </> : null}
           </div>
         </div>
-        <div className="http-collection-actions">
-          <button type="button" className="button small" data-testid="export-http-collection" onClick={() => { void exportCollection() }}><Download /> Export</button>
-          <button type="button" className="button small" data-testid="delete-http-collection" onClick={removeCollection}><Trash2 /> Delete</button>
+        <div className="flex flex-[0_1_auto] flex-wrap items-center gap-2 [&_.env-picker]:!w-auto [&_.env-picker]:min-w-0 [&_.env-picker-button]:!ml-0 [&_.env-picker-button]:!min-h-[31px]">
+          <EnvPicker compact names={envNames} value={httpEnv} testId="http-collection-environment" ariaLabel={stack ? 'Stack environment' : 'Collection environment'} onChange={saveEnvironment} />
+          <button type="button" className={btnSmall} data-testid="export-http-collection" onClick={() => { void exportCollection() }}><Download /> Export</button>
+          <button type="button" className={btnSmall} data-testid="delete-http-collection" onClick={removeCollection}><Trash2 /> Delete</button>
         </div>
       </header>
-      {error && <div className="http-error" role="alert">{error}</div>}
-      <div className={`http-work${collapsed.requests ? ' http-requests-collapsed' : ''}`}>
-        <div className={`http-requests${collapsed.requests ? ' collapsed' : ''}`}>
-          <div className="http-rail-head">
-            <button type="button" className="icon-button http-panel-toggle" data-testid="http-toggle-requests" aria-expanded={!collapsed.requests} aria-label={collapsed.requests ? 'Show requests' : 'Hide requests'} title={collapsed.requests ? 'Show requests' : 'Hide requests'} onClick={() => togglePanel('requests')}>
+      {error && <div className="bg-red-soft px-4 py-2 text-[11px] text-red-text" role="alert">{error}</div>}
+      <div className={cn('grid min-h-0 min-w-0 flex-1', collapsed.requests ? 'grid-cols-[44px_minmax(0,1fr)]' : 'grid-cols-[var(--http-requests)_6px_minmax(0,1fr)]', oneColumn)} style={{ ['--http-requests' as string]: `${railWidths.requests}px` }}>
+        <div className={cn('http-requests', railPane(collapsed.requests), !collapsed.requests && 'min-[881px]:border-r-0')}>
+          <div className={railHead(collapsed.requests)}>
+            <button type="button" className={cn(iconBtn28, 'shrink-0')} data-testid="http-toggle-requests" aria-expanded={!collapsed.requests} aria-label={collapsed.requests ? 'Show requests' : 'Hide requests'} title={collapsed.requests ? 'Show requests' : 'Hide requests'} onClick={() => togglePanel('requests')}>
               {collapsed.requests ? <PanelLeftOpen /> : <PanelLeftClose />}
             </button>
-            <strong>Requests</strong>
-            <button type="button" className="button small http-request-actions" data-testid="new-http-request" onClick={addRequest} disabled={!collection}><Plus /></button>
+            <strong className={cn('min-w-0 flex-[1_1_auto] truncate text-[13px]', collapsed.requests && 'hidden')}>Requests</strong>
+            <button type="button" className={cn(btnSmall, 'w-9 flex-none', collapsed.requests && 'hidden')} data-testid="new-http-request" onClick={addRequest} disabled={!collection}><Plus /></button>
           </div>
           {!collapsed.requests && listedRequests.map(item => {
             const title = item.id === request?.id ? draft.name : item.name
@@ -1042,21 +1144,22 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
               { id: 'duplicate', label: 'Duplicate', onSelect: () => { void duplicateRequest(item) } },
               { id: 'delete', label: 'Delete', onSelect: () => { void removeRequestItem(item) } },
             ]} />}>
-              <em>{item.method ?? 'GET'}</em><span>{title}</span>
+              <em className="mt-[3px] min-w-12 shrink-0 rounded border border-blue-border bg-blue-soft px-1.5 py-1 text-center font-mono text-[9px] leading-none text-blue-text">{item.method ?? 'GET'}</em><span className="line-clamp-2 min-w-0 text-[13px] leading-[1.4] whitespace-normal">{title}</span>
             </SortableRow>
           })}
         </div>
-        {request ? <div className="http-editor">
-          <input className="http-request-name" aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} onBlur={() => { void saveRequestName() }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }} />
-          <div className="http-url-row">
-            <select aria-label="HTTP method" value={draft.method} onChange={event => setDraft(current => ({ ...current, method: event.target.value as HTTPRequestDraft['method'] }))}>{methods.map(method => <option key={method}>{method}</option>)}</select>
+        {!collapsed.requests && <div role="separator" aria-orientation="vertical" aria-label="Resize requests" aria-valuemin={MIN_RAIL} aria-valuemax={MAX_RAIL} aria-valuenow={railWidths.requests} tabIndex={0} data-testid="resize-http-requests" title="Drag to resize" className={railSplitter} onPointerDown={event => resizeRail('requests', event)} onKeyDown={event => { if (event.key === 'ArrowLeft') nudgeRail('requests', -16); if (event.key === 'ArrowRight') nudgeRail('requests', 16) }} />}
+        {request ? <div className="grid content-start gap-2.5 px-4 pt-3.5 pb-5">
+          <input className="m-0 w-[min(420px,100%)] rounded-md border border-transparent bg-transparent px-1.5 py-1 !text-[16px] !leading-[1.3] text-strong ![outline:0] hover:border-line-strong focus:border-line-strong" aria-label="Request name" data-testid="http-request-name" value={draft.name} onChange={event => setDraft(current => ({ ...current, name: event.target.value }))} onBlur={() => { void saveRequestName() }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur() } }} />
+          <div className={cn('grid grid-cols-[96px_minmax(0,1fr)_auto] gap-2', 'max-[880px]:grid-cols-[96px_minmax(0,1fr)] @max-[880px]:grid-cols-[96px_minmax(0,1fr)]')}>
+            <select className={field} aria-label="HTTP method" value={draft.method} onChange={event => setDraft(current => ({ ...current, method: event.target.value as HTTPRequestDraft['method'] }))}>{methods.map(method => <option key={method}>{method}</option>)}</select>
             <TemplateField ariaLabel="Request URL" testId="http-request-url" value={draft.url} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={url => setDraft(current => ({ ...current, url }))} />
-            <div className="http-url-actions">
-              <button type="button" className="button primary" data-testid="send-http-request" onClick={send} disabled={sending || busy === request.id || !accepting}>{sending ? <Loader2 className="http-spin" /> : <Play />} {sending ? 'Sending…' : 'Send'}</button>
+            <div className="flex shrink-0 items-center gap-2 max-[880px]:col-span-full max-[880px]:justify-end @max-[880px]:col-span-full @max-[880px]:justify-end">
+              <button type="button" className={btnPrimary} data-testid="send-http-request" onClick={send} disabled={sending || busy === request.id || !accepting}>{sending ? <Loader2 className={spin} /> : <Play />} {sending ? 'Sending…' : 'Send'}</button>
             </div>
           </div>
-          {importOpen && <div className="http-curl">
-            <label>curl for this request<TemplateField multiline minHeight={90} ariaLabel="curl for this request" testId="curl-preview" value={requestCurl} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onFocus={() => { curlFocusedRef.current = true }} onChange={value => {
+          {importOpen && <div className="grid gap-2 rounded-lg border border-line bg-inset p-2.5">
+            <label className={editorLabel}>curl for this request<TemplateField multiline minHeight={90} ariaLabel="curl for this request" testId="curl-preview" value={requestCurl} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onFocus={() => { curlFocusedRef.current = true }} onChange={value => {
               setRequestCurl(value)
               const next = applyCurlToDraft(value, draftRef.current)
               if (next) { setDraft(next); setError('') }
@@ -1068,38 +1171,41 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
                 setRequestCurl(curlFromDraft(next))
               } else if (requestCurl.trim()) setError('curl is invalid')
             }} /></label>
-            <button type="button" className="button small" data-testid="copy-curl" onClick={() => { void navigator.clipboard?.writeText(requestCurl).then(() => setCopiedCurl(true)) }}>{copiedCurl ? 'Copied' : 'Copy'}</button>
-            <label>Import another request<TemplateField multiline minHeight={90} ariaLabel="curl command" testId="curl-input" value={curl} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} placeholder="Paste a curl command to add a new request" onChange={setCurl} /></label>
-            <button type="button" className="button primary small" data-testid="import-curl-submit" onClick={importCurl} disabled={!curl.trim()}>Import</button>
+            <button type="button" className={btnSmall} data-testid="copy-curl" onClick={() => { void navigator.clipboard?.writeText(requestCurl).then(() => setCopiedCurl(true)) }}>{copiedCurl ? 'Copied' : 'Copy'}</button>
+            <label className={editorLabel}>Import another request<TemplateField multiline minHeight={90} ariaLabel="curl command" testId="curl-input" value={curl} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} placeholder="Paste a curl command to add a new request" onChange={setCurl} /></label>
+            <button type="button" className={btnSmallPrimary} data-testid="import-curl-submit" onClick={importCurl} disabled={!curl.trim()}>Import</button>
           </div>}
-          <div className="http-meta-row">
-            <label>Timeout ms<input aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} /></label>
+          <div className="grid items-end gap-2 grid-cols-[140px]">
+            <label className={editorLabel}>Timeout ms<input className={field34} aria-label="Request timeout" data-testid="http-request-timeout" inputMode="numeric" value={draft.timeout} onChange={event => setDraft(current => ({ ...current, timeout: event.target.value }))} /></label>
           </div>
-          <p className="http-preview" data-testid="http-url-preview">{resolved.preview}</p>
-          <div className="http-editor-tabs" role="tablist" aria-label="Request editor">
-            {([['headers', 'Headers'], ['body', 'Body'], ['scripts', 'Scripts']] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={editorTab === id} data-testid={`http-tab-${id}`} className={editorTab === id ? 'active' : ''} onClick={() => setEditorTab(id)}>{label}</button>)}
-          </div>
+          <p className="m-0 overflow-hidden font-mono text-[11px] leading-[1.4] text-ellipsis whitespace-nowrap text-muted" data-testid="http-url-preview">{resolved.preview}</p>
+          <fieldset className="m-0 h-fit w-fit self-start rounded-md border border-line px-1.5 pt-1 pb-1.5">
+            <legend className="px-1 text-[9px] font-bold tracking-[.08em] text-muted uppercase">Editor</legend>
+            <div className="flex items-center gap-0.5" role="tablist" aria-label="Request editor">
+              {([['headers', 'Headers'], ['body', 'Body'], ['scripts', 'Scripts']] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={editorTab === id} data-testid={`http-tab-${id}`} className={cn('min-h-0 cursor-pointer rounded border-0 bg-transparent px-[7px] py-[3px] text-[11px] leading-none font-medium text-muted', editorTab === id && 'bg-inset text-strong')} onClick={() => setEditorTab(id)}>{label}</button>)}
+            </div>
+          </fieldset>
           {editorTab === 'headers' && <HeaderEditor value={draft.headers} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={headers => setDraft(current => ({ ...current, headers }))} />}
-          {editorTab === 'scripts' && <div className="http-script-stack">
-            <section className={`http-script-card${scriptsOpen.pre ? '' : ' collapsed'}`}>
-              <header>
-                <span>Pre-request</span>
-                <button type="button" className="icon-button" data-testid="http-pre-script-toggle" aria-expanded={scriptsOpen.pre} aria-label={scriptsOpen.pre ? 'Collapse pre-request' : 'Expand pre-request'} onClick={() => setScriptsOpen(current => ({ ...current, pre: !current.pre }))}><ChevronDown /></button>
+          {editorTab === 'scripts' && <div className="grid gap-2">
+            <section className="overflow-hidden rounded-lg border border-line">
+              <header className="flex items-center justify-between py-1.5 pr-2 pl-3">
+                <span className="text-[12px]">Pre-request</span>
+                <button type="button" className={cn(iconBtn, '[&_svg]:!size-3.5')} data-testid="http-pre-script-toggle" aria-expanded={scriptsOpen.pre} aria-label={scriptsOpen.pre ? 'Collapse pre-request' : 'Expand pre-request'} onClick={() => setScriptsOpen(current => ({ ...current, pre: !current.pre }))}><ChevronDown className={cn('transition-transform duration-[120ms] ease-[ease]', !scriptsOpen.pre && '-rotate-90')} /></button>
               </header>
-              {scriptsOpen.pre && <textarea aria-label="Pre-request script" data-testid="http-pre-script" spellCheck={false} placeholder={'package hook\n\nfunc Pre(req *Request) error {\n\treturn nil\n}'} value={draft.preScript} onChange={event => setDraft(current => ({ ...current, preScript: event.target.value }))} />}
+              {scriptsOpen.pre && <textarea className="min-h-[140px] w-full resize-y border-t border-line bg-inset px-[9px] py-2 font-mono !text-[12px] !leading-[1.45] text-strong ![outline:0]" aria-label="Pre-request script" data-testid="http-pre-script" spellCheck={false} placeholder={'package hook\n\nfunc Pre(req *Request) error {\n\treturn nil\n}'} value={draft.preScript} onChange={event => setDraft(current => ({ ...current, preScript: event.target.value }))} />}
             </section>
-            <section className={`http-script-card${scriptsOpen.post ? '' : ' collapsed'}`}>
-              <header>
-                <span>Post-response</span>
-                <button type="button" className="icon-button" data-testid="http-post-script-toggle" aria-expanded={scriptsOpen.post} aria-label={scriptsOpen.post ? 'Collapse post-response' : 'Expand post-response'} onClick={() => setScriptsOpen(current => ({ ...current, post: !current.post }))}><ChevronDown /></button>
+            <section className="overflow-hidden rounded-lg border border-line">
+              <header className="flex items-center justify-between py-1.5 pr-2 pl-3">
+                <span className="text-[12px]">Post-response</span>
+                <button type="button" className={cn(iconBtn, '[&_svg]:!size-3.5')} data-testid="http-post-script-toggle" aria-expanded={scriptsOpen.post} aria-label={scriptsOpen.post ? 'Collapse post-response' : 'Expand post-response'} onClick={() => setScriptsOpen(current => ({ ...current, post: !current.post }))}><ChevronDown className={cn('transition-transform duration-[120ms] ease-[ease]', !scriptsOpen.post && '-rotate-90')} /></button>
               </header>
-              {scriptsOpen.post && <textarea aria-label="Post-response script" data-testid="http-post-script" spellCheck={false} placeholder={'package hook\n\nfunc Post(req *Request, res *Response) error {\n\treturn nil\n}'} value={draft.postScript} onChange={event => setDraft(current => ({ ...current, postScript: event.target.value }))} />}
+              {scriptsOpen.post && <textarea className="min-h-[140px] w-full resize-y border-t border-line bg-inset px-[9px] py-2 font-mono !text-[12px] !leading-[1.45] text-strong ![outline:0]" aria-label="Post-response script" data-testid="http-post-script" spellCheck={false} placeholder={'package hook\n\nfunc Post(req *Request, res *Response) error {\n\treturn nil\n}'} value={draft.postScript} onChange={event => setDraft(current => ({ ...current, postScript: event.target.value }))} />}
             </section>
           </div>}
-          {editorTab === 'body' && <div className="http-body-block">
-            <div className="http-body-toolbar">
-              <label>Saved body
-                <select aria-label="Saved body" data-testid="http-body-template" value={draft.activeBodyID} onChange={event => {
+          {editorTab === 'body' && <div className="grid gap-2 rounded-lg border border-line bg-subtle p-2.5">
+            <div className="grid items-end gap-2 grid-cols-[minmax(120px,1fr)_minmax(120px,1fr)_auto] max-[880px]:grid-cols-1 @max-[880px]:grid-cols-1">
+              <label className={editorLabel}>Saved body
+                <select className={field34} aria-label="Saved body" data-testid="http-body-template" value={draft.activeBodyID} onChange={event => {
                   const next = switchBodyTemplate(draft, event.target.value)
                   setDraft(next)
                   if (!dirty) void persistDraft(request, next)
@@ -1107,53 +1213,53 @@ export function HTTPCollectionsPage({ data, api, busy, accepting, refresh, openS
                   {draft.bodyTemplates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
               </label>
-              <label>Name
-                <input aria-label="Body template name" data-testid="http-body-template-name" value={draft.bodyTemplates.find(item => item.id === draft.activeBodyID)?.name ?? ''} onChange={event => setDraft(current => ({
+              <label className={editorLabel}>Name
+                <input className={field34} aria-label="Body template name" data-testid="http-body-template-name" value={draft.bodyTemplates.find(item => item.id === draft.activeBodyID)?.name ?? ''} onChange={event => setDraft(current => ({
                   ...current,
                   bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, name: event.target.value } : item),
                 }))} onBlur={() => {
                   setDraft(renameBodyTemplate(draft, draft.activeBodyID, draft.bodyTemplates.find(item => item.id === draft.activeBodyID)?.name ?? ''))
                 }} />
               </label>
-              <div className="http-body-actions">
-                <button type="button" className="button small primary" data-testid="http-save-body" disabled={!dirty || saving} onClick={() => void persistDraft()}>Save</button>
-                <button type="button" className="button small" data-testid="http-beautify-body" disabled={beautifyHTTPBody(draft.body) === draft.body} onClick={() => setDraft(current => {
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" className={cn(btnSmallPrimary, '!min-h-[34px]')} data-testid="http-save-body" disabled={!dirty || saving} onClick={() => void persistDraft()}>Save</button>
+                <button type="button" className={cn(btnSmall, '!min-h-[34px]')} data-testid="http-beautify-body" disabled={beautifyHTTPBody(draft.body) === draft.body} onClick={() => setDraft(current => {
                   const body = beautifyHTTPBody(current.body)
                   return { ...current, body, bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, body } : item) }
                 })}>Beautify</button>
-                <button type="button" className="button small" data-testid="http-add-body-template" disabled={draft.bodyTemplates.length >= MAX_BODY_TEMPLATES} onClick={() => {
+                <button type="button" className={cn(btnSmall, '!min-h-[34px]')} data-testid="http-add-body-template" disabled={draft.bodyTemplates.length >= MAX_BODY_TEMPLATES} onClick={() => {
                   setDraft(addBodyTemplate(draft, newBodyTemplateID(), `Template ${draft.bodyTemplates.length + 1}`, draft.body))
                 }}>New</button>
-                <button type="button" className="button small" data-testid="http-delete-body-template" disabled={draft.bodyTemplates.length <= 1} onClick={() => {
+                <button type="button" className={cn(btnSmall, '!min-h-[34px]')} data-testid="http-delete-body-template" disabled={draft.bodyTemplates.length <= 1} onClick={() => {
                   setDraft(removeBodyTemplate(draft, draft.activeBodyID))
                 }}>Delete</button>
               </div>
             </div>
-            <p className="http-body-hint">
-              <span className={`http-save-state ${saving ? 'saving' : dirty ? 'unsaved' : 'saved'}`} data-testid="http-save-state">{saveLabel}</span>
+            <p className="m-0 flex flex-wrap gap-x-3 gap-y-2 text-[11px] leading-[1.45] text-muted">
+              <span className={cn('text-[10px] font-bold tracking-[.06em] uppercase', saving ? 'text-muted' : dirty ? 'text-amber-text' : 'text-green-strong')} data-testid="http-save-state">{saveLabel}</span>
               Send uses this body without saving it. Save writes the template. New copies it as a draft. Delete drops it. Refresh warns, then discards.
             </p>
-            <label>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={body => setDraft(current => ({
+            <label className={editorLabel}>Body<TemplateField multiline minHeight={72} ariaLabel="Request body" value={draft.body} vars={resolved.vars} envName={httpEnv} onDefineVar={saveVar} onChange={body => setDraft(current => ({
               ...current,
               body,
               bodyTemplates: current.bodyTemplates.map(item => item.id === current.activeBodyID ? { ...item, body } : item),
             }))} /></label>
           </div>}
           <HTTPResponsePane testId="http-response" headerTestId="http-response-headers" result={request.last_result} sending={sending} pendingLabel={`${draft.method} ${resolved.preview || draft.url}`.trim()} empty="Send to capture the last result here. This is not a process Run." curl={paneCurl} />
-        </div> : <div className="http-empty-main"><strong>No requests</strong><span>Add a request or import curl.</span></div>}
+        </div> : <div className="grid place-content-center gap-2 p-4 text-center text-[11px] leading-[1.5] text-muted"><strong>No requests</strong><span>Add a request or import curl.</span></div>}
       </div>
     </div>}
-    {drag && <div className="http-drag-ghost" style={{ left: drag.x, top: drag.y }}>{drag.title}</div>}
+    {drag && <div className="pointer-events-none fixed top-0 left-0 z-40 max-w-[240px] translate-x-[14px] translate-y-4 overflow-hidden rounded-lg border border-line-strong bg-surface px-3 py-2 text-[13px] text-ellipsis whitespace-nowrap shadow-[0_10px_28px_rgba(0,0,0,.18)]" style={{ left: drag.x, top: drag.y }}>{drag.title}</div>}
     {folderDraft && <>
-      <button type="button" className="modal-scrim" aria-label="Cancel folder" onClick={() => setFolderDraft(null)} />
-      <form className="modal collection-modal" role="dialog" aria-modal="true" aria-labelledby="http-folder-title" data-testid="http-folder-dialog" onSubmit={event => { event.preventDefault(); void saveFolderDraft() }}>
-        <span className="modal-icon"><Folder /></span>
-        <h2 id="http-folder-title">{folderDraft.id ? 'Rename folder' : 'New folder'}</h2>
-        <p>{folderDraft.parentID ? `Creates a folder inside ${folders.find(folder => folder.id === folderDraft.parentID)?.name ?? 'this folder'}.` : 'Groups collections on this page. Requests stay inside their collection.'}</p>
-        <label>Name<input autoFocus data-testid="http-folder-name" value={folderDraft.name} placeholder="Availability" onChange={event => setFolderDraft(current => current ? { ...current, name: event.target.value } : current)} required /></label>
-        <footer>
-          <button type="button" className="button" onClick={() => setFolderDraft(null)}>Cancel</button>
-          <button type="submit" className="button primary" data-testid="http-folder-save" disabled={!folderDraft.name.trim()}>{folderDraft.id ? 'Rename' : 'Create'}</button>
+      <button type="button" className="fixed inset-0 z-[49] border-0 bg-overlay-strong" aria-label="Cancel folder" onClick={() => setFolderDraft(null)} />
+      <form className="fixed top-1/2 left-1/2 z-50 max-h-[86vh] w-[min(540px,calc(100vw-28px))] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-[10px] border border-line-strong bg-raised p-[25px] shadow-[0_24px_80px_var(--shadow-color-strong)]" role="dialog" aria-modal="true" aria-labelledby="http-folder-title" data-testid="http-folder-dialog" onSubmit={event => { event.preventDefault(); void saveFolderDraft() }}>
+        <span className="flex size-[42px] items-center justify-center rounded-lg border border-green-border bg-green-soft text-green [&_svg]:h-5"><Folder /></span>
+        <h2 id="http-folder-title" className="mt-[18px] mb-2 text-[18px]">{folderDraft.id ? 'Rename folder' : 'New folder'}</h2>
+        <p className="m-0 text-[11px] leading-[1.6] text-muted">{folderDraft.parentID ? `Creates a folder inside ${folders.find(folder => folder.id === folderDraft.parentID)?.name ?? 'this folder'}.` : 'Groups collections on this page. Requests stay inside their collection.'}</p>
+        <label className="mt-3 flex flex-col gap-1.5 text-[9px] text-muted">Name<input className="h-9 rounded-md border border-line-strong bg-subtle px-2.5 text-strong focus:border-blue" autoFocus data-testid="http-folder-name" value={folderDraft.name} placeholder="Availability" onChange={event => setFolderDraft(current => current ? { ...current, name: event.target.value } : current)} required /></label>
+        <footer className="mt-[22px] flex justify-end gap-2">
+          <button type="button" className={btn} onClick={() => setFolderDraft(null)}>Cancel</button>
+          <button type="submit" className={btnPrimary} data-testid="http-folder-save" disabled={!folderDraft.name.trim()}>{folderDraft.id ? 'Rename' : 'Create'}</button>
         </footer>
       </form>
     </>}
@@ -1196,17 +1302,17 @@ export function StackHTTPPanel({ collections, stack, library, environment, api, 
     }
   }
 
-  return <div className="stack-http" data-testid="stack-http-panel">
-    <div className="stack-http-intro">
-      <div><h3>Bound HTTP</h3><p>Send collection requests with this stack’s environment. Last result is not a process Run.</p></div>
-      <button type="button" className="button small" data-testid="stack-open-http" onClick={openHTTP}>Open HTTP</button>
+  return <div className="grid gap-3" data-testid="stack-http-panel">
+    <div className="flex items-start justify-between gap-3">
+      <div><h3 className="mb-1.5 text-[13px]">Bound HTTP</h3><p className="m-0 text-[11px] leading-[1.45] text-muted">Send collection requests with this stack’s environment. Last result is not a process Run.</p></div>
+      <button type="button" className={btnSmall} data-testid="stack-open-http" onClick={openHTTP}>Open HTTP</button>
     </div>
-    {error && <div className="http-error" role="alert">{error}</div>}
-    {!requests.length ? <p className="http-empty">No HTTP collections bound to this stack. Bind one from HTTP.</p> : <>
-      <div className="stack-http-list">
-        {requests.map(item => <button key={item.id} type="button" className={item.id === selected?.id ? 'active' : ''} data-testid={`stack-http-request-${item.id}`} onClick={() => setSelectedID(item.id)}>
-          <em>{item.method ?? 'GET'}</em>
-          <span><strong>{item.name}</strong><small>{item.collectionName}{item.last_result?.status ? ` · ${item.last_result.status}` : ''}</small></span>
+    {error && <div className="bg-red-soft px-4 py-2 text-[11px] text-red-text" role="alert">{error}</div>}
+    {!requests.length ? <p className="p-4 text-[11px] leading-[1.5] text-muted">No HTTP collections bound to this stack. Bind one from HTTP.</p> : <>
+      <div className="overflow-hidden rounded-lg border border-line">
+        {requests.map(item => <button key={item.id} type="button" className={cn('flex w-full cursor-pointer items-center gap-2.5 border-0 border-b border-line bg-transparent px-3 py-2.5 text-left text-inherit last:border-b-0', item.id === selected?.id && 'bg-selected')} data-testid={`stack-http-request-${item.id}`} onClick={() => setSelectedID(item.id)}>
+          <em className="min-w-[42px] rounded border border-blue-border bg-blue-soft px-[5px] py-[3px] text-center font-mono text-[8px] leading-normal text-blue-text not-italic">{item.method ?? 'GET'}</em>
+          <span className="grid min-w-0 gap-0.5"><strong className="truncate text-[12px]">{item.name}</strong><small className="text-[10px] text-muted">{item.collectionName}{item.last_result?.status ? ` · ${item.last_result.status}` : ''}</small></span>
         </button>)}
       </div>
       {selected && <HTTPResponsePane
@@ -1216,7 +1322,7 @@ export function StackHTTPPanel({ collections, stack, library, environment, api, 
         pendingLabel={`${selected.method ?? 'GET'} ${selected.url}`}
         empty="Send to capture the last result here."
         curl={selectedCurl}
-        actions={<button type="button" className="button primary small" data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}>{sending === selected.id ? <Loader2 className="http-spin" /> : <Play />} {sending === selected.id ? 'Sending…' : 'Send'}</button>}
+        actions={<button type="button" className={btnSmallPrimary} data-testid={`stack-send-http-${selected.id}`} onClick={() => send(selected.id)} disabled={!!sending || !accepting}>{sending === selected.id ? <Loader2 className={spin} /> : <Play />} {sending === selected.id ? 'Sending…' : 'Send'}</button>}
       />}
     </>}
   </div>

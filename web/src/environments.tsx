@@ -4,10 +4,42 @@ import { Braces, Check, ChevronDown, Download, Eye, EyeOff, Plus, Trash2, Upload
 import type { AgentShellApi } from './api/client'
 import { downloadEnvironmentLibrary, environmentLibraryJSON, parseEnvironmentLibraryImport } from './environmentTransfer'
 import type { EnvironmentLibrary, Stack } from './types'
+import { button, buttonPrimary, buttonSmall, cn, iconButton, iconButtonDangerSubtle } from './ui'
 
 export type EnvTone = 'local' | 'prod' | 'stage' | 'test' | 'custom'
 
 const seededNames = new Set(['local', 'prod', 'stage', 'test'])
+
+const toneBorder: Record<EnvTone, string> = {
+  local: 'border-l-green',
+  prod: 'border-l-red',
+  stage: 'border-l-blue',
+  test: 'border-l-purple',
+  custom: 'border-l-amber',
+}
+
+const toneBar: Record<EnvTone, string> = {
+  local: 'bg-green',
+  prod: 'bg-red',
+  stage: 'bg-blue',
+  test: 'bg-purple',
+  custom: 'bg-amber',
+}
+
+const toneBadge: Record<EnvTone, string> = {
+  local: 'border-green-border bg-green-soft text-green-strong',
+  prod: 'border-red-border bg-red-soft text-red-text',
+  stage: 'border-blue-border bg-blue-soft text-blue-text',
+  test: 'border-purple-border bg-purple-soft text-purple-text',
+  custom: 'border-amber-border bg-amber-soft text-amber-text',
+}
+
+const smallButton = cn(button, buttonSmall, 'px-[11px]!')
+const primaryButton = cn(button, buttonPrimary, 'border-green-border! bg-green-soft! text-green-strong! hover:border-green-border!')
+const dangerIcon = cn(iconButton, iconButtonDangerSubtle, 'text-red-text!')
+const pickerLabel = 'text-[9px] leading-none font-bold tracking-[.08em] text-muted uppercase'
+const keyInput = 'h-9 min-h-9 w-full rounded-[7px] border border-line bg-inset px-2.5 font-mono text-[11px] leading-[1.4] text-strong outline-none focus:border-blue'
+const keyRow = 'col-span-full grid min-h-[52px] grid-cols-subgrid items-center gap-3 px-3 py-2 *:self-center'
 
 export const emptyEnvironmentLibrary = (): EnvironmentLibrary => ({ names: ['local', 'prod', 'stage', 'test'], keys: [], secret_keys: [], values: {} })
 
@@ -51,7 +83,7 @@ export function stackEnvironmentLabel(stack: Pick<Stack, 'environment' | 'resolv
 
 export function EnvBadge({ stack }: { stack: Pick<Stack, 'environment' | 'resolved_environment'> }) {
   const label = stackEnvironmentLabel(stack)
-  return <em className={`env-badge env-${envTone(label)}`} data-testid="stack-env-badge">{label}</em>
+  return <em className={cn('ml-2 inline-block rounded-full border px-2 py-1 align-middle font-mono text-[8px] leading-none font-normal tracking-[.06em] whitespace-nowrap uppercase not-italic', toneBadge[envTone(label)])} data-testid="stack-env-badge">{label}</em>
 }
 
 export function EnvPicker({ names, value, onChange, label, testId, ariaLabel, emptyLabel, compact, removable, onRemove }: {
@@ -68,16 +100,16 @@ export function EnvPicker({ names, value, onChange, label, testId, ariaLabel, em
 }) {
   const [open, setOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, width: 180 })
-  const button = useRef<HTMLButtonElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   const options = emptyLabel != null ? ['', ...names] : names
   const display = value || emptyLabel || 'local'
   const tone = envTone(value || 'local')
 
   useLayoutEffect(() => {
-    if (!open || !button.current) return
+    if (!open || !buttonRef.current) return
     const place = () => {
-      const rect = button.current!.getBoundingClientRect()
+      const rect = buttonRef.current!.getBoundingClientRect()
       const width = Math.min(Math.max(188, rect.width), window.innerWidth - 16)
       let left = rect.right - width
       if (left < 8) left = 8
@@ -98,7 +130,7 @@ export function EnvPicker({ names, value, onChange, label, testId, ariaLabel, em
     const onPointer = (event: PointerEvent) => {
       const target = event.target
       if (!(target instanceof Node)) return
-      if (button.current?.contains(target) || menu.current?.contains(target)) return
+      if (buttonRef.current?.contains(target) || menu.current?.contains(target)) return
       setOpen(false)
     }
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false) }
@@ -115,28 +147,29 @@ export function EnvPicker({ names, value, onChange, label, testId, ariaLabel, em
     setOpen(false)
   }
 
-  return <div className={`env-picker env-${tone}${compact ? ' compact' : ''}${open ? ' open' : ''}`}>
-    {label ? <span className="env-picker-label">{label}</span> : null}
-    <button ref={button} type="button" className={`env-picker-button env-${tone}${open ? ' open' : ''}`} data-testid={`${testId}-toggle`} aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel ?? label ?? 'Environment'} onClick={() => setOpen(current => !current)}>
-      <i />
-      <strong>{display}</strong>
-      <ChevronDown />
+  return <div className={cn('env-picker relative min-w-40', compact ? 'flex w-full items-center gap-3' : 'grid gap-1.5', '[.stack-env-bar_&]:ml-0 [.stack-env-bar_&]:min-w-0 [.stack-env-bar_&]:flex-1', '[.orchestration-member>&]:mt-3', '[.http-bind_&]:w-auto [.http-bind_&]:gap-1.5')}>
+    {label ? <span className={pickerLabel}>{label}</span> : null}
+    <button ref={buttonRef} type="button" className={cn('env-picker-button flex min-h-9 min-w-40 cursor-pointer items-center gap-2 rounded-lg border border-line bg-surface pr-2 pl-2.5 text-left text-strong hover:border-line-strong hover:bg-hover', open && 'border-line-strong bg-hover!', compact && 'ml-auto', compact && '[.http-bind_&]:ml-0')} data-testid={`${testId}-toggle`} aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel ?? label ?? 'Environment'} onClick={() => setOpen(current => !current)}>
+      <i className={cn('h-3.5 w-[3px] shrink-0 rounded-[2px]', toneBar[tone])} />
+      <strong className="min-w-0 flex-1 truncate font-mono text-[11px] leading-none font-semibold">{display}</strong>
+      <ChevronDown className="size-3.5 shrink-0 text-muted" />
     </button>
-    {open && createPortal(<div ref={menu} className="env-picker-menu" role="listbox" aria-label={ariaLabel ?? label ?? 'Environment'} style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}>
+    {open && createPortal(<div ref={menu} className="fixed z-[90] grid max-h-[min(320px,calc(100vh-24px))] gap-0.5 overflow-auto rounded-xl border border-line-strong bg-raised p-1.5 shadow-float" role="listbox" aria-label={ariaLabel ?? label ?? 'Environment'} style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}>
       {options.map(name => {
         const selected = value === name
         const canRemove = !!name && removable?.(name)
-        return <div key={name || '__empty'} className={`env-picker-option env-${name ? envTone(name) : 'local'}${selected ? ' active' : ''}${name ? '' : ' inherit'}`}>
-          <button type="button" role="option" aria-selected={selected} data-testid={`${testId}-option-${name || 'inherit'}`} onClick={() => choose(name)}>
-            <i />
-            <span>{name || emptyLabel}</span>
-            {selected ? <Check /> : null}
+        const optionTone = name ? envTone(name) : 'local'
+        return <div key={name || '__empty'} className="flex items-center gap-0.5">
+          <button type="button" role="option" aria-selected={selected} className={cn('flex min-h-[34px] min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg border-0 bg-transparent px-2 text-left text-inherit hover:bg-hover', selected && 'bg-hover!')} data-testid={`${testId}-option-${name || 'inherit'}`} onClick={() => choose(name)}>
+            <i className={cn('h-3 w-[3px] shrink-0 rounded-[2px]', toneBar[optionTone])} />
+            <span className={cn('min-w-0 flex-1 truncate text-[11px] leading-none font-semibold', name ? 'font-mono' : 'font-[inherit]')}>{name || emptyLabel}</span>
+            {selected ? <Check className="size-[13px] shrink-0 text-green" /> : null}
           </button>
-          {canRemove ? <button type="button" className="icon-button danger subtle" data-testid={`env-remove-name-${name}`} aria-label={`Remove ${name} profile`} title={`Remove ${name}`} onClick={event => { event.stopPropagation(); onRemove?.(name) }}><Trash2 /></button> : null}
+          {canRemove ? <button type="button" className={cn(dangerIcon, 'size-7! [&_svg]:size-3!')} data-testid={`env-remove-name-${name}`} aria-label={`Remove ${name} profile`} title={`Remove ${name}`} onClick={event => { event.stopPropagation(); onRemove?.(name) }}><Trash2 /></button> : null}
         </div>
       })}
     </div>, document.body)}
-    <select className="env-picker-select" data-testid={testId} aria-hidden="true" tabIndex={-1} value={value} onChange={event => onChange(event.target.value)}>
+    <select className="pointer-events-none absolute top-0 left-0 h-px w-px opacity-0" data-testid={testId} aria-hidden="true" tabIndex={-1} value={value} onChange={event => onChange(event.target.value)}>
       {emptyLabel != null ? <option value="">{emptyLabel}</option> : null}
       {names.map(name => <option key={name} value={name}>{name}</option>)}
     </select>
@@ -242,63 +275,65 @@ export function EnvironmentsPanel({ api }: { api: AgentShellApi }) {
     }
   }
 
-  return <section className="panel env-panel" data-testid="environments-panel">
-    <header className="env-panel-head">
+  const tone = envTone(selectedName)
+
+  return <section className="col-span-full mb-4 overflow-hidden rounded-[7px] border border-line bg-glass" data-testid="environments-panel">
+    <header className="flex min-h-0 flex-wrap items-start justify-between gap-x-5 gap-y-3.5 px-4 pt-4 pb-3">
       <div>
-        <h2>Environments</h2>
-        <p className="env-lead">Workspace keys for the selected profile. Mark a key secret to keep its value out of chat and MCP; Send still interpolates it locally.</p>
-        <div className="env-library-actions">
-          <button type="button" className={`env-json-switch${jsonView ? ' on' : ''}`} data-testid="env-json-toggle" aria-pressed={jsonView} onClick={() => setJsonView(current => !current)}><Braces /> JSON</button>
-          <button type="button" className="button small" data-testid="env-export" onClick={() => setExportOpen(true)}><Download /> Export</button>
+        <h2 className="m-0 text-[13px]">Environments</h2>
+        <p className="mt-1 mb-0 max-w-[56ch] p-0 text-[11px] leading-normal text-muted">Workspace keys for the selected profile. Mark a key secret to keep its value out of chat and MCP; Send still interpolates it locally.</p>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <button type="button" className={cn('inline-flex min-h-7 cursor-pointer items-center gap-1.5 rounded-full border border-line-strong bg-surface px-2.5 text-[11px] leading-none text-muted [&_svg]:size-[13px]', jsonView && 'border-blue-border! bg-blue-soft! text-blue-text!')} data-testid="env-json-toggle" aria-pressed={jsonView} onClick={() => setJsonView(current => !current)}><Braces /> JSON</button>
+          <button type="button" className={smallButton} data-testid="env-export" onClick={() => setExportOpen(true)}><Download /> Export</button>
           <input ref={importRef} type="file" accept="application/json,.json" hidden data-testid="env-import-file" onChange={event => { void importLibrary(event.target.files?.[0]) }} />
-          <button type="button" className="button small" data-testid="env-import" onClick={() => importRef.current?.click()} disabled={busy}><Upload /> Import</button>
+          <button type="button" className={smallButton} data-testid="env-import" onClick={() => importRef.current?.click()} disabled={busy}><Upload /> Import</button>
         </div>
       </div>
-      <div className="env-panel-tools">
+      <div className="ml-auto flex flex-nowrap items-stretch justify-end gap-2">
         <EnvPicker label="Profile" names={library.names} value={selectedName} testId="environments-profile" ariaLabel="Environment profile" onChange={setSelectedName} removable={name => !seededNames.has(name)} onRemove={removeName} />
-        <div className="env-inline-add env-inline-named">
-          <span className="env-picker-label">New</span>
-          <div className="env-inline-add-row">
-            <input data-testid="env-add-name" value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="preview" onKeyDown={event => event.key === 'Enter' && (event.preventDefault(), addName())} />
-            <button className="button small" data-testid="env-add-name-save" onClick={addName} disabled={busy || !nameDraft.trim()}><Plus /> Add</button>
+        <div className="grid min-w-0 gap-1.5">
+          <span className={pickerLabel}>New</span>
+          <div className="flex items-center gap-2">
+            <input className="h-auto min-h-9 w-[140px] rounded-md border border-line bg-surface px-2.5 font-mono text-[11px] leading-[1.4] text-strong outline-none focus:border-blue" data-testid="env-add-name" value={nameDraft} onChange={event => setNameDraft(event.target.value)} placeholder="preview" onKeyDown={event => event.key === 'Enter' && (event.preventDefault(), addName())} />
+            <button className={cn(smallButton, 'min-h-9! [&_svg]:size-3!')} data-testid="env-add-name-save" onClick={addName} disabled={busy || !nameDraft.trim()}><Plus /> Add</button>
           </div>
         </div>
       </div>
     </header>
-    {error && <p className="env-error">{error}</p>}
-    {exportOpen && <><button type="button" className="modal-scrim" aria-label="Cancel export" onClick={() => setExportOpen(false)} /><section className="modal env-export-dialog" role="dialog" aria-modal="true" aria-labelledby="env-export-title" data-testid="env-export-dialog"><h2 id="env-export-title">Export environments</h2><p>The file contains every profile. Hide secrets writes <code>***</code> for secret cells. Show secrets writes the stored values.</p><footer><button type="button" className="button" onClick={() => setExportOpen(false)}>Cancel</button><button type="button" className="button" data-testid="env-export-hide" onClick={() => exportLibrary(false)}>Hide secrets</button><button type="button" className="button primary" data-testid="env-export-show" onClick={() => exportLibrary(true)}>Show secrets</button></footer></section></>}
-    <div className="env-library" data-testid="environments-table">
-      {jsonView ? <textarea className="env-json-view" data-testid="env-json-view" aria-label="Environment library JSON" readOnly spellCheck={false} value={environmentLibraryJSON(library)} /> : null}
+    {error && <p className="px-4 pb-2.5 text-[11px] text-red">{error}</p>}
+    {exportOpen && <><button type="button" className="fixed inset-0 z-[49] border-0 bg-overlay-strong" aria-label="Cancel export" onClick={() => setExportOpen(false)} /><section className="fixed top-1/2 left-1/2 z-50 max-h-[86vh] w-[min(470px,calc(100vw-28px))] max-w-[440px] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-[10px] border border-line-strong bg-raised p-[25px] shadow-float" role="dialog" aria-modal="true" aria-labelledby="env-export-title" data-testid="env-export-dialog"><h2 id="env-export-title" className="mt-[18px] mb-2 text-[18px]">Export environments</h2><p className="m-0 text-[13px] leading-normal text-muted">The file contains every profile. Hide secrets writes <code>***</code> for secret cells. Show secrets writes the stored values.</p><footer className="mt-[22px] flex flex-wrap justify-end gap-2"><button type="button" className={button} onClick={() => setExportOpen(false)}>Cancel</button><button type="button" className={button} data-testid="env-export-hide" onClick={() => exportLibrary(false)}>Hide secrets</button><button type="button" className={primaryButton} data-testid="env-export-show" onClick={() => exportLibrary(true)}>Show secrets</button></footer></section></>}
+    <div className="grid gap-0 px-4 pb-4" data-testid="environments-table">
+      {jsonView ? <textarea className="min-h-[280px] w-full resize-y rounded-[10px] border border-line bg-inset p-3 font-mono text-[12px] leading-[1.45] text-strong" data-testid="env-json-view" aria-label="Environment library JSON" readOnly spellCheck={false} value={environmentLibraryJSON(library)} /> : null}
       {!jsonView && <>
-      <div className={`env-key-list env-${envTone(selectedName)}`}>
-        <div className="env-key-list-head">
-          <span>Keys</span>
-          <small>{library.keys.length ? `${setCount}/${library.keys.length} set in ${selectedName}` : `Editing ${selectedName}`}</small>
+      <div className={cn('grid grid-cols-[max-content_minmax(0,1fr)_auto] overflow-hidden rounded-[10px] border border-line border-l-[3px] bg-surface', toneBorder[tone])}>
+        <div className="col-span-full grid grid-cols-subgrid items-baseline gap-3 border-b border-line px-3 py-2.5">
+          <span className="text-[9px] font-bold tracking-[.08em] text-muted uppercase">Keys</span>
+          <small className="col-start-2 justify-self-end font-mono text-[10px] leading-none text-faint">{library.keys.length ? `${setCount}/${library.keys.length} set in ${selectedName}` : `Editing ${selectedName}`}</small>
         </div>
-        {library.keys.length ? library.keys.map(key => {
+        {library.keys.length ? library.keys.map((key, index) => {
           const value = library.values?.[key]?.[selectedName] ?? ''
           const isSecret = (library.secret_keys ?? []).includes(key)
           const isRevealed = !!revealed[key]
-          return <article className={`env-key-row env-${envTone(selectedName)}`} key={key}>
-            <code>{key}</code>
-            <div className="env-key-value">
-              <input type={isSecret && !isRevealed ? 'password' : 'text'} aria-label={`${key} ${selectedName}`} title={isSecret && !isRevealed ? `${selectedName} hidden` : (value || `${selectedName} not set`)} placeholder="not set" value={value} autoComplete="off" spellCheck={false} onBlur={event => setCell(key, selectedName, event.target.value)} onChange={event => {
+          return <article className={cn(keyRow, 'border-t border-line', index === 0 && 'border-t-0')} key={key}>
+            <code className="truncate font-mono text-[11px] leading-9 text-strong">{key}</code>
+            <div className="relative min-w-0">
+              <input className={cn(keyInput, 'pr-9')} type={isSecret && !isRevealed ? 'password' : 'text'} aria-label={`${key} ${selectedName}`} title={isSecret && !isRevealed ? `${selectedName} hidden` : (value || `${selectedName} not set`)} placeholder="not set" value={value} autoComplete="off" spellCheck={false} onBlur={event => setCell(key, selectedName, event.target.value)} onChange={event => {
                 const values = { ...(library.values ?? {}) }
                 values[key] = { ...(values[key] ?? {}), [selectedName]: event.target.value }
                 setLibrary({ ...library, values })
               }} />
-              {isSecret ? <button type="button" className="env-reveal" data-testid={`env-reveal-${key}`} aria-label={isRevealed ? `Hide ${key}` : `Reveal ${key}`} onClick={() => setRevealed(current => ({ ...current, [key]: !current[key] }))}>{isRevealed ? <EyeOff /> : <Eye />}</button> : null}
+              {isSecret ? <button type="button" className="absolute top-1 right-1 inline-flex size-7 cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-muted hover:text-strong [&_svg]:size-3.5" data-testid={`env-reveal-${key}`} aria-label={isRevealed ? `Hide ${key}` : `Reveal ${key}`} onClick={() => setRevealed(current => ({ ...current, [key]: !current[key] }))}>{isRevealed ? <EyeOff /> : <Eye />}</button> : null}
             </div>
-            <div className="env-key-actions">
-              <button type="button" className={`env-secret-toggle${isSecret ? ' on' : ''}`} data-testid={`env-secret-${key}`} aria-pressed={isSecret} disabled={busy} onClick={() => setSecret(key, !isSecret)}>{isSecret ? 'Secret' : 'Mark secret'}</button>
-              <button type="button" className="icon-button danger subtle" aria-label={`Remove ${key}`} disabled={busy} onClick={() => removeKey(key)}><Trash2 /></button>
+            <div className="flex items-center justify-self-end gap-1">
+              <button type="button" className={cn('min-h-7 cursor-pointer rounded-full border border-line bg-surface px-2 text-[9px] leading-none font-bold tracking-[.04em] text-muted uppercase disabled:opacity-50', isSecret && 'border-amber-border! bg-amber-soft! text-amber-text!')} data-testid={`env-secret-${key}`} aria-pressed={isSecret} disabled={busy} onClick={() => setSecret(key, !isSecret)}>{isSecret ? 'Secret' : 'Mark secret'}</button>
+              <button type="button" className={cn(dangerIcon, '[&_svg]:size-3.5!')} aria-label={`Remove ${key}`} disabled={busy} onClick={() => removeKey(key)}><Trash2 /></button>
             </div>
           </article>
-        }) : <p className="env-empty">No keys yet. Add <code>API_URL</code> or similar — each profile gets its own value.</p>}
-        <div className="env-key-row env-add-key">
+        }) : <p className="col-span-full m-0 px-3 py-[18px] text-[12px] text-muted">No keys yet. Add <code className="font-mono text-[11px] leading-none">API_URL</code> or similar — each profile gets its own value.</p>}
+        <div className={cn(keyRow, 'border-t border-dashed border-line bg-subtle')}>
           <span aria-hidden="true" />
-          <input data-testid="env-add-key" value={keyDraft} onChange={event => setKeyDraft(event.target.value)} placeholder="API_URL" onKeyDown={event => event.key === 'Enter' && (event.preventDefault(), addKey())} />
-          <button className="button small" data-testid="env-add-key-save" onClick={addKey} disabled={busy || !keyDraft.trim()}><Plus /> Add key</button>
+          <input className={keyInput} data-testid="env-add-key" value={keyDraft} onChange={event => setKeyDraft(event.target.value)} placeholder="API_URL" onKeyDown={event => event.key === 'Enter' && (event.preventDefault(), addKey())} />
+          <button className={cn(smallButton, 'h-9 min-h-9!')} data-testid="env-add-key-save" onClick={addKey} disabled={busy || !keyDraft.trim()}><Plus /> Add key</button>
         </div>
       </div></>}
     </div>

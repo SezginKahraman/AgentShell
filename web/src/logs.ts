@@ -66,7 +66,11 @@ export const classifiedLogLines = (content: string, stderr: string) => {
   })
 }
 
-export const logLineClass = (severity: LogSeverity) => severity === 'error' ? 'log-line log-line-error' : severity === 'warn' ? 'log-line log-line-warn' : 'log-line'
+const logLine = 'log-line block min-h-[1.65em]'
+const logLineError = 'log-line-error border-l-2 border-l-red bg-[color-mix(in_srgb,var(--red)_14%,transparent)] -mx-[7px] px-[5px] text-terminal-red [text-shadow:none]'
+const logLineWarn = 'log-line-warn border-l-2 border-l-terminal-yellow bg-[color-mix(in_srgb,var(--terminal-yellow)_16%,transparent)] -mx-[7px] px-[5px] text-terminal-yellow [text-shadow:none]'
+
+export const logLineClass = (severity: LogSeverity) => severity === 'error' ? `${logLine} ${logLineError}` : severity === 'warn' ? `${logLine} ${logLineWarn}` : logLine
 
 export const displayedLogText = (content: string, stderr: string, filter: LogFilter) => {
   const lines = classifiedLogLines(content, stderr)

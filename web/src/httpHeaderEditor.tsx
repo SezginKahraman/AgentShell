@@ -2,6 +2,12 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Trash2 } from 'lucide-react'
 import { TemplateField } from './httpTemplate'
 import { headerJSONFromRows, headerNameSuggestions, headerValueSuggestions, nextHeaderID, rowsFromHeaderJSON, withTrailingHeaderRow, type HeaderRow } from './httpHeaders'
+import { button, buttonSmall, cn, iconButton } from './ui'
+
+const press = 'enabled:active:!translate-y-px disabled:!translate-none disabled:!opacity-[.48]'
+const btnSmall = cn(button, buttonSmall, press, '!min-h-[31px] !px-[11px] !text-[11px]')
+const iconBtn = cn(iconButton, press)
+const nameField = 'w-full rounded-md border border-line-strong bg-inset px-[9px] py-2 font-mono !text-[12px] !leading-[1.45] text-strong ![outline:0]'
 
 function SuggestBox({
   value,
@@ -41,20 +47,20 @@ function SuggestBox({
       onClose()
     }
   }
-  return <div className="http-suggest" onKeyDown={onKeyDown}>
+  return <div className="relative min-w-0" onKeyDown={onKeyDown}>
     <div onFocus={onOpen} onBlur={onClose}>{children}</div>
-    {open && !!matches.length && <div className="http-suggest-list" role="listbox" onMouseDown={event => event.preventDefault()}>
+    {open && !!matches.length && <div className="absolute top-[calc(100%+4px)] right-0 left-0 z-[8] grid max-h-[180px] overflow-auto rounded-lg border border-line-strong bg-surface p-1 shadow-[0_10px_28px_rgba(0,0,0,.16)]" role="listbox" onMouseDown={event => event.preventDefault()}>
       {matches.map((option, index) => <button
         key={option}
         type="button"
         role="option"
         aria-selected={index === active}
-        className={index === active ? 'active' : ''}
+        className={cn('w-full cursor-pointer rounded-md border-0 bg-transparent px-2.5 py-[7px] text-left font-mono !text-[12px] !leading-[1.35] text-inherit hover:bg-blue-soft', index === active && 'bg-blue-soft')}
         onMouseEnter={() => onActive(index)}
         onClick={() => onPick(option)}
       >{option}</button>)}
     </div>}
-    <span className="http-suggest-current" hidden>{value}</span>
+    <span hidden>{value}</span>
   </div>
 }
 
@@ -107,27 +113,27 @@ export function HeaderEditor({
   }
 
   if (bulk) {
-    return <div className="http-header-editor">
-      <div className="http-header-toolbar">
+    return <div className="grid gap-2">
+      <div className="flex items-center justify-between text-[10px] text-muted">
         <span>JSON</span>
-        <button type="button" className="button small" data-testid="http-headers-rows" disabled={rowsFromHeaderJSON(value) == null} onClick={() => setBulk(false)}>Key-value</button>
+        <button type="button" className={btnSmall} data-testid="http-headers-rows" disabled={rowsFromHeaderJSON(value) == null} onClick={() => setBulk(false)}>Key-value</button>
       </div>
       <TemplateField multiline minHeight={72} ariaLabel="Request headers" testId="http-request-headers" value={value} vars={vars} envName={envName} onDefineVar={onDefineVar} onChange={next => { written.current = next; onChange(next) }} />
     </div>
   }
 
-  return <div className="http-header-editor">
-    <div className="http-header-toolbar">
+  return <div className="grid gap-2">
+    <div className="flex items-center justify-between text-[10px] text-muted">
       <span>Headers</span>
-      <button type="button" className="button small" data-testid="http-headers-bulk" onClick={() => setBulk(true)}>Bulk edit</button>
+      <button type="button" className={btnSmall} data-testid="http-headers-bulk" onClick={() => setBulk(true)}>Bulk edit</button>
     </div>
-    <div className="http-header-table">
+    <div className="grid gap-1.5">
       {rows.map((row, index) => {
         const nameOpen = suggest?.id === row.id && suggest.field === 'name'
         const valueOpen = suggest?.id === row.id && suggest.field === 'value'
         const names = headerNameSuggestions(row.name)
         const values = headerValueSuggestions(row.name, row.value)
-        return <div className="http-header-row" key={row.id}>
+        return <div className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.3fr)_28px] items-start gap-1.5" key={row.id}>
           <SuggestBox
             value={row.name}
             suggestions={names}
@@ -141,7 +147,7 @@ export function HeaderEditor({
               setSuggest(null)
             }}
           >
-            <input aria-label={`Header name ${index + 1}`} data-testid={`http-header-name-${index}`} value={row.name} placeholder="Accept" spellCheck={false} onChange={event => updateRow(row.id, { name: event.target.value })} />
+            <input className={nameField} aria-label={`Header name ${index + 1}`} data-testid={`http-header-name-${index}`} value={row.name} placeholder="Accept" spellCheck={false} onChange={event => updateRow(row.id, { name: event.target.value })} />
           </SuggestBox>
           <SuggestBox
             value={row.value}
@@ -158,7 +164,7 @@ export function HeaderEditor({
           >
             <TemplateField ariaLabel={`Header value ${index + 1}`} testId={`http-header-value-${index}`} value={row.value} vars={vars} envName={envName} onDefineVar={onDefineVar} placeholder="application/json" onChange={headerValue => updateRow(row.id, { value: headerValue })} />
           </SuggestBox>
-          <button type="button" className="icon-button http-header-remove" aria-label={`Remove header ${index + 1}`} data-testid={`http-header-remove-${index}`} disabled={!row.name && !row.value} onClick={() => removeRow(row.id)}><Trash2 /></button>
+          <button type="button" className={cn(iconBtn, 'mt-px !h-8 !min-h-8 !w-7 [&_svg]:!size-3.5')} aria-label={`Remove header ${index + 1}`} data-testid={`http-header-remove-${index}`} disabled={!row.name && !row.value} onClick={() => removeRow(row.id)}><Trash2 /></button>
         </div>
       })}
     </div>

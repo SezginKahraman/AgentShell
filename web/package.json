@@ -18,11 +18,13 @@
   },
   "devDependencies": {
     "@playwright/test": "latest",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "latest",
     "@testing-library/react": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "jsdom": "latest",
+    "tailwindcss": "^4.3.3",
     "typescript": "latest",
     "vitest": "latest"
   }
